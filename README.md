@@ -41,6 +41,7 @@ uv init
 uv add mcp httpx python-dotenv numpy scipy matplotlib pandas
 uv add Pillow scikit-image pyFAI fabio plotly seaborn lmfit
 uv add orjson rich typer fastapi uvicorn websockets
+uv add mcp httpx python-dotenv asyncio-compat
 ```
 
 ### 4. Configure Environment
