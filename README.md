@@ -2,7 +2,7 @@
 
 **AI-Powered Synchrotron X-ray Diffraction Analysis System**
 
-Version 1.0 | Argonne National Laboratory
+Version 0.1.0 | Argonne National Laboratory
 
 ## Overview
 
