@@ -18,11 +18,27 @@ class ArgoMCPClient:
         self.sessions = {}
         self.exit_stack = AsyncExitStack()
 
-        self.argo_chat_url = "https://apps.inside.anl.gov/argoapi/api/v1/resource/chat/"
-        self.argo_embed_url = "https://apps.inside.anl.gov/argoapi/api/v1/resource/embed/"
-
+        # Determine environment based on model (dev models require dev endpoint)
         self.anl_username = os.getenv("ANL_USERNAME")
         self.selected_model = os.getenv("ARGO_MODEL", "gpt4o")
+
+        # Models only available in DEV environment
+        self.dev_only_models = {
+            "gpt5", "gpt5mini", "gpt5nano",
+            "gemini25pro", "gemini25flash",
+            "claudeopus41", "claudeopus4", "claudesonnet45", "claudesonnet4", "claudesonnet37",
+            "gpto1", "gpto3mini", "gpto4mini", "gpt41", "gpt41mini", "gpt41nano"
+        }
+
+        # Use DEV endpoint if model requires it
+        if self.selected_model in self.dev_only_models:
+            self.argo_chat_url = "https://apps-dev.inside.anl.gov/argoapi/api/v1/resource/chat/"
+            self.argo_embed_url = "https://apps-dev.inside.anl.gov/argoapi/api/v1/resource/embed/"
+            self.environment = "DEV"
+        else:
+            self.argo_chat_url = "https://apps.inside.anl.gov/argoapi/api/v1/resource/chat/"
+            self.argo_embed_url = "https://apps.inside.anl.gov/argoapi/api/v1/resource/embed/"
+            self.environment = "PROD"
 
         self.http_client = httpx.AsyncClient(timeout=120.0)
 
@@ -33,20 +49,27 @@ class ArgoMCPClient:
             raise ValueError("ANL_USERNAME must be set in environment (.env file)")
 
         self.available_models = {
-            "OpenAI": {
+            "OpenAI (PROD)": {
                 "gpt35": "GPT-3.5 Turbo (4K tokens)",
-                "gpt4": "GPT-4 (8K tokens)", 
+                "gpt4": "GPT-4 (8K tokens)",
                 "gpt4turbo": "GPT-4 Turbo (128K input)",
-                "gpt4o": "GPT-4o (128K input, 16K output)",
-                "gpt5": "GPT-5 (272K input, dev only)"
+                "gpt4o": "GPT-4o (128K input, 16K output)"
             },
-            "Google": {
-                "gemini25pro": "Gemini 2.5 Pro (1M tokens, dev only)",
-                "gemini25flash": "Gemini 2.5 Flash (1M tokens, dev only)"
+            "OpenAI (DEV only)": {
+                "gpt5": "GPT-5 (272K input, 128K output)",
+                "gpt5mini": "GPT-5 Mini (272K input, 128K output)",
+                "gpt5nano": "GPT-5 Nano (272K input, 128K output)"
             },
-            "Anthropic": {
-                "claudeopus4": "Claude Opus 4 (200K input, dev only)",
-                "claudesonnet4": "Claude Sonnet 4 (200K input, dev only)"
+            "Google (DEV only)": {
+                "gemini25pro": "Gemini 2.5 Pro (1M tokens)",
+                "gemini25flash": "Gemini 2.5 Flash (1M tokens)"
+            },
+            "Anthropic (DEV only)": {
+                "claudeopus41": "Claude Opus 4.1 (200K input)",
+                "claudeopus4": "Claude Opus 4 (200K input)",
+                "claudesonnet45": "Claude Sonnet 4.5 (200K input)",
+                "claudesonnet4": "Claude Sonnet 4 (200K input)",
+                "claudesonnet37": "Claude Sonnet 3.7 (200K input)"
             }
         }
 
@@ -82,44 +105,69 @@ class ArgoMCPClient:
         if "midas" in self.sessions:
             self.session = self.sessions["midas"]
 
+    def _convert_tools_to_claude_format(self, openai_tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Convert OpenAI tool format to Claude tool format"""
+        claude_tools = []
+        for tool in openai_tools:
+            if tool.get("type") == "function":
+                func = tool["function"]
+                claude_tool = {
+                    "name": func["name"],
+                    "description": func["description"],
+                    "input_schema": func.get("parameters", {})
+                }
+                claude_tools.append(claude_tool)
+        return claude_tools
+
     def _prepare_argo_payload(self, messages: List[Dict[str, str]], model: str, tools: List[Dict[str, Any]] = None) -> Dict[str, Any]:
         payload = {
             "user": self.anl_username,
             "model": model,
-            "messages": messages,
-            "temperature": 0.7,
-            "top_p": 0.9
+            "messages": messages
         }
-        
-        if model.startswith("gpt5"):
-            payload["max_completion_tokens"] = 16000
+
+        # Claude Sonnet 4.5 does NOT accept both temperature and top_p
+        # Other Claude models require both
+        if model == "claudesonnet45":
+            payload["temperature"] = 0.7
+            # Do not include top_p for Claude Sonnet 4.5
         elif model.startswith("claude"):
+            payload["temperature"] = 0.7
+            payload["top_p"] = 0.9
+        else:
+            # OpenAI and Google models accept both
+            payload["temperature"] = 0.7
+            payload["top_p"] = 0.9
+
+        # Set max_tokens based on model
+        if model.startswith("claude"):
             payload["max_tokens"] = 21000
+        elif model.startswith("gpt4o"):
+            payload["max_tokens"] = 16000
         else:
             payload["max_tokens"] = 4000
 
         if tools:
-            payload["tools"] = tools
-            payload["tool_choice"] = "auto"
-            
+            # Claude models use a different tool format than OpenAI
+            if model.startswith("claude"):
+                payload["tools"] = self._convert_tools_to_claude_format(tools)
+                payload["tool_choice"] = {"type": "auto"}
+            else:
+                payload["tools"] = tools
+                payload["tool_choice"] = "auto"
+
         return payload
 
     async def call_argo_chat_api(self, messages: List[Dict[str, str]], tools: List[Dict[str, Any]] = None) -> Dict[str, Any]:
         payload = self._prepare_argo_payload(messages, self.selected_model, tools)
-        
-        # Removed debug output for cleaner interface
-        # print(f"\n🔧 DEBUG: Argo API Request")
-        # print(f"  Model: {self.selected_model}")
-        # print(f"  Tools provided: {len(tools) if tools else 0}")
-        # if tools:
-        #     print(f"  Tool names: {[t['function']['name'] for t in tools[:3]]}...")
-        
+
         try:
             response = await self.http_client.post(
                 self.argo_chat_url,
                 json=payload,
                 headers={"Content-Type": "application/json"}
             )
+
             response.raise_for_status()
             result = response.json()
             
@@ -433,9 +481,53 @@ ARGUMENTS: {"image_path": "./ff_011276_ge2_0001.tiff", "calibration_file": "./Pa
             if tool_calls and not is_legacy:
                 # Native tool calling! Process them
                 # print(f"\n🔧 Processing {len(tool_calls)} native tool call(s)...")
-                
-                messages.append(message)
-                
+
+                # For Claude, need to convert message format from OpenAI-style to Claude-style
+                if self.selected_model.startswith("claude"):
+                    # Convert tool_calls to content blocks for Claude
+                    content_blocks = []
+
+                    # Add any text content first
+                    if message.get('content'):
+                        content_blocks.append({
+                            "type": "text",
+                            "text": message['content']
+                        })
+
+                    # Add tool_use blocks
+                    for tool_call in tool_calls:
+                        tool_id = tool_call.get('id', 'unknown')
+
+                        # Extract tool info
+                        if 'function' in tool_call:
+                            tool_name = tool_call['function'].get('name')
+                            try:
+                                tool_input = json.loads(tool_call['function'].get('arguments', '{}'))
+                            except json.JSONDecodeError:
+                                tool_input = {}
+                        elif 'input' in tool_call:
+                            tool_name = tool_call.get('name')
+                            tool_input = tool_call['input']
+                        else:
+                            continue
+
+                        content_blocks.append({
+                            "type": "tool_use",
+                            "id": tool_id,
+                            "name": tool_name,
+                            "input": tool_input
+                        })
+
+                    # Create properly formatted message for Claude
+                    claude_message = {
+                        "role": "assistant",
+                        "content": content_blocks
+                    }
+                    messages.append(claude_message)
+                else:
+                    # OpenAI/Gemini: use message as-is
+                    messages.append(message)
+
                 for tool_call in tool_calls:
                     # Handle different formats from different providers
                     # OpenAI format: {"id": "...", "function": {"name": "...", "arguments": "{...}"}}
@@ -472,14 +564,29 @@ ARGUMENTS: {"image_path": "./ff_011276_ge2_0001.tiff", "calibration_file": "./Pa
                     
                     # Execute the tool
                     tool_result = await self.execute_tool_call(tool_name, arguments)
-                    
+
                     # Add tool result to conversation
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tool_id,
-                        "name": tool_name,
-                        "content": tool_result
-                    })
+                    # Claude expects different format than OpenAI
+                    if self.selected_model.startswith("claude"):
+                        # Claude format: role=user with tool_result content block
+                        messages.append({
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "tool_result",
+                                    "tool_use_id": tool_id,
+                                    "content": tool_result
+                                }
+                            ]
+                        })
+                    else:
+                        # OpenAI/Gemini format: role=tool with simple content
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tool_id,
+                            "name": tool_name,
+                            "content": tool_result
+                        })
                 
                 # Continue loop to get AI's interpretation
                 continue
@@ -750,7 +857,18 @@ Use Tab for command completion
                     model_name = user_input[6:].strip()
                     if self._is_valid_model(model_name):
                         self.selected_model = model_name
-                        print(f"✅ Switched to: {model_name}")
+
+                        # Update endpoint based on model environment requirements
+                        if self.selected_model in self.dev_only_models:
+                            self.argo_chat_url = "https://apps-dev.inside.anl.gov/argoapi/api/v1/resource/chat/"
+                            self.argo_embed_url = "https://apps-dev.inside.anl.gov/argoapi/api/v1/resource/embed/"
+                            self.environment = "DEV"
+                            print(f"✅ Switched to: {model_name} (using DEV environment)")
+                        else:
+                            self.argo_chat_url = "https://apps.inside.anl.gov/argoapi/api/v1/resource/chat/"
+                            self.argo_embed_url = "https://apps.inside.anl.gov/argoapi/api/v1/resource/embed/"
+                            self.environment = "PROD"
+                            print(f"✅ Switched to: {model_name} (using PROD environment)")
                     else:
                         print(f"✗ Invalid model: {model_name}")
                         print("Available models: models")

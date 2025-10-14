@@ -2,6 +2,9 @@
 # Beamline Assistant Startup Script
 # Loads analysis servers from servers.config
 
+# Add uv to PATH (installed in ~/.local/bin)
+export PATH="$HOME/.local/bin:$PATH"
+
 # Change to script directory
 cd "$(dirname "$0")"
 
@@ -59,9 +62,9 @@ echo ""
 echo "Active Servers: ${ENABLED_SERVERS[@]}"
 echo ""
 echo "AI Models available via Argo Gateway:"
-echo "  - gpt4o (default)"
-echo "  - claudesonnet4, claudeopus4"
-echo "  - gemini25pro, gemini25flash"
+echo "  OpenAI: gpt4o (default), gpt4turbo, gpt4, gpt35"
+echo "  Anthropic: claudesonnet4, claudeopus4"
+echo "  Google: gemini25pro, gemini25flash"
 echo ""
 echo "======================================================================="
 echo ""
