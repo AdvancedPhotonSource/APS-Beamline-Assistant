@@ -52,7 +52,7 @@ example-tif/
 
 # Temporary and test files
 test.py
-debug-*.py
+debug*.py
 *-old/
 *-backup/
 *-v1.py
@@ -69,5 +69,39 @@ tmp/
 *.pyo
 
 # Documentation build
+docs/
 docs/api/
 docs/_build/
+
+# Development and internal documentation
+ADDING_NEW_SERVERS.md
+BEAMLINE_DEPLOYMENT.md
+MODULAR_ARCHITECTURE.md
+MIGRATION_STRATEGY.md
+CHECK_ATTRIBUTION.md
+INSTALL_GH_CLI.md
+ESSENTIAL_FILES.txt
+
+# Old versions and alternatives
+basic-client.py
+fastmcp_midas_server.py
+simple_midas_server.py
+main.py
+midas_workflows.py
+
+# Test and validation scripts
+test_*.sh
+test_*.py
+run_midas_validation.py
+validate_midas_setup.py
+
+# Debug and development scripts
+debug_startup.sh
+startup-mac.sh
+startup.sh
+
+# Test data
+*.dat
+
+# ML deployment (separate feature)
+ML-deploy/
