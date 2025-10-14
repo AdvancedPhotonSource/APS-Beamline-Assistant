@@ -1,0 +1,135 @@
+# PF-HEDM Parameter Template
+# Point-Focus High Energy Diffraction Microscopy (Scanning Mode)
+# Argonne National Laboratory - Advanced Photon Source
+
+# ============================================================================
+# CRYSTAL STRUCTURE
+# ============================================================================
+LatticeConstant 4.08 4.08 4.08 90 90 90
+SpaceGroup 225
+
+# ============================================================================
+# DETECTOR CONFIGURATION
+# ============================================================================
+# Sample-to-detector distance (microns)
+Lsd 1000000.0
+
+# Beam center position (pixels)
+BC 1022 1022
+
+# Detector tilt angles (degrees)
+tx 0
+ty 0
+tz 0
+
+# Distortion parameters
+p0 0
+p1 0
+p2 0
+
+# Detector specifications
+NrPixels 2048
+px 200
+
+# ============================================================================
+# EXPERIMENTAL SETUP
+# ============================================================================
+Wavelength 0.22291
+Wedge 0
+OmegaStep -0.25
+BeamThickness 10
+
+# Focused beam spot size (microns)
+BeamFWHM 1.0
+
+# Omega ranges
+NOmegaRanges 1
+OmegaRange_0_Start 0
+OmegaRange_0_End 180
+
+# ============================================================================
+# SCANNING PARAMETERS
+# ============================================================================
+# Scan positions file (CSV with x,y,z coordinates)
+PositionsFile positions.csv
+
+# Number of scan positions
+NScanPositions 100
+
+# Scan step size (microns)
+ScanStepX 5.0
+ScanStepY 5.0
+ScanStepZ 5.0
+
+# Scan volume
+ScanVolumeX 100
+ScanVolumeY 100
+ScanVolumeZ 100
+
+# ============================================================================
+# ANALYSIS PARAMETERS
+# ============================================================================
+# One solution per voxel (0=multiple, 1=single best)
+OneSolutionPerVoxel 1
+
+# Minimum completeness
+MinCompleteness 0.6
+
+# Minimum number of spots
+MinNrSpots 5
+
+# Position tolerance (microns)
+PositionTolerance 3.0
+
+# Orientation tolerance (degrees)
+OrientationTolerance 1.0
+
+# ============================================================================
+# INTENSITY NORMALIZATION
+# ============================================================================
+# Normalization method: none, max, sum, median
+NormalizeIntensities max
+
+# Background subtraction (0=no, 1=yes)
+SubtractBackground 1
+
+# ============================================================================
+# INPUT/OUTPUT
+# ============================================================================
+# Output filename prefix
+OutFileName pf_output
+
+# Results folder
+ResultFolder ./results
+
+# ============================================================================
+# COMPUTATIONAL PARAMETERS
+# ============================================================================
+nCPUs 32
+
+# Process positions in parallel
+ParallelPositions 1
+
+# Max memory per process (GB)
+MaxMemoryGB 16
+
+# ============================================================================
+# ADVANCED PARAMETERS
+# ============================================================================
+# Ring parameters
+nRings 10
+RingThresh 1 2 3 4 5 6 7 8 9 10
+
+# Tolerances
+OmegaTol 0.5
+EtaTol 0.5
+RadiusTol 50
+
+# Voxel size for reconstruction (microns)
+VoxelSize 2.0
+
+# Strain refinement
+RefineStrain 1
+
+# Grain tracking across positions
+TrackGrains 1

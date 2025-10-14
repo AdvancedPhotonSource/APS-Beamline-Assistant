@@ -1,0 +1,112 @@
+# FF-HEDM Parameter Template
+# Far-Field High Energy Diffraction Microscopy
+# Argonne National Laboratory - Advanced Photon Source
+
+# ============================================================================
+# CRYSTAL STRUCTURE
+# ============================================================================
+# LatticeConstant: a b c alpha beta gamma (Angstroms and degrees)
+# For cubic: a=b=c, alpha=beta=gamma=90
+# For hexagonal: a=b≠c, alpha=beta=90, gamma=120
+LatticeConstant 4.08 4.08 4.08 90 90 90
+SpaceGroup 225
+
+# ============================================================================
+# DETECTOR CONFIGURATION
+# ============================================================================
+# Sample-to-detector distance (microns)
+Lsd 1000000.0000
+
+# Beam center position (pixels)
+BC 1022 1022
+
+# Detector tilt angles (degrees)
+tx 0
+ty 0
+tz 0
+
+# Distortion parameters (typically 0 for well-calibrated detectors)
+p0 0
+p1 0
+p2 0
+
+# Detector specifications
+NrPixels 2048
+px 200
+
+# ============================================================================
+# EXPERIMENTAL SETUP
+# ============================================================================
+# X-ray wavelength (Angstroms)
+Wavelength 0.22291
+
+# Wedge angle (degrees) - typically 0
+Wedge 0
+
+# Omega rotation step (degrees) - negative for CCW rotation
+OmegaStep -0.25
+
+# Beam height/thickness (microns)
+BeamThickness 200
+
+# Starting omega angle (degrees)
+OmegaStart 0
+
+# Number of omega frames
+NOmegaRanges 1
+
+# Omega range specifications
+OmegaRange_0_Start 0
+OmegaRange_0_End 180
+
+# ============================================================================
+# ANALYSIS PARAMETERS
+# ============================================================================
+# Minimum number of spots to confirm a grain
+MinNrSpots 3
+
+# Minimum completeness (fraction of expected spots) to qualify grain
+Completeness 0.8
+
+# Which ring to use for indexing (typically 2 for good resolution)
+OverAllRingToIndex 2
+
+# Illuminated sample volume (cubic microns)
+Vsample 10000000
+
+# Grain radius tolerance (microns)
+GrainRadiusAll 20
+
+# Position tolerance for grain matching (microns)
+PosTriang 50
+
+# ============================================================================
+# INPUT/OUTPUT
+# ============================================================================
+# Output filename prefix
+OutFileName output
+
+# Optional: Input grains file for seeded indexing
+# InFileName SeedGrains.csv
+
+# ============================================================================
+# ADVANCED PARAMETERS (Optional)
+# ============================================================================
+# Ring parameters for analysis
+RingThresh 1 2 3 4 5 6 7 8 9 10
+RingRadii 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0
+
+# Omega tolerance (degrees)
+OmegaTol 1.0
+
+# Position tolerance (pixels)
+Rsample 20
+
+# Eta tolerance (degrees)
+Hbeam 0.1
+
+# Max ring number to use
+nRings 10
+
+# Threading
+nCPUS 1

@@ -1,0 +1,73 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.venv/
+venv/
+env/
+
+# User config (contains credentials!)
+.env
+*.env
+!.env.template
+
+# User data
+conversation_history.json
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Data files (too large for git)
+*.tiff
+*.tif
+*.ge2
+*.h5
+*.hdf5
+*.zarr
+uploads/
+example-tif/
+
+# Temporary and test files
+test.py
+debug-*.py
+*-old/
+*-backup/
+*-v1.py
+*-stable.py
+temp/
+tmp/
+*.tmp
+
+# Large PDFs
+*.pdf
+
+# Compiled files
+*.pyc
+*.pyo
+
+# Documentation build
+docs/api/
+docs/_build/
