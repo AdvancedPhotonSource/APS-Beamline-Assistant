@@ -1,0 +1,142 @@
+# NF-HEDM Parameter Template
+# Near-Field High Energy Diffraction Microscopy
+# Argonne National Laboratory - Advanced Photon Source
+
+# ============================================================================
+# CRYSTAL STRUCTURE
+# ============================================================================
+LatticeConstant 4.08 4.08 4.08 90 90 90
+SpaceGroup 225
+
+# ============================================================================
+# DETECTOR CONFIGURATION
+# ============================================================================
+# Sample-to-detector distance (microns) - much smaller than FF-HEDM
+Lsd 7500.0
+
+# Beam center position (pixels)
+BC 1024 1024
+
+# Detector tilt angles (degrees)
+tx 0
+ty 0
+tz 0
+
+# Distortion parameters
+p0 0
+p1 0
+p2 0
+
+# Detector specifications
+NrPixels 2048
+px 200
+
+# ============================================================================
+# EXPERIMENTAL SETUP
+# ============================================================================
+Wavelength 0.22291
+Wedge 0
+OmegaStep 0.5
+BeamThickness 10
+
+# Omega ranges
+NOmegaRanges 1
+OmegaRange_0_Start 0
+OmegaRange_0_End 180
+
+# ============================================================================
+# RECONSTRUCTION GRID
+# ============================================================================
+# Grid dimensions (number of points in each direction)
+GridNx 41
+GridNy 41
+GridNz 41
+
+# Grid spacing (microns)
+GridSpacing 5
+
+# Grid origin (microns from beam center)
+GridOriginX 0
+GridOriginY 0
+GridOriginZ -100
+
+# ============================================================================
+# IMAGE PROCESSING
+# ============================================================================
+# Background threshold
+BackgroundThreshold 1000
+
+# Median filter size
+MedianFilterSize 5
+
+# Image processing method (0=none, 1=median, 2=adaptive)
+ImageProcessingMethod 1
+
+# ============================================================================
+# ORIENTATION FITTING
+# ============================================================================
+# Minimum completeness for orientation fit
+MinCompleteness 0.6
+
+# Maximum strain allowed
+MaxStrain 0.01
+
+# Position tolerance (microns)
+PositionTolerance 2.0
+
+# Orientation tolerance (degrees)
+OrientationTolerance 1.0
+
+# ============================================================================
+# SEED ORIENTATIONS
+# ============================================================================
+# Use FF-HEDM results as seeds (0=no, 1=yes)
+UseFFSeeds 1
+
+# Path to FF-HEDM grains file
+# FFGrainsFile ../FF_HEDM/Grains.csv
+
+# Or use standard seed files
+# SeedOrientationFile cubicSeed.txt
+
+# ============================================================================
+# INPUT/OUTPUT
+# ============================================================================
+# Raw image folder
+RawImageFolder .
+
+# Dark image (optional)
+# DarkImageFile dark.tif
+
+# Output MIC file
+MicFileName Grains.mic
+
+# ============================================================================
+# COMPUTATIONAL PARAMETERS
+# ============================================================================
+# Number of CPUs for parallel processing
+nCPUs 10
+
+# Memory mapping (for large datasets)
+UseMemoryMapping 1
+
+# Max memory usage (GB)
+MaxMemoryGB 64
+
+# ============================================================================
+# ADVANCED PARAMETERS
+# ============================================================================
+# Ring parameters
+nRings 10
+RingThresh 1 2 3 4 5 6 7 8 9 10
+
+# Fitting tolerances
+OmegaTol 0.5
+EtaTol 0.5
+RadiusTol 50
+
+# Maximum number of orientations per voxel
+MaxOrientationsPerVoxel 3
+
+# Strain refinement (0=no, 1=yes)
+RefineStrain 0

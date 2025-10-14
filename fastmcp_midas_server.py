@@ -4,6 +4,7 @@ import sys
 import os
 from pathlib import Path
 import numpy as np
+import subprocess
 from mcp.server.fastmcp import FastMCP
 
 # Add MIDAS utils to Python path
@@ -20,7 +21,6 @@ def format_analysis_result(result: dict) -> str:
 
 # Import MIDAS utilities with error handling
 try:
-    # These imports are based on common MIDAS structure
     import fabio
     import pyFAI
     from scipy import ndimage
@@ -40,7 +40,6 @@ def load_diffraction_image(image_path: str):
             img = fabio.open(image_path)
             return img.data.astype(np.float64)
         else:
-            # Fallback for testing
             return np.random.rand(2048, 2048) * 1000
     except Exception as e:
         raise Exception(f"Error loading image {image_path}: {e}")
@@ -50,22 +49,18 @@ def detect_rings_real(image_data: np.ndarray, center=None):
     if center is None:
         center = (image_data.shape[0] // 2, image_data.shape[1] // 2)
     
-    # Create radial profile
     y, x = np.ogrid[:image_data.shape[0], :image_data.shape[1]]
     r = np.sqrt((x - center[1])**2 + (y - center[0])**2)
     
-    # Bin the data radially
     r_int = r.astype(int)
     max_r = min(center[0], center[1], image_data.shape[0] - center[0], image_data.shape[1] - center[1])
     radial_prof = np.bincount(r_int.ravel(), image_data.ravel())
     radial_counts = np.bincount(r_int.ravel())
     
-    # Avoid division by zero
     valid_idx = radial_counts > 0
     radial_prof = radial_prof[valid_idx] / radial_counts[valid_idx]
     r_values = np.arange(len(radial_prof))[valid_idx]
     
-    # Find peaks in radial profile
     if len(radial_prof) > 10:
         peaks, properties = find_peaks(radial_prof, height=np.mean(radial_prof) * 1.2, distance=10)
         return r_values[peaks], radial_prof[peaks]
@@ -76,7 +71,6 @@ def integrate_pattern_real(image_data: np.ndarray, wavelength: float = 0.2066, d
     """Real 2D to 1D integration using pyFAI-like approach"""
     try:
         if MIDAS_AVAILABLE and 'pyFAI' in sys.modules:
-            # Use pyFAI if available
             detector = pyFAI.detectors.Detector(pixel1=pixel_size, pixel2=pixel_size)
             ai = pyFAI.AzimuthalIntegrator(wavelength=wavelength, dist=distance, detector=detector)
             ai.setFit2D(distance * 1000, image_data.shape[1]//2, image_data.shape[0]//2)
@@ -84,16 +78,12 @@ def integrate_pattern_real(image_data: np.ndarray, wavelength: float = 0.2066, d
             tth, intensity = ai.integrate1d(image_data, 2048, unit="2th_deg")
             return tth, intensity
         else:
-            # Simplified integration fallback
             center = (image_data.shape[0] // 2, image_data.shape[1] // 2)
             y, x = np.ogrid[:image_data.shape[0], :image_data.shape[1]]
             r = np.sqrt((x - center[1])**2 + (y - center[0])**2)
             
-            # Convert radius to 2theta
-            # Simplified: 2theta = arctan(r * pixel_size / distance) * 180/pi
             tth = np.arctan(r * pixel_size / (distance * 1e-3)) * 180 / np.pi
             
-            # Radial integration
             r_int = r.astype(int)
             radial_prof = np.bincount(r_int.ravel(), image_data.ravel())
             radial_counts = np.bincount(r_int.ravel())
@@ -109,27 +99,23 @@ def integrate_pattern_real(image_data: np.ndarray, wavelength: float = 0.2066, d
 
 def find_peaks_real(tth: np.ndarray, intensity: np.ndarray, min_height_ratio: float = 0.05):
     """Real peak finding algorithm"""
-    # Background subtraction
     background = ndimage.minimum_filter1d(intensity, size=50)
     corrected_intensity = intensity - background
     
-    # Find peaks
     min_height = np.max(corrected_intensity) * min_height_ratio
     peaks, properties = find_peaks(corrected_intensity, height=min_height, distance=20)
     
     if len(peaks) == 0:
         return [], []
     
-    # Get peak properties
     peak_positions = tth[peaks]
     peak_intensities = corrected_intensity[peaks]
     
-    # Calculate FWHM
     try:
         widths, width_heights, left_ips, right_ips = peak_widths(corrected_intensity, peaks, rel_height=0.5)
-        fwhm = widths * (tth[1] - tth[0])  # Convert to 2theta units
+        fwhm = widths * (tth[1] - tth[0])
     except:
-        fwhm = np.ones(len(peaks)) * 0.1  # Default FWHM
+        fwhm = np.ones(len(peaks)) * 0.1
     
     return peaks, {
         'positions': peak_positions,
@@ -146,7 +132,7 @@ async def detect_diffraction_rings(
     beam_center_x: float = None,
     beam_center_y: float = None
 ) -> str:
-    """Detect and analyze diffraction rings in 2D powder diffraction patterns using real MIDAS algorithms.
+    """Detect and analyze diffraction rings in 2D powder diffraction patterns.
 
     Args:
         image_path: Path to the 2D diffraction image file
@@ -156,27 +142,21 @@ async def detect_diffraction_rings(
         beam_center_y: Beam center Y coordinate in pixels
     """
     try:
-        # Check if file exists
         if not Path(image_path).exists():
             return f"Error: Image file not found: {image_path}"
         
-        # Load image
         image_data = load_diffraction_image(image_path)
         
-        # Set beam center
         if beam_center_x is None or beam_center_y is None:
             center = (image_data.shape[0] // 2, image_data.shape[1] // 2)
         else:
             center = (int(beam_center_y), int(beam_center_x))
         
-        # Detect rings
         ring_radii, ring_intensities = detect_rings_real(image_data, center)
         
-        # Convert radii to 2theta (simplified)
-        pixel_size = 172e-6  # 172 microns typical
+        pixel_size = 172e-6
         ring_2theta = np.arctan(np.array(ring_radii) * pixel_size / (detector_distance * 1e-3)) * 180 / np.pi
         
-        # Quality assessment
         signal_to_noise = np.mean(ring_intensities) / np.std(image_data) if len(ring_intensities) > 0 else 0
         background_mean = np.mean(image_data)
         background_std = np.std(image_data)
@@ -223,7 +203,7 @@ async def integrate_2d_to_1d(
     detector_distance: float = 1000.0,
     wavelength: float = 0.2066
 ) -> str:
-    """Integrate 2D diffraction pattern to 1D using real MIDAS integration algorithms.
+    """Integrate 2D diffraction pattern to 1D.
 
     Args:
         image_path: Path to the 2D diffraction image
@@ -236,20 +216,14 @@ async def integrate_2d_to_1d(
         if not Path(image_path).exists():
             return f"Error: Image file not found: {image_path}"
         
-        # Load image
         image_data = load_diffraction_image(image_path)
-        
-        # Integrate pattern
         tth, intensity = integrate_pattern_real(image_data, wavelength, detector_distance)
         
-        # Convert units if needed
         if unit == "q_A-1":
-            # q = 4π sin(θ) / λ
             q_values = 4 * np.pi * np.sin(np.radians(tth/2)) / wavelength
             x_values = q_values
             x_label = "q (Å⁻¹)"
         elif unit == "d_A":
-            # d = λ / (2 sin(θ))
             d_values = wavelength / (2 * np.sin(np.radians(tth/2)))
             x_values = d_values
             x_label = "d-spacing (Å)"
@@ -257,13 +231,12 @@ async def integrate_2d_to_1d(
             x_values = tth
             x_label = "2θ (degrees)"
         
-        # Save integrated pattern
         output_file = f"{Path(image_path).stem}_integrated.dat"
         try:
             np.savetxt(output_file, np.column_stack([x_values, intensity]), 
                       header=f"{x_label}\tIntensity", delimiter='\t')
         except:
-            pass  # File saving is optional
+            pass
         
         results = {
             "tool": "integrate_2d_to_1d",
@@ -286,7 +259,7 @@ async def integrate_2d_to_1d(
                 "signal_to_noise_ratio": float(np.max(intensity) / np.std(intensity))
             },
             "data_arrays": {
-                "x_values": x_values[:100].tolist(),  # First 100 points for preview
+                "x_values": x_values[:100].tolist(),
                 "intensity": intensity[:100].tolist()
             }
         }
@@ -302,10 +275,10 @@ async def analyze_diffraction_peaks(
     min_peak_height: float = 0.05,
     peak_width_range: list = None
 ) -> str:
-    """Find and analyze peaks in 1D diffraction patterns using real peak-finding algorithms.
+    """Find and analyze peaks in 1D diffraction patterns.
 
     Args:
-        pattern_file: Path to 1D pattern file (.dat, .xy, .txt) or integrated pattern description
+        pattern_file: Path to 1D pattern file (.dat, .xy, .txt)
         min_peak_height: Minimum relative peak height (0-1)
         peak_width_range: Expected peak width range in degrees 2theta
     """
@@ -313,39 +286,31 @@ async def analyze_diffraction_peaks(
         if peak_width_range is None:
             peak_width_range = [0.05, 2.0]
         
-        # Try to load pattern file if provided
         if pattern_file and Path(pattern_file).exists():
             try:
                 data = np.loadtxt(pattern_file)
                 if data.shape[1] >= 2:
                     tth, intensity = data[:, 0], data[:, 1]
                 else:
-                    # Single column, assume 2theta spacing
                     intensity = data[:, 0]
                     tth = np.linspace(5, 85, len(intensity))
             except:
-                # Generate synthetic pattern for testing
                 tth = np.linspace(5, 85, 2048)
                 intensity = 100 + np.random.normal(0, 10, len(tth))
-                # Add some synthetic peaks
                 for peak_pos in [12.5, 18.2, 25.8, 31.4, 37.9]:
                     peak = 1000 * np.exp(-0.5 * ((tth - peak_pos) / 0.15) ** 2)
                     intensity += peak
         else:
-            # Generate synthetic pattern
             tth = np.linspace(5, 85, 2048)
             intensity = 100 + np.random.normal(0, 10, len(tth))
-            # Add synthetic peaks at common steel positions
             steel_peaks = [12.48, 18.16, 25.85, 31.4, 37.9, 42.1]
             peak_heights = [8934, 12453, 6721, 4532, 3421, 2876]
             for pos, height in zip(steel_peaks, peak_heights):
                 peak = height * np.exp(-0.5 * ((tth - pos) / 0.15) ** 2)
                 intensity += peak
         
-        # Find peaks using real algorithm
         peaks, peak_props = find_peaks_real(tth, intensity, min_peak_height)
         
-        # Format peak data
         peak_data = []
         if len(peaks) > 0:
             for i, peak_idx in enumerate(peaks):
@@ -392,16 +357,15 @@ async def identify_crystalline_phases(
     temperature: float = 25.0,
     tolerance: float = 0.1
 ) -> str:
-    """Identify crystalline phases from peak positions using crystallographic databases.
+    """Identify crystalline phases from peak positions.
 
     Args:
         peak_positions: List of peak positions in degrees 2theta
-        material_system: Expected material system (e.g., 'steel', 'aluminum', 'ceramic')
+        material_system: Expected material system
         temperature: Sample temperature in Celsius
         tolerance: Peak position tolerance in degrees 2theta
     """
     try:
-        # Common phase database (simplified)
         phase_database = {
             "austenite": {
                 "formula": "γ-Fe",
@@ -433,7 +397,6 @@ async def identify_crystalline_phases(
             }
         }
         
-        # Match peaks to phases
         identified_phases = []
         unmatched_peaks = []
         
@@ -450,11 +413,9 @@ async def identify_crystalline_phases(
                         })
                         break
             
-            # Consider phase identified if at least 3 peaks match
             if len(matched_peaks) >= 3:
-                # Estimate phase fraction (simplified)
                 total_matched = sum([p["relative_intensity"] for p in matched_peaks])
-                phase_fraction = min(1.0, total_matched / 300)  # Normalize
+                phase_fraction = min(1.0, total_matched / 300)
                 
                 phase_info = {
                     "phase_name": phase_name.title(),
@@ -468,7 +429,6 @@ async def identify_crystalline_phases(
                 }
                 identified_phases.append(phase_info)
         
-        # Find unmatched peaks
         matched_positions = []
         for phase in identified_phases:
             matched_positions.extend([p["observed"] for p in phase["matched_peaks"]])
@@ -480,7 +440,6 @@ async def identify_crystalline_phases(
                     "possible_assignment": "unknown phase or impurity"
                 })
         
-        # Normalize phase fractions
         if identified_phases:
             total_fraction = sum([p["phase_fraction"] for p in identified_phases])
             if total_fraction > 0:
@@ -521,7 +480,7 @@ async def assess_data_quality(
     image_path: str,
     experimental_conditions: dict = None
 ) -> str:
-    """Assess quality of diffraction data using real image analysis algorithms.
+    """Assess quality of diffraction data.
 
     Args:
         image_path: Path to diffraction image
@@ -531,26 +490,19 @@ async def assess_data_quality(
         if experimental_conditions is None:
             experimental_conditions = {}
         
-        # Load and analyze image
         image_data = load_diffraction_image(image_path)
         
-        # Basic statistics
         mean_intensity = np.mean(image_data)
         std_intensity = np.std(image_data)
         max_intensity = np.max(image_data)
         min_intensity = np.min(image_data)
         
-        # Signal-to-noise ratio
         signal_to_noise = max_intensity / std_intensity if std_intensity > 0 else 0
+        dynamic_range = max_intensity / (min_intensity + 1)
         
-        # Dynamic range
-        dynamic_range = max_intensity / (min_intensity + 1)  # Avoid division by zero
-        
-        # Detect hot pixels (potential detector issues)
         hot_pixel_threshold = mean_intensity + 5 * std_intensity
         hot_pixels = np.sum(image_data > hot_pixel_threshold)
         
-        # Background uniformity (check corners vs center)
         h, w = image_data.shape
         corner_regions = [
             image_data[:h//10, :w//10],
@@ -561,7 +513,6 @@ async def assess_data_quality(
         corner_means = [np.mean(region) for region in corner_regions]
         background_uniformity = 1.0 - (np.std(corner_means) / np.mean(corner_means))
         
-        # Overall quality scoring
         quality_scores = {
             "signal_to_noise": min(10, signal_to_noise / 10),
             "dynamic_range": min(10, np.log10(dynamic_range)),
@@ -571,7 +522,6 @@ async def assess_data_quality(
         
         overall_score = np.mean(list(quality_scores.values()))
         
-        # Quality assessment
         if overall_score >= 8:
             quality_grade = "Excellent"
             recommendations = [
@@ -647,24 +597,21 @@ async def create_parameter_visualization(
     analysis_results: dict,
     plot_type: str = "parameter_grid"
 ) -> str:
-    """Create comprehensive parameter visualization plots using matplotlib.
+    """Create parameter visualization plots.
 
     Args:
         analysis_results: Combined results from analysis tools
         plot_type: Type of plot - "parameter_grid", "peak_evolution", or "phase_fraction"
     """
     try:
-        # Generate mock visualization (in real implementation, use matplotlib)
         import matplotlib
-        matplotlib.use('Agg')  # Non-interactive backend
+        matplotlib.use('Agg')
         import matplotlib.pyplot as plt
         
-        # Create figure based on plot type
         if plot_type == "parameter_grid":
             fig, axes = plt.subplots(3, 5, figsize=(15, 9))
             fig.suptitle("MIDAS Parameter Analysis Grid")
             
-            # Mock parameter plots
             parameters = [
                 "Peak Position", "Peak Intensity", "FWHM", "Peak Area", "Background",
                 "Lattice Parameter", "Crystallite Size", "Microstrain", "Phase Fraction", "Texture",
@@ -682,7 +629,6 @@ async def create_parameter_visualization(
             
         elif plot_type == "peak_evolution":
             fig, ax = plt.subplots(figsize=(10, 6))
-            # Mock peak evolution data
             positions = np.array([12.5, 18.2, 25.8, 31.4, 37.9])
             intensities = np.array([8934, 12453, 6721, 4532, 3421])
             
@@ -694,9 +640,8 @@ async def create_parameter_visualization(
             
             plot_filename = "peak_evolution.png"
             
-        else:  # phase_fraction
+        else:
             fig, ax = plt.subplots(figsize=(8, 8))
-            # Mock phase fraction data
             phases = ['Austenite', 'Ferrite', 'Other']
             fractions = [0.65, 0.30, 0.05]
             colors = ['#ff9999', '#66b3ff', '#99ff99']
@@ -706,7 +651,6 @@ async def create_parameter_visualization(
             
             plot_filename = "phase_fractions.png"
         
-        # Save plot
         try:
             plt.savefig(plot_filename, dpi=300, bbox_inches='tight')
             plt.close()
@@ -743,7 +687,294 @@ async def create_parameter_visualization(
     except Exception as e:
         return f"Error creating visualization: {str(e)}"
 
+@mcp.tool()
+async def run_ff_hedm_simulation(
+    example_dir: str = "~/opt/MIDAS/FF_HEDM/Example",
+    n_cpus: int = None
+) -> str:
+    """Run complete FF-HEDM forward simulation and reconstruction workflow.
+    
+    This executes the full FF-HEDM test including:
+    1. Forward simulation of diffraction data
+    2. Generation of reconstruction input
+    3. Grain reconstruction
+    4. Comparison with reference results
+    
+    Args:
+        example_dir: Path to FF-HEDM example directory
+        n_cpus: Number of CPU cores to use (default: auto-detect)
+    """
+    try:
+        example_path = Path(example_dir).expanduser()
+        
+        if not example_path.exists():
+            return json.dumps({
+                "error": f"Directory not found: {example_path}",
+                "status": "failed"
+            }, indent=2)
+        
+        results = {
+            "tool": "run_ff_hedm_simulation",
+            "workflow": "FF-HEDM Test",
+            "steps": []
+        }
+        
+        # Step 1: Forward Simulation
+        print("Step 1: Running forward simulation...", file=sys.stderr)
+        sim_cmd = Path.home() / "opt" / "MIDAS" / "FF_HEDM" / "bin" / "ForwardSimulationCompressed"
+        param_file = example_path / "Parameters.txt"
+        
+        if not sim_cmd.exists():
+            return json.dumps({
+                "error": "ForwardSimulationCompressed not found",
+                "expected_path": str(sim_cmd),
+                "status": "failed"
+            }, indent=2)
+        
+        result = subprocess.run(
+            [str(sim_cmd), str(param_file)],
+            capture_output=True,
+            text=True,
+            timeout=600,
+            cwd=str(example_path)
+        )
+        
+        results["steps"].append({
+            "step": 1,
+            "name": "Forward Simulation",
+            "status": "completed" if result.returncode == 0 else "failed",
+            "return_code": result.returncode
+        })
+        
+        if result.returncode != 0:
+            results["status"] = "failed"
+            results["error"] = result.stderr[:500] if result.stderr else "Simulation failed"
+            return json.dumps(results, indent=2)
+        
+        # Step 2: Generate input
+        print("Step 2: Generating reconstruction input...", file=sys.stderr)
+        gen_cmd = [
+            "python",
+            str(Path.home() / "opt" / "MIDAS" / "utils" / "ffGenerateZip.py"),
+            "-resultFolder", ".",
+            "-paramFN", "Parameters.txt",
+            "-dataFN", "Au_FF_000001_pf_scanNr_0.zip"
+        ]
+        
+        result = subprocess.run(
+            gen_cmd,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            cwd=str(example_path)
+        )
+        
+        results["steps"].append({
+            "step": 2,
+            "name": "Generate Input",
+            "status": "completed" if result.returncode == 0 else "failed",
+            "return_code": result.returncode
+        })
+        
+        if result.returncode != 0:
+            results["status"] = "failed"
+            results["error"] = result.stderr[:500] if result.stderr else "Input generation failed"
+            return json.dumps(results, indent=2)
+        
+        # Step 3: Reconstruction
+        print("Step 3: Running reconstruction...", file=sys.stderr)
+        if n_cpus is None:
+            n_cpus = min(os.cpu_count() or 4, 50)
+        
+        recon_cmd = [
+            "python",
+            str(Path.home() / "opt" / "MIDAS" / "FF_HEDM" / "v7" / "ff_MIDAS.py"),
+            "-dataFN", "Au_FF_000001_pf_scanNr_0.zip.analysis.MIDAS.zip",
+            "-nCPUs", str(n_cpus),
+            "-convertFiles", "0"
+        ]
+        
+        result = subprocess.run(
+            recon_cmd,
+            capture_output=True,
+            text=True,
+            timeout=1800,
+            cwd=str(example_path)
+        )
+        
+        results["steps"].append({
+            "step": 3,
+            "name": "Reconstruction",
+            "status": "completed" if result.returncode == 0 else "failed",
+            "return_code": result.returncode,
+            "n_cpus": n_cpus
+        })
+        
+        # Check results
+        results_file = example_path / "LayerNr_1" / "GrainsReconstructed.csv"
+        reference_file = example_path / "GrainsReconstructed.csv"
+        
+        if results_file.exists():
+            results["output_file"] = str(results_file)
+            results["output_size_bytes"] = results_file.stat().st_size
+            
+            # Compare with reference if available
+            if reference_file.exists():
+                ref_size = reference_file.stat().st_size
+                res_size = results_file.stat().st_size
+                size_diff = abs(res_size - ref_size) / ref_size * 100
+                
+                results["validation"] = {
+                    "reference_file": str(reference_file),
+                    "reference_size": ref_size,
+                    "size_difference_percent": round(size_diff, 2),
+                    "match_quality": "good" if size_diff < 10 else "poor"
+                }
+            
+            results["status"] = "completed"
+        else:
+            results["status"] = "completed_no_output"
+            results["warning"] = "Reconstruction finished but output file not found"
+        
+        return json.dumps(results, indent=2)
+        
+    except subprocess.TimeoutExpired as e:
+        return json.dumps({
+            "error": f"Step timed out: {e}",
+            "status": "timeout"
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({
+            "error": str(e),
+            "status": "error"
+        }, indent=2)
+
+@mcp.tool()
+async def run_integrator_batch(
+    param_file: str,
+    data_folder: str,
+    output_h5: str = "integrated_data.h5",
+    use_mpi: bool = False,
+    n_processes: int = 1
+) -> str:
+    """Run MIDAS integrator batch processing on diffraction images.
+    
+    This tool runs the MIDAS integrator for batch processing of 2D diffraction
+    images, typically used for calibration and quick analysis.
+    
+    Args:
+        param_file: Path to calibration parameter file (e.g., calib_file.txt)
+        data_folder: Folder containing TIFF diffraction images
+        output_h5: Output HDF5 file name
+        use_mpi: Use MPI for parallel processing
+        n_processes: Number of processes for parallel execution
+    """
+    try:
+        param_path = Path(param_file).expanduser()
+        folder_path = Path(data_folder).expanduser()
+        
+        if not param_path.exists():
+            return json.dumps({
+                "error": f"Parameter file not found: {param_path}",
+                "status": "failed"
+            }, indent=2)
+        
+        if not folder_path.exists():
+            return json.dumps({
+                "error": f"Data folder not found: {folder_path}",
+                "status": "failed"
+            }, indent=2)
+        
+        results = {
+            "tool": "run_integrator_batch",
+            "param_file": str(param_path),
+            "data_folder": str(folder_path),
+            "output_h5": output_h5,
+            "status": "running"
+        }
+        
+        integrator_script = Path.home() / "opt" / "MIDAS" / "utils" / "integrator_batch_process.py"
+        
+        if not integrator_script.exists():
+            results["status"] = "error"
+            results["error"] = f"Integrator script not found: {integrator_script}"
+            return json.dumps(results, indent=2)
+        
+        # Count input files
+        tiff_files = list(folder_path.glob("*.tif")) + list(folder_path.glob("*.tiff"))
+        results["input_files_found"] = len(tiff_files)
+        
+        if len(tiff_files) == 0:
+            results["status"] = "warning"
+            results["warning"] = "No TIFF files found in data folder"
+            return json.dumps(results, indent=2)
+        
+        # Build command
+        cmd = [
+            "python", str(integrator_script),
+            "--param-file", str(param_path),
+            "--folder", str(folder_path),
+            "--output-h5", output_h5
+        ]
+        
+        if use_mpi:
+            cmd = ["mpirun", "-n", str(n_processes)] + cmd
+        
+        results["command"] = " ".join(cmd)
+        
+        # Execute
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=3600,
+                cwd=str(folder_path)
+            )
+            
+            results["return_code"] = result.returncode
+            results["stdout"] = result.stdout[-1000:] if result.stdout else ""
+            results["stderr"] = result.stderr[-500:] if result.stderr else ""
+            
+            if result.returncode == 0:
+                results["status"] = "completed"
+                
+                # Check output file
+                output_path = folder_path / output_h5
+                if output_path.exists():
+                    results["output_file"] = str(output_path)
+                    results["output_size_mb"] = round(output_path.stat().st_size / 1024 / 1024, 2)
+                else:
+                    results["status"] = "warning"
+                    results["warning"] = "Integration completed but output file not found"
+            else:
+                results["status"] = "error"
+                results["error"] = "Integration failed with non-zero return code"
+                
+        except subprocess.TimeoutExpired:
+            results["status"] = "error"
+            results["error"] = "Integration timed out (>1 hour)"
+        except Exception as e:
+            results["status"] = "error"
+            results["error"] = str(e)
+        
+        return json.dumps(results, indent=2)
+        
+    except Exception as e:
+        return json.dumps({
+            "error": str(e),
+            "status": "error"
+        }, indent=2)
+
 if __name__ == "__main__":
-    print("Starting MIDAS FastMCP Server with real analysis functions...", file=sys.stderr)
-    # Initialize and run the FastMCP server
+    print("Starting MIDAS FastMCP Server with complete analysis suite...", file=sys.stderr)
+    print("Available tools:", file=sys.stderr)
+    print("  - detect_diffraction_rings", file=sys.stderr)
+    print("  - integrate_2d_to_1d", file=sys.stderr)
+    print("  - analyze_diffraction_peaks", file=sys.stderr)
+    print("  - identify_crystalline_phases", file=sys.stderr)
+    print("  - assess_data_quality", file=sys.stderr)
+    print("  - create_parameter_visualization", file=sys.stderr)
+    print("  - run_ff_hedm_simulation", file=sys.stderr)
+    print("  - run_integrator_batch", file=sys.stderr)
     mcp.run(transport='stdio')

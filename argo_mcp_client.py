@@ -17,15 +17,18 @@ class ArgoMCPClient:
         self.session: Optional[ClientSession] = None
         self.sessions = {}
         self.exit_stack = AsyncExitStack()
-        
+
         self.argo_chat_url = "https://apps.inside.anl.gov/argoapi/api/v1/resource/chat/"
         self.argo_embed_url = "https://apps.inside.anl.gov/argoapi/api/v1/resource/embed/"
-        
+
         self.anl_username = os.getenv("ANL_USERNAME")
         self.selected_model = os.getenv("ARGO_MODEL", "gpt4o")
-        
+
         self.http_client = httpx.AsyncClient(timeout=120.0)
-        
+
+        # Conversation history for interactive sessions
+        self.conversation_history = []
+
         if not self.anl_username:
             raise ValueError("ANL_USERNAME must be set in environment (.env file)")
 
@@ -71,10 +74,10 @@ class ArgoMCPClient:
                 
                 response = await session.list_tools()
                 tools = response.tools
-                print(f"Connected to {name} server with tools: {[tool.name for tool in tools]}")
+                print(f"✓ Connected to {name} server with tools: {[tool.name for tool in tools]}")
                 
             except Exception as e:
-                print(f"Failed to connect to {name} server: {e}")
+                print(f"✗ Failed to connect to {name} server: {e}")
         
         if "midas" in self.sessions:
             self.session = self.sessions["midas"]
@@ -93,7 +96,7 @@ class ArgoMCPClient:
         elif model.startswith("claude"):
             payload["max_tokens"] = 21000
         else:
-            payload["max_tokens"] = 1000
+            payload["max_tokens"] = 4000
 
         if tools:
             payload["tools"] = tools
@@ -104,6 +107,13 @@ class ArgoMCPClient:
     async def call_argo_chat_api(self, messages: List[Dict[str, str]], tools: List[Dict[str, Any]] = None) -> Dict[str, Any]:
         payload = self._prepare_argo_payload(messages, self.selected_model, tools)
         
+        # Removed debug output for cleaner interface
+        # print(f"\n🔧 DEBUG: Argo API Request")
+        # print(f"  Model: {self.selected_model}")
+        # print(f"  Tools provided: {len(tools) if tools else 0}")
+        # if tools:
+        #     print(f"  Tool names: {[t['function']['name'] for t in tools[:3]]}...")
+        
         try:
             response = await self.http_client.post(
                 self.argo_chat_url,
@@ -113,28 +123,74 @@ class ArgoMCPClient:
             response.raise_for_status()
             result = response.json()
             
-            if 'response' in result:
+            # Removed debug output for cleaner interface
+            # print(f"\n🔧 DEBUG: Argo API Response Structure")
+            # print(f"  Response keys: {list(result.keys())}")
+            
+            # Handle Argo's actual format: {"response": {"content": ..., "tool_calls": [...]}}
+            if 'response' in result and isinstance(result['response'], dict):
+                response_obj = result['response']
+                # print(f"  Response object keys: {list(response_obj.keys())}")
+
+                # Check for tool calls in Argo format
+                if 'tool_calls' in response_obj and response_obj['tool_calls']:
+                    pass # print(f"  ✅ Argo native tool calls found: {len(response_obj['tool_calls'])}")
+                    
+                    # Convert Argo format to standard format for consistency
+                    return {
+                        'choices': [{
+                            'message': {
+                                'role': 'assistant',
+                                'content': response_obj.get('content'),
+                                'tool_calls': response_obj['tool_calls']
+                            }
+                        }]
+                    }
+                else:
+                    # No tool calls, just content
+                    pass # print(f"  ✗ No tool calls in Argo response")
+                    
+                    return {
+                        'choices': [{
+                            'message': {
+                                'role': 'assistant',
+                                'content': response_obj.get('content', ''),
+                                '_argo_format': True
+                            }
+                        }]
+                    }
+            
+            # Fallback: old format (single "response" string)
+            elif 'response' in result and isinstance(result['response'], str):
+                pass # print(f"  ⚠️  Legacy string format")
+                
                 return {
                     'choices': [{
                         'message': {
                             'role': 'assistant',
-                            'content': result['response']
+                            'content': result['response'],
+                            '_legacy_format': True
                         }
                     }]
                 }
+            
+            # Standard OpenAI format (shouldn't happen with Argo)
             elif 'choices' in result:
                 return result
+
             else:
+                pass # print(f"  ⚠️  Unexpected response format")
                 return {
                     'choices': [{
                         'message': {
-                            'role': 'assistant', 
+                            'role': 'assistant',
                             'content': str(result)
                         }
                     }]
                 }
             
         except Exception as e:
+            print(f"\n✗ Error calling Argo API: {str(e)}")
             raise Exception(f"Error calling Argo API: {str(e)}")
 
     async def get_all_available_tools(self) -> List[Dict[str, Any]]:
@@ -156,11 +212,23 @@ class ArgoMCPClient:
                     }
                     all_tools.append(tool_info)
             except Exception as e:
-                print(f"Error getting tools from {server_name}: {e}")
+                print(f"✗ Error getting tools from {server_name}: {e}")
+        
+        # Removed debug output for cleaner interface
+        # print(f"\n🔧 DEBUG: Available tools: {len(all_tools)}")
+        # midas_tools = [t for t in all_tools if t['function']['name'].startswith('midas_')]
+        # print(f"  MIDAS tools ({len(midas_tools)}):")
+        # for tool in midas_tools:
+        #     print(f"    - {tool['function']['name']}")
+        # other_tools = [t for t in all_tools if not t['function']['name'].startswith('midas_')]
+        # print(f"  Other tools ({len(other_tools)}): {[t['function']['name'] for t in other_tools[:5]]}")
         
         return all_tools
 
     async def execute_tool_call(self, tool_name: str, arguments: Dict[str, Any]) -> str:
+        # Clean output - just show what we're doing
+        print(f"\n→ {tool_name.replace('midas_', '').replace('_', ' ').title()}")
+        
         if "_" in tool_name:
             server_name, original_tool_name = tool_name.split("_", 1)
         else:
@@ -173,11 +241,16 @@ class ArgoMCPClient:
         try:
             session = self.sessions[server_name]
             result = await session.call_tool(original_tool_name, arguments)
-            return str(result.content[0].text if result.content else "No result")
+            result_text = str(result.content[0].text if result.content else "No result")
+            # print(f"✓ Complete")
+            return result_text
         except Exception as e:
-            return f"Error executing {tool_name}: {str(e)}"
+            error_msg = f"Error: {str(e)}"
+            print(f"✗ {error_msg}")
+            return error_msg
 
-    def _extract_peak_positions(self, query: str) -> List[float]:
+    def _extract_peak_positions(self, text: str) -> List[float]:
+        """Extract peak positions from text"""
         patterns = [
             r'\[([\d.,\s]+)\]',
             r'(?:peaks?\s+at\s+|positions?\s+)([\d.,\s]+)(?:\s+degrees?)?',
@@ -185,7 +258,7 @@ class ArgoMCPClient:
         ]
         
         for pattern in patterns:
-            match = re.search(pattern, query, re.IGNORECASE)
+            match = re.search(pattern, text, re.IGNORECASE)
             if match:
                 numbers_str = match.group(1)
                 numbers = re.findall(r'\d+\.?\d*', numbers_str)
@@ -196,121 +269,148 @@ class ArgoMCPClient:
         
         return []
 
-    def _format_phase_analysis_results(self, json_result: str) -> str:
-        """Format JSON phase analysis results into readable text"""
-        try:
-            data = json.loads(json_result)
-            
-            if "identified_phases" not in data:
-                return json_result  # Return original if parsing fails
-            
-            output = []
-            output.append("PHASE IDENTIFICATION RESULTS")
-            output.append("=" * 50)
-            
-            # Analysis parameters
-            params = data.get("analysis_parameters", {})
-            output.append(f"Input peaks analyzed: {params.get('input_peaks', 'N/A')}")
-            output.append(f"Peak positions: {params.get('peak_positions', [])}")
-            output.append(f"Temperature: {params.get('temperature_celsius', 25)}°C")
-            output.append("")
-            
-            # Identified phases
-            phases = data.get("identified_phases", [])
-            if phases:
-                output.append("IDENTIFIED PHASES:")
-                output.append("-" * 20)
-                
-                for i, phase in enumerate(phases, 1):
-                    output.append(f"{i}. {phase.get('phase_name', 'Unknown')} ({phase.get('chemical_formula', 'N/A')})")
-                    output.append(f"   Crystal System: {phase.get('crystal_system', 'N/A').title()}")
-                    output.append(f"   Space Group: {phase.get('space_group', 'N/A')}")
-                    
-                    if phase.get('phase_fraction'):
-                        fraction_pct = phase['phase_fraction'] * 100
-                        output.append(f"   Phase Fraction: {fraction_pct:.1f}%")
-                    
-                    confidence = phase.get('confidence_score', 0)
-                    output.append(f"   Confidence: {confidence:.1%}")
-                    
-                    # Matched peaks
-                    matched = phase.get('matched_peaks', [])
-                    if matched:
-                        output.append("   Matched Peaks:")
-                        for peak in matched:
-                            obs = peak.get('observed', 0)
-                            calc = peak.get('calculated', 0) 
-                            hkl = peak.get('hkl', 'N/A')
-                            intensity = peak.get('relative_intensity', 0)
-                            output.append(f"     • {obs:.1f}° → {hkl} (calc: {calc:.2f}°, intensity: {intensity}%)")
-                    output.append("")
-            else:
-                output.append("No phases identified with sufficient confidence.")
-                output.append("")
-            
-            # Unmatched peaks
-            unmatched = data.get("unmatched_peaks", [])
-            if unmatched:
-                output.append("UNMATCHED PEAKS:")
-                output.append("-" * 15)
-                for peak in unmatched:
-                    pos = peak.get('position', 0)
-                    assignment = peak.get('possible_assignment', 'Unknown')
-                    output.append(f"• {pos:.1f}° - {assignment}")
-                output.append("")
-            
-            # Summary
-            summary = data.get("phase_summary", {})
-            overall = data.get("overall_analysis", {})
-            
-            output.append("ANALYSIS SUMMARY:")
-            output.append("-" * 17)
-            output.append(f"Total phases found: {summary.get('total_phases_found', 0)}")
-            output.append(f"Peaks matched: {summary.get('total_matched_peaks', 0)}/{params.get('input_peaks', 0)}")
-            output.append(f"Match quality: {overall.get('match_quality', 'N/A').title()}")
-            
-            recommendation = overall.get('recommended_action', '')
-            if recommendation:
-                output.append(f"Recommendation: {recommendation}")
-            
-            return "\n".join(output)
-            
-        except (json.JSONDecodeError, KeyError) as e:
-            return f"Error formatting results: {e}\n\nRaw output:\n{json_result}"
+    async def process_diffraction_query(self, query: str, image_path: str = None, experimental_params: Dict[str, Any] = None, max_iterations: int = 5, use_history: bool = True) -> str:
+        """Process query with automatic tool calling loop"""
 
-    async def process_diffraction_query(self, query: str, image_path: str = None, experimental_params: Dict[str, Any] = None) -> str:
         if not self.sessions:
             return "Error: Not connected to any MCP servers."
-        
+
         available_tools = await self.get_all_available_tools()
 
-        system_prompt = """You are Beamline Assistant, an expert AI system for synchrotron X-ray diffraction analysis at Argonne National Laboratory. You have access to analysis tools and must use them.
+        system_prompt = """You are Beamline Assistant, an expert AI system for synchrotron X-ray diffraction analysis at Argonne National Laboratory.
+You maintain context across the conversation. When users refer to previous files, directories, or results using words like "there", "it", "that file", etc., use the conversation history to understand what they're referring to.
 
-Available Tools:
-- midas_identify_crystalline_phases: Match peaks to known crystal phases
-- midas_detect_diffraction_rings: Detect rings in 2D patterns
-- midas_integrate_2d_to_1d: Convert 2D to 1D patterns
-- midas_analyze_diffraction_peaks: Analyze peaks in patterns
-- filesystem_read_file: Read files
-- executor_run_command: Execute commands
+⚠️ CRITICAL INSTRUCTIONS ⚠️
 
-When users mention peak positions, identify the crystalline phases. Provide brief context before analysis."""
+1. WHEN TO USE TOOLS:
+   - User gives a COMMAND: "integrate the file", "run workflow", "list files"
+   - User provides DATA for analysis: "I have peaks at 12.5, 18.2 degrees"
+
+2. WHEN NOT TO USE TOOLS:
+   - User asks HOW: "how do you run analysis", "how does this work"
+   - User asks WHAT: "what can you do", "what tools are available"
+   - User needs EXPLANATION: "explain the workflow", "what is FF-HEDM"
+   - General conversation: "hello", "thank you", etc.
+
+3. TOOL CALLING FORMAT:
+   Your API does NOT support native tool calling. You MUST use this special format:
+
+   TOOL_CALL: exact_tool_name
+   ARGUMENTS: {json_arguments}
+
+   DO NOT just describe what you would do. DO NOT say "I would use the tool".
+   ONLY use this format when user gives a COMMAND, not when they ask a QUESTION.
+
+📋 EXAMPLES OF CORRECT RESPONSES:
+
+Example 1 - Question (NO TOOL):
+User: "how do you run the analysis"
+Your response:
+"To run analysis with the Beamline Assistant, you can:
+
+1. FF-HEDM Full Workflow: Provide a directory with Parameters.txt and data files
+2. 2D to 1D Integration: Provide a .tiff image and calibration parameters
+3. Phase Identification: Provide peak positions in degrees 2theta
+
+For example, you can say 'Run FF-HEDM workflow on /path/to/data' or 'Integrate the .tiff file from 2D to 1D'.
+
+What specific analysis would you like to perform?"
+
+Example 2 - Phase Identification Command (USE TOOL):
+User: "I have peaks at 12.5, 18.2, 25.8 degrees. What phases?"
+Your response:
+"I'll identify the crystalline phases from these peak positions.
+
+TOOL_CALL: midas_identify_crystalline_phases
+ARGUMENTS: {"peak_positions": [12.5, 18.2, 25.8]}
+"
+
+Example 3 - FF-HEDM Workflow Command (USE TOOL):
+User: "Run FF-HEDM workflow on ~/opt/MIDAS/FF_HEDM/Example"
+Your response:
+"I'll run the FF-HEDM full workflow.
+
+TOOL_CALL: midas_run_ff_hedm_full_workflow
+ARGUMENTS: {"example_dir": "~/opt/MIDAS/FF_HEDM/Example"}
+"
+
+Example 4 - 2D to 1D Integration Command (USE TOOL):
+User: "Integrate the .tiff file from 2D to 1D in the current directory"
+Your response:
+"I'll integrate the 2D diffraction image to 1D.
+
+TOOL_CALL: filesystem_list_directory
+ARGUMENTS: {"path": "."}
+
+[After seeing ff_011276_ge2_0001.tiff in results]
+
+TOOL_CALL: midas_integrate_2d_to_1d
+ARGUMENTS: {"image_path": "./ff_011276_ge2_0001.tiff", "calibration_file": "./Parameters.txt"}
+"
+
+🔧 AVAILABLE TOOLS:
+- midas_identify_crystalline_phases
+  Args: {"peak_positions": [12.5, 18.2]}
+- midas_run_ff_hedm_full_workflow
+  Args: {"example_dir": "~/path", "n_cpus": 20}
+- midas_detect_diffraction_rings
+  Args: {"image_path": "/path/image.tif"}
+- midas_integrate_2d_to_1d
+  Args: {"image_path": "/path/image.tif", "calibration_file": "calib.txt"}
+  Or: {"image_path": "/path/image.tif", "wavelength": 0.22, "detector_distance": 1000, "beam_center_x": 1024, "beam_center_y": 1024}
+- filesystem_read_file
+  Args: {"file_path": "/path/file"}
+- filesystem_list_directory
+  Args: {"path": "/path/dir"}
+- executor_run_command
+  Args: {"command": "ls -la"}
+
+⚠️ REMEMBER: 
+- ALWAYS use "TOOL_CALL:" and "ARGUMENTS:" format
+- NEVER just describe what you would do
+- NEVER say "I don't have access" - you DO have access via the TOOL_CALL format
+- Tool names must be EXACT (case-sensitive)
+- Arguments must be valid JSON"""
 
         system_prompt += f"\n\nCurrent Model: {self.selected_model} via Argo Gateway"
 
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": query}
-        ]
+        # Build messages with conversation history
+        if use_history and self.conversation_history:
+            # Start with system prompt + history + new query
+            messages = [{"role": "system", "content": system_prompt}] + self.conversation_history.copy()
 
-        if image_path:
-            messages[-1]["content"] += f"\n\nImage: {image_path}"
-        if experimental_params:
-            messages[-1]["content"] += f"\n\nParameters: {json.dumps(experimental_params)}"
+            # Add current user query
+            user_content = query
+            if image_path:
+                user_content += f"\n\nImage: {image_path}"
+            if experimental_params:
+                user_content += f"\n\nParameters: {json.dumps(experimental_params)}"
 
-        print(f"Processing with {self.selected_model}...")
+            messages.append({"role": "user", "content": user_content})
+        else:
+            # No history - fresh conversation
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": query}
+            ]
 
-        try:
+            if image_path:
+                messages[-1]["content"] += f"\n\nImage: {image_path}"
+            if experimental_params:
+                messages[-1]["content"] += f"\n\nParameters: {json.dumps(experimental_params)}"
+
+        # Cleaner output
+        # print(f"\n{'='*60}")
+        # print(f"Processing query: {query[:100]}...")
+        # print(f"{'='*60}")
+
+        iteration = 0
+        final_response = ""
+        
+        while iteration < max_iterations:
+            iteration += 1
+            # print(f"\n--- Iteration {iteration} ---")
+            
             response_data = await self.call_argo_chat_api(messages, available_tools)
             
             if 'choices' not in response_data or not response_data['choices']:
@@ -318,35 +418,245 @@ When users mention peak positions, identify the crystalline phases. Provide brie
                 
             choice = response_data['choices'][0]
             
-            if 'message' in choice:
-                message = choice['message']
-            else:
+            if 'message' not in choice:
                 return f"Unexpected choice format: {choice}"
             
-            response_text = message.get('content', '').lower()
+            message = choice['message']
             
-            # Check if AI mentioned phase identification
-            if 'identify_crystalline_phases' in response_text or 'phase' in response_text:
-                peak_positions = self._extract_peak_positions(query)
-                if peak_positions:
-                    print("AI intended to use phase identification - executing...")
-                    try:
-                        result = await self.execute_tool_call(
-                            "midas_identify_crystalline_phases", 
-                            {"peak_positions": peak_positions}
-                        )
+            # Check if this is legacy format (no native tool calling)
+            is_legacy = message.get('_legacy_format', False)
+            is_argo = message.get('_argo_format', False)
+            
+            # Check for native tool calls (works with Argo format now)
+            tool_calls = message.get('tool_calls', [])
+            
+            if tool_calls and not is_legacy:
+                # Native tool calling! Process them
+                # print(f"\n🔧 Processing {len(tool_calls)} native tool call(s)...")
+                
+                messages.append(message)
+                
+                for tool_call in tool_calls:
+                    # Handle different formats from different providers
+                    # OpenAI format: {"id": "...", "function": {"name": "...", "arguments": "{...}"}}
+                    # Anthropic format: {"id": "...", "input": {...}}
+                    # Gemini format: {"id": null, "args": {...}}
+                    
+                    tool_id = tool_call.get('id', 'unknown')
+                    tool_name = None
+                    arguments = {}
+                    
+                    if 'function' in tool_call:
+                        # OpenAI format
+                        function = tool_call['function']
+                        tool_name = function.get('name')
+                        try:
+                            arguments = json.loads(function.get('arguments', '{}'))
+                        except json.JSONDecodeError:
+                            arguments = {}
+                    elif 'input' in tool_call:
+                        # Anthropic format
+                        tool_name = tool_call.get('name')
+                        arguments = tool_call['input']
+                    elif 'args' in tool_call:
+                        # Gemini format
+                        tool_name = tool_call.get('name')
+                        arguments = tool_call['args']
+                    
+                    if not tool_name:
+                        print(f"  ⚠️  Could not extract tool name from: {tool_call}")
+                        continue
+                    
+                    print(f"\n  Calling: {tool_name}")
+                    print(f"  Arguments: {json.dumps(arguments, indent=4)}")
+                    
+                    # Execute the tool
+                    tool_result = await self.execute_tool_call(tool_name, arguments)
+                    
+                    # Add tool result to conversation
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_id,
+                        "name": tool_name,
+                        "content": tool_result
+                    })
+                
+                # Continue loop to get AI's interpretation
+                continue
+            
+            if is_legacy or 'tool_calls' not in message:
+                # Parse text-based tool calls
+                content = message.get('content', '')
+                
+                # Look for TOOL_CALL format
+                if 'TOOL_CALL:' in content:
+                    # print(f"  💡 Detected text-based tool call")
+                    
+                    # Extract tool name and arguments
+                    tool_match = re.search(r'TOOL_CALL:\s*(\w+)', content)
+                    args_match = re.search(r'ARGUMENTS:\s*({[^}]+})', content)
+                    
+                    if tool_match:
+                        tool_name = tool_match.group(1)
                         
-                        # Format the results nicely
-                        formatted_results = self._format_phase_analysis_results(result)
+                        if args_match:
+                            try:
+                                arguments = json.loads(args_match.group(1))
+                            except json.JSONDecodeError:
+                                arguments = {}
+                        else:
+                            arguments = {}
                         
-                        return f"{message['content']}\n\n{formatted_results}"
-                    except Exception as e:
-                        return f"{message['content']}\n\nError in phase analysis: {e}"
+                        print(f"  Extracted tool: {tool_name}")
+                        print(f"  Arguments: {arguments}")
+                        
+                        # Execute the tool
+                        tool_result = await self.execute_tool_call(tool_name, arguments)
+                        
+                        # Add assistant message and tool result
+                        messages.append(message)
+                        messages.append({
+                            "role": "user",
+                            "content": f"Tool result:\n{tool_result}\n\nPlease provide a natural language summary of these results."
+                        })
+                        
+                        # Continue loop to get interpretation
+                        continue
+                
+                # Fallback: Try to detect tool intent from text (ONLY if very specific)
+                # This should be rare - AI should use TOOL_CALL format
+
+                # Check if AI mentioned a specific tool with clear action intent
+                tool_intent = None
+                tool_args = {}
+
+                # Only trigger fallback if it's a CLEAR command-like statement from the AI
+                # Not if it's explaining or asking questions
+                is_explanation = any(word in content.lower() for word in [
+                    'how to', 'you can', 'would', 'could', 'should', 'explain',
+                    'here\'s', 'let me', 'i can', 'to run', 'please', '?'
+                ])
+
+                if not is_explanation:
+                    # Pattern 1: Very specific FF-HEDM command
+                    if re.search(r'run.*ff[_-]?hedm.*workflow.*on', content.lower()):
+                        tool_intent = 'midas_run_ff_hedm_full_workflow'
+                        # Try to extract directory
+                        dir_match = re.search(r'on\s+([~/][\w/.-]+)', content)
+                        if dir_match:
+                            tool_args = {"example_dir": dir_match.group(1)}
+
+                    # Pattern 2: Identify phases with peak data
+                    elif re.search(r'identif.*phase.*from.*peak', content.lower()):
+                        # Extract peak positions from earlier messages
+                        for msg in reversed(messages):
+                            if msg['role'] == 'user':
+                                peaks = self._extract_peak_positions(msg['content'])
+                                if peaks:
+                                    tool_intent = 'midas_identify_crystalline_phases'
+                                    tool_args = {"peak_positions": peaks}
+                                    break
+
+                    # Pattern 3: Integrate specific file
+                    elif re.search(r'integrat.*(?:file|image).*(?:from|to)', content.lower()):
+                        # Look for image path in recent messages
+                        for msg in reversed(messages):
+                            if msg['role'] == 'user':
+                                image_match = re.search(r'([~/.\w/-]+\.(?:tiff?|ge2|edf))', msg['content'])
+                                if image_match:
+                                    tool_intent = 'midas_integrate_2d_to_1d'
+                                    tool_args['image_path'] = image_match.group(1)
+                                    # Look for calibration file
+                                    calib_match = re.search(r'(?:with|using)\s+([\w.-]+\.txt)', msg['content'])
+                                    if calib_match:
+                                        tool_args['calibration_file'] = calib_match.group(1)
+                                    break
+
+                if tool_intent and tool_args:  # Only execute if we have both intent AND arguments
+                    # Comment out debug output for cleaner interface
+                    # print(f"  💡 Detected tool intent: {tool_intent}")
+                    # print(f"     Extracted args: {tool_args}")
+                    # print(f"  ⚠️  AI didn't use TOOL_CALL format - executing anyway...")
+
+                    # Execute the tool
+                    tool_result = await self.execute_tool_call(tool_intent, tool_args)
+
+                    # Add assistant message and tool result
+                    messages.append(message)
+                    messages.append({
+                        "role": "user",
+                        "content": f"Tool result:\n{tool_result}\n\nPlease provide a natural language summary."
+                    })
+
+                    # Continue loop
+                    continue
+                
+                # No tool call detected - this is final response
+                final_response = content
+                # print(f"\n✓ Response complete")
+                break
             
-            return message['content']
+            # Native tool calls (if Argo supports them)
+            messages.append(message)
+            tool_calls = message.get('tool_calls', [])
             
-        except Exception as e:
-            return f"Error processing query: {str(e)}"
+            if not tool_calls:
+                final_response = message.get('content', '')
+                print(f"\n✓ Final response received (no more tool calls)")
+                break
+            
+            # Execute all tool calls
+            print(f"\n🔧 Processing {len(tool_calls)} tool call(s)...")
+            
+            for tool_call in tool_calls:
+                tool_id = tool_call.get('id', 'unknown')
+                function = tool_call.get('function', {})
+                tool_name = function.get('name')
+                
+                try:
+                    arguments = json.loads(function.get('arguments', '{}'))
+                except json.JSONDecodeError:
+                    arguments = {}
+                
+                print(f"\n  Calling: {tool_name}")
+                
+                # Execute the tool
+                tool_result = await self.execute_tool_call(tool_name, arguments)
+                
+                # Add tool result to conversation
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_id,
+                    "name": tool_name,
+                    "content": tool_result
+                })
+        
+        if iteration >= max_iterations:
+            print(f"\n⚠️  Reached maximum iterations ({max_iterations})")
+
+        # Get final response
+        final_text = final_response if final_response else messages[-1].get('content', 'No response generated')
+
+        # Update conversation history (keep last 10 exchanges to avoid token overflow)
+        if use_history:
+            # Add user query
+            user_msg = {"role": "user", "content": query}
+            if image_path:
+                user_msg["content"] += f"\n\nImage: {image_path}"
+            if experimental_params:
+                user_msg["content"] += f"\n\nParameters: {json.dumps(experimental_params)}"
+
+            # Add assistant response
+            assistant_msg = {"role": "assistant", "content": final_text}
+
+            self.conversation_history.append(user_msg)
+            self.conversation_history.append(assistant_msg)
+
+            # Keep only last 20 messages (10 exchanges) to avoid context overflow
+            if len(self.conversation_history) > 20:
+                self.conversation_history = self.conversation_history[-20:]
+
+        return final_text
 
     def show_available_models(self):
         print("\nAvailable Argo Models:")
@@ -371,38 +681,132 @@ When users mention peak positions, identify the crystalline phases. Provide brie
         print(f"ANL User: {self.anl_username}")
         print(f"Connected Servers: {list(self.sessions.keys())}")
         print()
-        print("Commands: analyze, models, tools, servers, ls, run, help, quit")
+        print("Commands: analyze, models, tools, servers, ls, run, clear, help, quit")
         print()
+        
+        # Command history
+        history = []
+        history_index = -1
         
         while True:
             try:
+                # Use input with readline support for history and tab completion
+                import readline
+                
+                # Set up history
+                readline.clear_history()
+                for cmd in history:
+                    readline.add_history(cmd)
+                
                 user_input = input("Beamline> ").strip()
+                
+                if not user_input:
+                    continue
+                    
+                # Add to history
+                if user_input and (not history or history[-1] != user_input):
+                    history.append(user_input)
                 
                 if user_input.lower() == 'quit':
                     break
+                elif user_input.lower() == 'clear':
+                    self.conversation_history = []
+                    print("✓ Conversation history cleared")
                 elif user_input.lower() == 'models':
                     self.show_available_models()
                 elif user_input.lower() == 'servers':
                     print(f"Connected: {list(self.sessions.keys())}")
+                elif user_input.lower() == 'tools':
+                    tools = await self.get_all_available_tools()
+                    print(f"\nAvailable tools ({len(tools)}):")
+                    for tool in tools:
+                        print(f"  - {tool['function']['name']}: {tool['function']['description'][:80]}")
+                elif user_input.lower() == 'help':
+                    print("""
+Beamline Assistant Commands:
+
+  analyze <query>  - Run full diffraction analysis
+  models           - Show available AI models
+  model <name>     - Switch to different model
+  tools            - List all available analysis tools
+  servers          - Show connected MCP servers
+  ls <path>        - List directory contents
+  run <command>    - Execute system command (whitelisted)
+  clear            - Clear conversation history
+  help             - Show this help
+  quit             - Exit assistant
+
+Natural Language Queries:
+  - "I have peaks at X, Y, Z degrees. What phases?"
+  - "Run FF-HEDM workflow in <directory>"
+  - "Analyze quality of <image.tif>"
+  - "Integrate pattern from <image>"
+  - "Read the Parameters.txt file there" (remembers context)
+
+Use ↑/↓ arrow keys for command history
+Use Tab for command completion
+                    """)
                 elif user_input.startswith('model '):
                     model_name = user_input[6:].strip()
                     if self._is_valid_model(model_name):
                         self.selected_model = model_name
-                        print(f"Switched to: {model_name}")
+                        print(f"✅ Switched to: {model_name}")
                     else:
-                        print(f"Invalid model: {model_name}")
+                        print(f"✗ Invalid model: {model_name}")
+                        print("Available models: models")
                 elif user_input.startswith('run '):
                     command = user_input[4:].strip()
-                    if "executor" in self.sessions:
-                        result = await self.execute_tool_call("executor_run_command", {"command": command})
+                    
+                    # Check if this is a special command like FF-HEDM
+                    if 'ff-hedm' in command.lower() or 'ff_hedm' in command.lower():
+                        # Extract directory if provided
+                        dir_match = re.search(r'in\s+([~/.\w/-]+)', command)
+                        if dir_match:
+                            example_dir = dir_match.group(1)
+                        else:
+                            example_dir = "~/opt/MIDAS/FF_HEDM/Example"
+                        
+                        # Extract CPU count if provided  
+                        cpu_match = re.search(r'(\d+)\s*cpu', command.lower())
+                        n_cpus = int(cpu_match.group(1)) if cpu_match else None
+                        
+                        print(f"Running FF-HEDM workflow in {example_dir}...")
+                        if "midas" in self.sessions:
+                            result = await self.execute_tool_call(
+                                "midas_run_ff_hedm_full_workflow",
+                                {"example_dir": example_dir, "n_cpus": n_cpus}
+                            )
+                            print(f"\n{result}\n")
+                        else:
+                            print("MIDAS server not connected")
+                    
+                    elif 'integrator' in command.lower() or 'batch' in command.lower():
+                        # Integrator batch command
+                        print("Use the interactive query instead:")
+                        print('Beamline> Run batch integration on /path/to/data with calib_file.txt')
+                    
+                    else:
+                        # Regular shell command
+                        if "executor" in self.sessions:
+                            result = await self.execute_tool_call("executor_run_command", {"command": command})
+                            print(f"\n{result}\n")
+                        else:
+                            print("Executor server not connected")
+                elif user_input.startswith('ls '):
+                    path = user_input[3:].strip()
+                    if "filesystem" in self.sessions:
+                        result = await self.execute_tool_call("filesystem_list_directory", {"path": path})
                         print(f"\n{result}\n")
                     else:
-                        print("Executor server not connected")
+                        print("Filesystem server not connected")
                 elif user_input:
                     response = await self.process_diffraction_query(user_input)
                     print(f"\n{response}\n")
                     
             except KeyboardInterrupt:
+                print("\nExiting...")
+                break
+            except EOFError:
                 print("\nExiting...")
                 break
             except Exception as e:

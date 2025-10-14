@@ -4,18 +4,56 @@ import sys
 import os
 import platform
 import shutil
+import logging
 from pathlib import Path
 from mcp.server.fastmcp import FastMCP
+
+# Suppress verbose MCP server logging
+logging.getLogger("mcp").setLevel(logging.WARNING)
+logging.getLogger("fastmcp").setLevel(logging.WARNING)
 
 # Initialize FastMCP server
 mcp = FastMCP("command-executor")
 
 # Allowed commands for security
 ALLOWED_COMMANDS = {
+    # Basic system commands
     'ls', 'pwd', 'cat', 'head', 'tail', 'grep', 'find',
     'python', 'python3', 'pip', 'pip3', 'uv', 'git',
     'ps', 'df', 'du', 'whoami', 'env', 'echo', 'date',
-    'which', 'file', 'wc', 'sort', 'uniq'
+    'which', 'file', 'wc', 'sort', 'uniq',
+
+    # MIDAS FF-HEDM executables
+    'IndexerOMP', 'FitPosOrStrainsOMP', 'ProcessGrainsZarr',
+    'GetHKLListZarr', 'PeaksFittingOMPZarrRefactor',
+    'MergeOverlappingPeaksAllZarr', 'CalcRadiusAllZarr',
+    'SaveBinData', 'FitSetupZarr',
+    'CalibrantOMP', 'Calibrant', 'FitTiltBCLsdSample',
+    'CalibrantPanelShiftsOMP', 'ForwardSimulation',
+    'ForwardSimulationCompressed', 'SimulateScanning',
+    'GrainTracking', 'CalcStrains', 'DetectorMapper',
+    'Integrator', 'FindSaturatedPixels', 'CalcRadius',
+    'IndexerScanningOMP', 'FitOrStrainsScanningOMP',
+
+    # MIDAS NF-HEDM executables
+    'FitOrientationOMP', 'FitOrientation', 'FitOrientationSinglePoint',
+    'GetHKLListNF', 'MakeHexGrid', 'MakeDiffrSpots',
+    'ParseMic', 'NFGrainCentroids', 'MedianImageLibTiff',
+    'ImageProcessingLibTiffOMP', 'ImageProcessingLibTiff',
+    'FitOrientationParameters', 'FitOrientationParametersMultiPoint',
+    'GenSeedOrientationsFF2NFHEDM', 'SimulateDiffractionSpots',
+    'ProcessNFMicRemote', 'compareNF', 'simulateNF',
+
+    # MIDAS Python workflows
+    'ff_MIDAS.py', 'nf_MIDAS.py', 'pf_MIDAS.py',
+
+    # MIDAS utilities
+    'GE2Tiff.py', 'calcMiso.py', 'SpotMatrixToSpotsHDF.py',
+    'hdf_gen_nf.py', 'nf_paraview_gen.py', 'PlotFFNF.py',
+    'NFGrainCentroids.py', 'extractPeaks.py', 'mergePeaks.py',
+    'simulatePeaks.py', 'GFF2Grains.py', 'batchImages.py',
+    'run_full_images_ff.py', 'ffGenerateZip.py',
+    'ffGenerateZipRefactor.py'
 }
 
 def is_command_allowed(command: str) -> bool:

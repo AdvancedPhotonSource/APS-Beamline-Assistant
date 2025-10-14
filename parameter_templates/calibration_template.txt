@@ -1,0 +1,174 @@
+# Detector Calibration Parameter Template
+# For FF-HEDM Detector Calibration using Standard Reference Materials
+# Argonne National Laboratory - Advanced Photon Source
+
+# ============================================================================
+# CALIBRANT MATERIAL
+# ============================================================================
+# Common calibrants: CeO2, LaB6, Si, Al2O3, NIST standards
+# Each has known lattice parameters and diffraction pattern
+
+# CeO2 (Ceria) - Most common for HEDM
+LatticeConstant 5.41134 5.41134 5.41134 90 90 90
+SpaceGroup 225
+
+# Alternative calibrants (uncomment to use):
+# LaB6 (Lanthanum Hexaboride)
+# LatticeConstant 4.15695 4.15695 4.15695 90 90 90
+# SpaceGroup 221
+
+# Si (Silicon)
+# LatticeConstant 5.43123 5.43123 5.43123 90 90 90
+# SpaceGroup 227
+
+# ============================================================================
+# INITIAL DETECTOR GEOMETRY (from mechanical positioning)
+# ============================================================================
+# Sample-to-detector distance (microns) - initial guess
+Lsd 1000000.0
+
+# Beam center position (pixels) - initial guess
+BC 1024 1024
+
+# Detector tilt angles (degrees) - start with 0
+tx 0.0
+ty 0.0
+tz 0.0
+
+# Distortion parameters
+p0 0.0
+p1 0.0
+p2 0.0
+
+# Detector specifications (known from detector specs)
+NrPixels 2048
+px 200.0
+
+# ============================================================================
+# EXPERIMENTAL SETUP
+# ============================================================================
+# X-ray energy and wavelength (Angstroms)
+# Energy = 71.676 keV -> λ = 0.173 Å
+# Energy = 51.996 keV -> λ = 0.238 Å
+Wavelength 0.22291
+
+# Sample rotation parameters
+Wedge 0.0
+OmegaStep 0.5
+BeamThickness 200
+
+# Omega range for calibration scan
+NOmegaRanges 1
+OmegaRange_0_Start 0
+OmegaRange_0_End 90
+
+# ============================================================================
+# CALIBRATION PARAMETERS
+# ============================================================================
+# Parameters to refine (1=yes, 0=no)
+RefineLsd 1
+RefineBC 1
+RefineTilt 1
+RefineWedge 0
+RefineDistortion 0
+
+# Calibration method
+# 0 = Basic ring fitting
+# 1 = Conic section fitting
+# 2 = Full geometry optimization
+CalibrationMethod 2
+
+# Minimum number of calibration rings to use
+MinCalibrationRings 5
+
+# Maximum 2theta for calibration (degrees)
+Max2Theta 30.0
+
+# ============================================================================
+# RING DETECTION FOR CALIBRATION
+# ============================================================================
+# Ring threshold (sigma above background)
+RingIntensityThreshold 5.0
+
+# Radial bin width (pixels)
+RadialBinWidth 1
+
+# Azimuthal sectors for ring analysis
+NSectors 36
+
+# ============================================================================
+# FITTING TOLERANCES
+# ============================================================================
+# Maximum allowed shift in Lsd (microns)
+MaxLsdShift 50000
+
+# Maximum allowed shift in BC (pixels)
+MaxBCShift 50
+
+# Maximum allowed tilt angle (degrees)
+MaxTilt 5.0
+
+# Convergence criteria
+ConvergenceTol 0.001
+MaxIterations 100
+
+# ============================================================================
+# MULTI-PANEL DETECTOR (if applicable)
+# ============================================================================
+# Number of detector panels
+NPanels 1
+
+# Panel IDs (if multi-panel)
+# PanelID_0 0
+# PanelID_1 1
+
+# Refine panel shifts (for multi-panel detectors)
+RefinePanelShifts 0
+
+# ============================================================================
+# OUTPUT
+# ============================================================================
+# Output filename for calibrated parameters
+CalibratedParamsFile Parameters_calibrated.txt
+
+# Save calibration quality metrics
+SaveCalibrationReport 1
+
+# Plot calibrated rings
+PlotCalibration 1
+
+# ============================================================================
+# INPUT DATA
+# ============================================================================
+# Calibration image file or folder
+# CalibrationImageFolder ./calibration_images/
+
+# If using summed/averaged calibration image
+# CalibrationImage calibrant_summed.tif
+
+# Dark image for background subtraction (optional)
+# DarkImage dark.tif
+
+# ============================================================================
+# ADVANCED OPTIONS
+# ============================================================================
+# Use OpenMP for parallel processing
+UseOMP 1
+
+# Number of threads
+nCPUs 4
+
+# Weighted fitting (weight by ring intensity)
+UseWeightedFit 1
+
+# Robust fitting (resistant to outliers)
+UseRobustFit 1
+
+# ============================================================================
+# EXPECTED RESULTS
+# ============================================================================
+# After calibration, expect:
+# - Lsd accuracy: ±10-50 μm
+# - BC accuracy: ±0.5-2 pixels
+# - Tilt angles: ±0.01-0.1 degrees
+# - Residual error: <0.5 pixels RMS

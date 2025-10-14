@@ -5,7 +5,12 @@ from pathlib import Path
 import stat
 import time
 import sys
+import logging
 from mcp.server.fastmcp import FastMCP
+
+# Suppress verbose MCP server logging
+logging.getLogger("mcp").setLevel(logging.WARNING)
+logging.getLogger("fastmcp").setLevel(logging.WARNING)
 
 # Initialize FastMCP server for filesystem operations
 mcp = FastMCP("filesystem-operations")
@@ -40,7 +45,7 @@ async def read_file(file_path: str, encoding: str = "utf-8", max_size: int = 102
         max_size: Maximum file size to read in bytes (default: 1MB)
     """
     try:
-        path = Path(file_path)
+        path = Path(file_path).expanduser()
         
         if not path.exists():
             return f"Error: File does not exist: {file_path}"
@@ -86,7 +91,7 @@ async def list_directory(path: str = ".", show_hidden: bool = False, details: bo
         details: Show detailed file information (default: False)
     """
     try:
-        dir_path = Path(path)
+        dir_path = Path(path).expanduser()
         
         if not dir_path.exists():
             return f"Error: Directory does not exist: {path}"
@@ -134,7 +139,7 @@ async def get_file_info(file_path: str) -> str:
         file_path: Path to the file or directory
     """
     try:
-        path = Path(file_path)
+        path = Path(file_path).expanduser()
         
         if not path.exists():
             return f"Error: Path does not exist: {file_path}"
@@ -174,7 +179,7 @@ async def find_files(directory: str = ".", pattern: str = "*", file_type: str = 
         file_type: Filter by type: 'files', 'dirs', or 'all' (default: all)
     """
     try:
-        search_path = Path(directory)
+        search_path = Path(directory).expanduser()
         
         if not search_path.exists():
             return f"Error: Directory does not exist: {directory}"
@@ -226,7 +231,7 @@ async def write_file(file_path: str, content: str, encoding: str = "utf-8", mode
         mode: Write mode - 'w' (overwrite) or 'a' (append)
     """
     try:
-        path = Path(file_path)
+        path = Path(file_path).expanduser()
         
         # Create parent directories if they don't exist
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -260,7 +265,7 @@ async def create_directory(directory_path: str, parents: bool = True) -> str:
         parents: Create parent directories if they don't exist (default: True)
     """
     try:
-        path = Path(directory_path)
+        path = Path(directory_path).expanduser()
         
         if path.exists():
             if path.is_dir():
