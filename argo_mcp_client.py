@@ -1,9 +1,20 @@
+#!/usr/bin/env python3
+"""
+APEXA - Advanced Photon EXperiment Assistant
+AI-powered beamline scientist for synchrotron X-ray diffraction analysis
+
+Developed for: Advanced Photon Source, Argonne National Laboratory
+Author: Pawan Tripathi
+"""
+
 import asyncio
 import json
 import os
 import re
 from typing import Optional, Dict, Any, List
 from contextlib import AsyncExitStack
+from datetime import datetime
+from pathlib import Path
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -12,11 +23,169 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-class ArgoMCPClient:
+class ExperimentContext:
+    """Smart context manager for APEXA sessions"""
+    def __init__(self, session_dir: Path = None):
+        self.session_dir = session_dir or Path.home() / ".apexa" / "sessions"
+        self.session_dir.mkdir(parents=True, exist_ok=True)
+
+        self.metadata = {
+            "experiment_id": None,
+            "sample_name": None,
+            "beamline": None,
+            "start_time": datetime.now().isoformat(),
+            "user": os.getenv("ANL_USERNAME", "unknown"),
+            "current_directory": str(Path.cwd()),
+            "analysis_history": [],
+            "key_findings": [],
+            "active_files": []
+        }
+
+    def update(self, key: str, value: Any):
+        """Update experiment metadata"""
+        self.metadata[key] = value
+
+    def add_analysis(self, analysis_type: str, result: str):
+        """Record analysis performed"""
+        self.metadata["analysis_history"].append({
+            "timestamp": datetime.now().isoformat(),
+            "type": analysis_type,
+            "result": result[:500]  # Truncate long results
+        })
+
+    def add_finding(self, finding: str):
+        """Record key scientific finding"""
+        self.metadata["key_findings"].append({
+            "timestamp": datetime.now().isoformat(),
+            "finding": finding
+        })
+
+    def save_session(self, session_name: str = None):
+        """Save current session to disk"""
+        if not session_name:
+            session_name = f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+        session_file = self.session_dir / f"{session_name}.json"
+        with open(session_file, 'w') as f:
+            json.dump(self.metadata, f, indent=2)
+
+        return session_file
+
+    def load_session(self, session_name: str):
+        """Load a previous session"""
+        session_file = self.session_dir / f"{session_name}.json"
+        if session_file.exists():
+            with open(session_file, 'r') as f:
+                self.metadata = json.load(f)
+            return True
+        return False
+
+    def list_sessions(self) -> List[str]:
+        """List all available sessions"""
+        return [f.stem for f in self.session_dir.glob("*.json")]
+
+    def get_summary(self) -> str:
+        """Get a summary of current experiment"""
+        summary = f"Experiment: {self.metadata.get('experiment_id', 'Unnamed')}\n"
+        summary += f"Sample: {self.metadata.get('sample_name', 'N/A')}\n"
+        summary += f"Analyses performed: {len(self.metadata['analysis_history'])}\n"
+        summary += f"Key findings: {len(self.metadata['key_findings'])}\n"
+        return summary
+
+class ProactiveSuggestions:
+    """Generate smart next-step suggestions based on analysis results"""
+
+    @staticmethod
+    def suggest_after_phase_id(phases_found: List[str]) -> str:
+        """Suggest next steps after phase identification"""
+        suggestions = []
+
+        if len(phases_found) == 1:
+            suggestions.append("📊 **Suggested next steps:**")
+            suggestions.append("• Quantify phase fraction using Rietveld refinement")
+            suggestions.append("• Check for preferred orientation (texture analysis)")
+            suggestions.append("• Calculate lattice parameters and compare to literature")
+        elif len(phases_found) > 1:
+            suggestions.append("📊 **Suggested next steps:**")
+            suggestions.append("• Quantify relative phase fractions")
+            suggestions.append("• Map phase distribution (if using HEDM)")
+            suggestions.append("• Analyze phase transformation conditions")
+
+        return "\n".join(suggestions)
+
+    @staticmethod
+    def suggest_after_ring_detection(num_rings: int) -> str:
+        """Suggest next steps after ring detection"""
+        suggestions = ["📊 **Suggested next steps:**"]
+
+        if num_rings > 5:
+            suggestions.append("• Integrate rings to 1D pattern for phase ID")
+            suggestions.append("• Check calibration quality (ring circularity)")
+            suggestions.append("• Perform full FF-HEDM reconstruction")
+        else:
+            suggestions.append("• Check if sample is single crystal (few rings)")
+            suggestions.append("• Verify detector calibration")
+            suggestions.append("• Consider if more exposure time needed")
+
+        return "\n".join(suggestions)
+
+    @staticmethod
+    def suggest_after_ff_hedm(num_grains: int) -> str:
+        """Suggest next steps after FF-HEDM reconstruction"""
+        suggestions = ["📊 **Suggested next steps:**"]
+        suggestions.append(f"• Analyze grain size distribution ({num_grains} grains found)")
+        suggestions.append("• Calculate grain orientations and texture")
+        suggestions.append("• Track grains through deformation series (if applicable)")
+        suggestions.append("• Export to DREAM.3D for visualization")
+        suggestions.append("• Calculate misorientation statistics")
+
+        return "\n".join(suggestions)
+
+    @staticmethod
+    def suggest_after_integration() -> str:
+        """Suggest next steps after 2D to 1D integration"""
+        return """📊 **Suggested next steps:**
+• Identify phases from peak positions
+• Perform Rietveld refinement
+• Check for peak splitting (sample stress/strain)
+• Compare with reference patterns"""
+
+    @staticmethod
+    def get_suggestion(tool_name: str, result: str) -> Optional[str]:
+        """Get proactive suggestion based on tool used"""
+
+        # Parse result to extract key info
+        if "identify_crystalline_phases" in tool_name:
+            # Count phases mentioned in result
+            phases = []
+            if "phase" in result.lower():
+                return ProactiveSuggestions.suggest_after_phase_id(["phase"])
+
+        elif "detect_diffraction_rings" in tool_name:
+            # Try to extract number of rings
+            import re
+            match = re.search(r'(\d+)\s+rings?', result.lower())
+            num_rings = int(match.group(1)) if match else 5
+            return ProactiveSuggestions.suggest_after_ring_detection(num_rings)
+
+        elif "run_ff_hedm" in tool_name:
+            match = re.search(r'(\d+)\s+grains?', result.lower())
+            num_grains = int(match.group(1)) if match else 0
+            return ProactiveSuggestions.suggest_after_ff_hedm(num_grains)
+
+        elif "integrate_2d_to_1d" in tool_name:
+            return ProactiveSuggestions.suggest_after_integration()
+
+        return None
+
+class APEXAClient:
     def __init__(self):
         self.session: Optional[ClientSession] = None
         self.sessions = {}
         self.exit_stack = AsyncExitStack()
+
+        # Smart context manager for session persistence
+        self.context = ExperimentContext()
 
         # Determine environment based on model (dev models require dev endpoint)
         self.anl_username = os.getenv("ANL_USERNAME")
@@ -276,21 +445,29 @@ class ArgoMCPClient:
     async def execute_tool_call(self, tool_name: str, arguments: Dict[str, Any]) -> str:
         # Clean output - just show what we're doing
         print(f"\n→ {tool_name.replace('midas_', '').replace('_', ' ').title()}")
-        
+
         if "_" in tool_name:
             server_name, original_tool_name = tool_name.split("_", 1)
         else:
             server_name = "midas"
             original_tool_name = tool_name
-        
+
         if server_name not in self.sessions:
             return f"Error: Server '{server_name}' not connected"
-        
+
         try:
             session = self.sessions[server_name]
             result = await session.call_tool(original_tool_name, arguments)
             result_text = str(result.content[0].text if result.content else "No result")
-            # print(f"✓ Complete")
+
+            # Record analysis in context
+            self.context.add_analysis(tool_name, result_text)
+
+            # Add proactive suggestion to result
+            suggestion = ProactiveSuggestions.get_suggestion(tool_name, result_text)
+            if suggestion:
+                result_text += f"\n\n{suggestion}"
+
             return result_text
         except Exception as e:
             error_msg = f"Error: {str(e)}"
@@ -317,7 +494,7 @@ class ArgoMCPClient:
         
         return []
 
-    async def process_diffraction_query(self, query: str, image_path: str = None, experimental_params: Dict[str, Any] = None, max_iterations: int = 5, use_history: bool = True) -> str:
+    async def process_diffraction_query(self, query: str, image_path: str = None, experimental_params: Dict[str, Any] = None, max_iterations: int = 30, use_history: bool = True) -> str:
         """Process query with automatic tool calling loop"""
 
         if not self.sessions:
@@ -325,7 +502,7 @@ class ArgoMCPClient:
 
         available_tools = await self.get_all_available_tools()
 
-        system_prompt = """You are Beamline Assistant, an expert AI system for synchrotron X-ray diffraction analysis at Argonne National Laboratory.
+        system_prompt = """You are APEXA (Advanced Photon EXperiment Assistant), an expert AI scientist for synchrotron X-ray diffraction analysis at Argonne National Laboratory's Advanced Photon Source.
 You maintain context across the conversation. When users refer to previous files, directories, or results using words like "there", "it", "that file", etc., use the conversation history to understand what they're referring to.
 
 ⚠️ CRITICAL INSTRUCTIONS ⚠️
@@ -357,10 +534,12 @@ Your response:
 "To run analysis with the Beamline Assistant, you can:
 
 1. FF-HEDM Full Workflow: Provide a directory with Parameters.txt and data files
-2. 2D to 1D Integration: Provide a .tiff image and calibration parameters
+2. 2D to 1D Integration: Provide image file (TIFF, GE2/GE5, ED5, EDF) and calibration parameters
+   - Supports dark image subtraction for background correction
+   - Can use calibration file or explicit geometry parameters
 3. Phase Identification: Provide peak positions in degrees 2theta
 
-For example, you can say 'Run FF-HEDM workflow on /path/to/data' or 'Integrate the .tiff file from 2D to 1D'.
+For example, you can say 'Run FF-HEDM workflow on /path/to/data' or 'Integrate the .ge5 file from 2D to 1D with dark file'.
 
 What specific analysis would you like to perform?"
 
@@ -396,6 +575,15 @@ TOOL_CALL: midas_integrate_2d_to_1d
 ARGUMENTS: {"image_path": "./ff_011276_ge2_0001.tiff", "calibration_file": "./Parameters.txt"}
 "
 
+Example 5 - Integration with Dark File Command (USE TOOL):
+User: "I want to run MIDAS integration for /path/data.ge5 using /path/dark.ge5 as dark and /path/calib.txt"
+Your response:
+"I'll integrate the diffraction image with dark file subtraction.
+
+TOOL_CALL: midas_integrate_2d_to_1d
+ARGUMENTS: {"image_path": "/path/data.ge5", "calibration_file": "/path/calib.txt", "dark_file": "/path/dark.ge5"}
+"
+
 🔧 AVAILABLE TOOLS:
 - midas_identify_crystalline_phases
   Args: {"peak_positions": [12.5, 18.2]}
@@ -406,6 +594,7 @@ ARGUMENTS: {"image_path": "./ff_011276_ge2_0001.tiff", "calibration_file": "./Pa
 - midas_integrate_2d_to_1d
   Args: {"image_path": "/path/image.tif", "calibration_file": "calib.txt"}
   Or: {"image_path": "/path/image.tif", "wavelength": 0.22, "detector_distance": 1000, "beam_center_x": 1024, "beam_center_y": 1024}
+  With dark subtraction: {"image_path": "/path/image.tif", "calibration_file": "calib.txt", "dark_file": "/path/dark.tif"}
 - filesystem_read_file
   Args: {"file_path": "/path/file"}
 - filesystem_list_directory
@@ -413,12 +602,14 @@ ARGUMENTS: {"image_path": "./ff_011276_ge2_0001.tiff", "calibration_file": "./Pa
 - executor_run_command
   Args: {"command": "ls -la"}
 
-⚠️ REMEMBER: 
+⚠️ REMEMBER:
 - ALWAYS use "TOOL_CALL:" and "ARGUMENTS:" format
 - NEVER just describe what you would do
 - NEVER say "I don't have access" - you DO have access via the TOOL_CALL format
+- When user says "I want to run", "integrate", "calibrate", "analyze" - they are giving a COMMAND, USE TOOLS
 - Tool names must be EXACT (case-sensitive)
-- Arguments must be valid JSON"""
+- Arguments must be valid JSON
+- If user provides file paths and asks to integrate/calibrate, IMMEDIATELY call midas_integrate_2d_to_1d"""
 
         system_prompt += f"\n\nCurrent Model: {self.selected_model} via Argo Gateway"
 
@@ -782,11 +973,14 @@ ARGUMENTS: {"image_path": "./ff_011276_ge2_0001.tiff", "calibration_file": "./Pa
         return False
 
     async def interactive_analysis_session(self):
-        print(f"\nBeamline Assistant - AI Diffraction Analysis")
-        print("=" * 60)
-        print(f"Current AI Model: {self.selected_model}")
-        print(f"ANL User: {self.anl_username}")
-        print(f"Connected Servers: {list(self.sessions.keys())}")
+        print(f"\n╔══════════════════════════════════════════════════════════════╗")
+        print(f"║  APEXA - Advanced Photon EXperiment Assistant               ║")
+        print(f"║  Your AI Scientist at the Beamline                          ║")
+        print(f"╚══════════════════════════════════════════════════════════════╝")
+        print()
+        print(f"🤖 AI Model: {self.selected_model}")
+        print(f"👤 User: {self.anl_username}")
+        print(f"🔌 Servers: {', '.join(list(self.sessions.keys()))}")
         print()
         print("Commands: analyze, models, tools, servers, ls, run, clear, help, quit")
         print()
@@ -805,7 +999,7 @@ ARGUMENTS: {"image_path": "./ff_011276_ge2_0001.tiff", "calibration_file": "./Pa
                 for cmd in history:
                     readline.add_history(cmd)
                 
-                user_input = input("Beamline> ").strip()
+                user_input = input("APEXA> ").strip()
                 
                 if not user_input:
                     continue
@@ -940,8 +1134,8 @@ async def main():
     if len(sys.argv) < 2:
         print("Usage: python argo_mcp_client.py <server_configs...>")
         sys.exit(1)
-    
-    client = ArgoMCPClient()
+
+    client = APEXAClient()
     
     try:
         server_configs = []

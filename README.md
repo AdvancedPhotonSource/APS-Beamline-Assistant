@@ -1,6 +1,6 @@
-# Beamline Assistant
+# APEXA - Advanced Photon EXperiment Assistant
 
-AI-powered modular analysis platform for synchrotron X-ray diffraction at Argonne National Laboratory.
+AI-powered beamline scientist for synchrotron X-ray diffraction analysis at Argonne National Laboratory's Advanced Photon Source.
 
 ## Quick Start
 
@@ -35,11 +35,19 @@ AI-powered modular analysis platform for synchrotron X-ray diffraction at Argonn
 ## Usage
 
 ```
-Beamline> integrate the .tiff file from 2D to 1D
-Beamline> run FF-HEDM workflow on /data/experiment
-Beamline> list files in /data
-Beamline> read the Parameters.txt file there
+APEXA> integrate the .tiff file from 2D to 1D
+APEXA> integrate data.ge5 with dark file dark.ge5 using calib.txt
+APEXA> run FF-HEDM workflow on /data/experiment
+APEXA> list files in /data
+APEXA> read the Parameters.txt file there
 ```
+
+### New Features
+
+- **Dark File Subtraction**: Automatic background correction for cleaner diffraction patterns
+- **Multi-Format Support**: TIFF, GE2/GE5, ED5, EDF detector formats
+- **Smart Suggestions**: Proactive next-step recommendations after each analysis
+- **Session Persistence**: Automatic tracking of experimental workflows
 
 ## Adding Analysis Tools
 

@@ -1917,19 +1917,22 @@ async def integrate_2d_to_1d(
     detector_distance: float = None,
     beam_center_x: float = None,
     beam_center_y: float = None,
+    dark_file: str = None,
     output_file: str = None
 ) -> str:
     """Integrate 2D diffraction image to 1D pattern using MIDAS Integrator or pyFAI.
 
     Converts a 2D detector image into a 1D azimuthally-integrated intensity vs. 2θ pattern.
+    Supports dark image subtraction and various detector formats (TIFF, GE2/GE5, ED5, EDF).
 
     Args:
-        image_path: Path to 2D diffraction image (.tiff, .ge2, .edf)
+        image_path: Path to 2D diffraction image (.tiff, .ge2, .ge5, .ed5, .edf)
         calibration_file: Optional calibration/parameter file with detector geometry
         wavelength: X-ray wavelength in Angstroms (if not in calibration file)
         detector_distance: Sample-to-detector distance in mm (if not in calibration file)
         beam_center_x: Beam center X coordinate in pixels (if not in calibration file)
         beam_center_y: Beam center Y coordinate in pixels (if not in calibration file)
+        dark_file: Optional dark image file for background subtraction (.tiff, .ge2, .ge5, .ed5)
         output_file: Output filename for 1D pattern (default: image_name_1d.dat)
 
     Returns:
@@ -1956,11 +1959,49 @@ async def integrate_2d_to_1d(
             try:
                 import fabio
                 import pyFAI
-                from pyFAI.azimuthalIntegrator import AzimuthalIntegrator
+                try:
+                    from pyFAI.integrator.azimuthal import AzimuthalIntegrator
+                except ImportError:
+                    from pyFAI.azimuthalIntegrator import AzimuthalIntegrator  # fallback for older versions
 
                 # Load image
                 img = fabio.open(str(image_path))
-                data = img.data
+                data = img.data.astype(float)  # Convert to float for dark subtraction
+
+                # Load and subtract dark image if provided
+                if dark_file:
+                    dark_path = Path(dark_file).expanduser().absolute()
+                    if not dark_path.exists():
+                        return format_result({
+                            "tool": "integrate_2d_to_1d",
+                            "status": "error",
+                            "error": f"Dark file not found: {dark_path}"
+                        })
+
+                    try:
+                        dark_img = fabio.open(str(dark_path))
+                        dark_data = dark_img.data.astype(float)
+
+                        # Verify dimensions match
+                        if data.shape != dark_data.shape:
+                            return format_result({
+                                "tool": "integrate_2d_to_1d",
+                                "status": "error",
+                                "error": f"Image and dark file dimensions don't match: {data.shape} vs {dark_data.shape}"
+                            })
+
+                        # Subtract dark image
+                        data = data - dark_data
+
+                        # Clip negative values to zero
+                        data = np.clip(data, 0, None)
+
+                    except Exception as e:
+                        return format_result({
+                            "tool": "integrate_2d_to_1d",
+                            "status": "error",
+                            "error": f"Failed to load/subtract dark file: {str(e)}"
+                        })
 
                 # Setup integrator
                 ai = AzimuthalIntegrator()
@@ -1978,17 +2019,25 @@ async def integrate_2d_to_1d(
                         })
                 else:
                     # Use provided parameters
-                    if wavelength and detector_distance and beam_center_x and beam_center_y:
+                    if (wavelength is not None and detector_distance is not None and
+                        beam_center_x is not None and beam_center_y is not None):
                         # Convert to pyFAI units
                         ai.wavelength = wavelength * 1e-10  # Angstrom to meters
                         ai.dist = detector_distance / 1000.0  # mm to meters
-                        ai.poni1 = beam_center_y * 200e-6  # pixels to meters (assuming 200μm pixels)
-                        ai.poni2 = beam_center_x * 200e-6
+
+                        # For GE detectors, pixel size is typically 200 microns
+                        pixel_size = 200e-6  # 200 microns in meters
+                        ai.pixel1 = pixel_size  # pixel size in meters (dimension 1)
+                        ai.pixel2 = pixel_size  # pixel size in meters (dimension 2)
+
+                        # PONI points are in meters from corner
+                        ai.poni1 = beam_center_y * pixel_size
+                        ai.poni2 = beam_center_x * pixel_size
                     else:
                         return format_result({
                             "tool": "integrate_2d_to_1d",
                             "status": "error",
-                            "error": "Either calibration_file or all geometry parameters must be provided"
+                            "error": "Either calibration_file or all geometry parameters (wavelength, detector_distance, beam_center_x, beam_center_y) must be provided"
                         })
 
                 # Perform integration
@@ -2000,6 +2049,8 @@ async def integrate_2d_to_1d(
                 with open(output_path, 'w') as f:
                     f.write("# 2D to 1D integration using pyFAI\n")
                     f.write(f"# Source: {image_path.name}\n")
+                    if dark_file:
+                        f.write(f"# Dark file: {Path(dark_file).name} (subtracted)\n")
                     f.write("# 2theta(deg)  Intensity\n")
                     for tth, I in zip(two_theta, intensity):
                         f.write(f"{tth:.4f}  {I:.2f}\n")
@@ -2014,17 +2065,20 @@ async def integrate_2d_to_1d(
                 peaks, properties = find_peaks(intensity, height=background*3, distance=10)
                 peak_positions = [float(two_theta[p]) for p in peaks[:10]]  # Top 10 peaks
 
+                dark_msg = f" (with dark subtraction from {Path(dark_file).name})" if dark_file else ""
                 return format_result({
                     "tool": "integrate_2d_to_1d",
                     "status": "success",
                     "method": "pyFAI",
                     "input_image": str(image_path),
+                    "dark_file": str(dark_file) if dark_file else None,
                     "output_file": str(output_path),
                     "integration_parameters": {
                         "wavelength_angstrom": wavelength,
                         "detector_distance_mm": detector_distance,
                         "beam_center": [beam_center_x, beam_center_y] if beam_center_x else None,
-                        "calibration_file": calibration_file
+                        "calibration_file": calibration_file,
+                        "dark_subtraction": bool(dark_file)
                     },
                     "pattern_statistics": {
                         "n_points": len(two_theta),
@@ -2034,7 +2088,7 @@ async def integrate_2d_to_1d(
                         "signal_to_noise": signal_to_noise,
                         "peak_positions_deg": peak_positions
                     },
-                    "message": f"Successfully integrated {image_path.name} to 1D pattern with {len(peak_positions)} peaks detected"
+                    "message": f"Successfully integrated {image_path.name} to 1D pattern{dark_msg} with {len(peak_positions)} peaks detected"
                 })
 
             except ImportError:

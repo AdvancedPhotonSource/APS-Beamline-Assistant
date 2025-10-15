@@ -1,5 +1,6 @@
 #!/bin/bash
-# Beamline Assistant Startup Script
+# APEXA Startup Script
+# Advanced Photon EXperiment Assistant
 # Loads analysis servers from servers.config
 
 # Add uv to PATH (installed in ~/.local/bin)
@@ -8,9 +9,10 @@ export PATH="$HOME/.local/bin:$PATH"
 # Change to script directory
 cd "$(dirname "$0")"
 
-echo "======================================================================="
-echo "  Starting Beamline Assistant - Modular Analysis Platform"
-echo "======================================================================="
+echo "╔══════════════════════════════════════════════════════════════════════╗"
+echo "║  APEXA - Advanced Photon EXperiment Assistant                       ║"
+echo "║  Your AI Scientist at the Beamline                                  ║"
+echo "╚══════════════════════════════════════════════════════════════════════╝"
 echo ""
 
 # Check if servers.config exists
