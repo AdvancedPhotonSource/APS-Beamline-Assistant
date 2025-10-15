@@ -1703,13 +1703,70 @@ ARGUMENTS: {"image_path": "/path/data.ge5", "calibration_file": "/path/calib.txt
                 elif user_input.lower().startswith('image '):
                     # Image analysis command
                     # Example: image analyze sample.ge5, image quality sample.ge5
-                    parts = user_input[6:].strip().split()
-                    if len(parts) < 2:
+                    # Also handles: "image quality of the file.ge5", "image quality for file.ge5"
+                    cmd_text = user_input[6:].strip()
+
+                    # Extract action (analyze, quality, rings)
+                    action = None
+                    for possible_action in ['analyze', 'quality', 'rings']:
+                        if cmd_text.lower().startswith(possible_action):
+                            action = possible_action
+                            # Remove action from text
+                            cmd_text = cmd_text[len(possible_action):].strip()
+                            break
+
+                    if not action:
                         print("Usage: image <analyze|quality|rings> <image_path>")
+                        print("Examples:")
+                        print("  image quality sample.ge5")
+                        print("  image quality of the .tiff file")
+                        print("  image analyze data.ge2")
                         continue
 
-                    action = parts[0]
-                    image_path = parts[1]
+                    # Remove common filler words to find the actual file
+                    filler_words = ['of', 'the', 'for', 'in', 'file', 'image', 'this', 'directory', 'a', 'an']
+                    words = cmd_text.split()
+
+                    # Find file extensions in the text
+                    image_path = None
+                    for word in words:
+                        # Check if it looks like a file path or has an extension
+                        if '.' in word and any(word.endswith(ext) for ext in ['.tif', '.tiff', '.ge2', '.ge5', '.ed5', '.edf']):
+                            image_path = word
+                            break
+                        # Check if it contains a path separator
+                        if '/' in word or word.startswith('~'):
+                            image_path = word
+                            break
+
+                    # If no explicit path found, try to find files with mentioned extension
+                    if not image_path:
+                        # Look for extension mentions like ".tiff" or ".ge5"
+                        for word in words:
+                            if word.startswith('.'):
+                                # Find files with this extension in current directory
+                                from glob import glob
+                                ext = word
+                                matching_files = glob(f'*{ext}')
+                                if matching_files:
+                                    image_path = matching_files[0]
+                                    print(f"Found: {image_path}")
+                                    break
+
+                    if not image_path:
+                        # Try to use any word that's not a filler word
+                        for word in words:
+                            if word.lower() not in filler_words:
+                                image_path = word
+                                break
+
+                    if not image_path:
+                        print("Could not find image file in command")
+                        print("Please specify the image file name")
+                        print("Examples:")
+                        print("  image quality sample.ge5")
+                        print("  image quality /path/to/data.tiff")
+                        continue
 
                     if action == 'analyze':
                         print(f"\n📸 Analyzing image: {image_path}")
