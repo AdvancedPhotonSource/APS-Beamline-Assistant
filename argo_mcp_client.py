@@ -178,6 +178,221 @@ class ProactiveSuggestions:
 
         return None
 
+class BatchProcessor:
+    """Smart batch processing for multiple files"""
+
+    @staticmethod
+    async def process_batch(client, operation: str, files: List[str], **kwargs) -> Dict[str, Any]:
+        """Process multiple files with the same operation
+
+        Args:
+            client: APEXAClient instance
+            operation: Tool name to execute
+            files: List of file paths
+            **kwargs: Additional arguments for the tool
+
+        Returns:
+            Dictionary with results for each file
+        """
+        results = {
+            "operation": operation,
+            "total_files": len(files),
+            "successful": 0,
+            "failed": 0,
+            "results": []
+        }
+
+        for i, file_path in enumerate(files, 1):
+            print(f"\n[{i}/{len(files)}] Processing: {Path(file_path).name}")
+
+            try:
+                # Merge file path with other arguments
+                args = {**kwargs, "image_path": file_path}
+                result = await client.execute_tool_call(operation, args)
+
+                results["results"].append({
+                    "file": file_path,
+                    "status": "success",
+                    "result": result
+                })
+                results["successful"] += 1
+
+            except Exception as e:
+                results["results"].append({
+                    "file": file_path,
+                    "status": "failed",
+                    "error": str(e)
+                })
+                results["failed"] += 1
+
+        return results
+
+class ErrorPreventor:
+    """Validate inputs and prevent common errors before execution"""
+
+    @staticmethod
+    def validate_integration_params(args: Dict[str, Any]) -> tuple[bool, Optional[str]]:
+        """Validate parameters for 2D to 1D integration
+
+        Returns:
+            (is_valid, error_message)
+        """
+        image_path = args.get("image_path")
+        calibration_file = args.get("calibration_file")
+        wavelength = args.get("wavelength")
+        detector_distance = args.get("detector_distance")
+        beam_center_x = args.get("beam_center_x")
+        beam_center_y = args.get("beam_center_y")
+        dark_file = args.get("dark_file")
+
+        # Check image exists
+        if image_path:
+            img_path = Path(image_path).expanduser()
+            if not img_path.exists():
+                return False, f"Image file not found: {image_path}"
+
+            # Check file extension
+            valid_extensions = ['.tif', '.tiff', '.ge2', '.ge5', '.ed5', '.edf']
+            if not any(str(img_path).lower().endswith(ext) for ext in valid_extensions):
+                return False, f"Unsupported image format. Use: {', '.join(valid_extensions)}"
+
+        # Check dark file if provided
+        if dark_file:
+            dark_path = Path(dark_file).expanduser()
+            if not dark_path.exists():
+                return False, f"Dark file not found: {dark_file}"
+
+        # Check calibration or manual parameters
+        has_calib = calibration_file is not None
+        has_manual = all([wavelength, detector_distance, beam_center_x, beam_center_y])
+
+        if not has_calib and not has_manual:
+            return False, "Either calibration_file OR all manual parameters (wavelength, detector_distance, beam_center_x, beam_center_y) must be provided"
+
+        # Validate calibration file if provided
+        if calibration_file:
+            cal_path = Path(calibration_file).expanduser()
+            if not cal_path.exists():
+                return False, f"Calibration file not found: {calibration_file}"
+
+        # Validate manual parameters if provided
+        if has_manual:
+            if wavelength <= 0:
+                return False, f"Wavelength must be positive, got: {wavelength}"
+            if detector_distance <= 0:
+                return False, f"Detector distance must be positive, got: {detector_distance}"
+            if beam_center_x < 0 or beam_center_y < 0:
+                return False, f"Beam center coordinates must be positive"
+
+        return True, None
+
+    @staticmethod
+    def validate_ff_hedm_params(args: Dict[str, Any]) -> tuple[bool, Optional[str]]:
+        """Validate parameters for FF-HEDM workflow"""
+        example_dir = args.get("example_dir")
+
+        if not example_dir:
+            return False, "example_dir parameter is required"
+
+        dir_path = Path(example_dir).expanduser()
+        if not dir_path.exists():
+            return False, f"Directory not found: {example_dir}"
+
+        if not dir_path.is_dir():
+            return False, f"Path is not a directory: {example_dir}"
+
+        # Check for Parameters.txt
+        param_file = dir_path / "Parameters.txt"
+        if not param_file.exists():
+            return False, f"Parameters.txt not found in {example_dir}"
+
+        return True, None
+
+class WorkflowBuilder:
+    """Natural language workflow builder for complex analysis sequences"""
+
+    def __init__(self):
+        self.workflows = {
+            "phase_analysis": [
+                {"tool": "midas_integrate_2d_to_1d", "description": "Integrate 2D image to 1D pattern"},
+                {"tool": "midas_identify_crystalline_phases", "description": "Identify phases from peaks"}
+            ],
+            "full_hedm": [
+                {"tool": "filesystem_list_directory", "description": "Check data directory"},
+                {"tool": "midas_run_ff_hedm_full_workflow", "description": "Run FF-HEDM reconstruction"}
+            ],
+            "calibration_check": [
+                {"tool": "midas_detect_diffraction_rings", "description": "Detect rings for calibration"},
+                {"tool": "midas_integrate_2d_to_1d", "description": "Integrate to verify calibration"}
+            ]
+        }
+
+    def get_workflow(self, workflow_name: str) -> Optional[List[Dict[str, str]]]:
+        """Get predefined workflow steps"""
+        return self.workflows.get(workflow_name)
+
+    def suggest_workflow(self, user_query: str) -> Optional[str]:
+        """Suggest appropriate workflow based on user query"""
+        query_lower = user_query.lower()
+
+        if "phase" in query_lower and "identif" in query_lower:
+            return "phase_analysis"
+        elif "ff-hedm" in query_lower or "hedm" in query_lower:
+            return "full_hedm"
+        elif "calibrat" in query_lower:
+            return "calibration_check"
+
+        return None
+
+class SmartCache:
+    """Cache expensive operations to reduce AI costs and improve speed"""
+
+    def __init__(self, cache_dir: Path = None):
+        self.cache_dir = cache_dir or Path.home() / ".apexa" / "cache"
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.memory_cache = {}
+
+    def get_cache_key(self, operation: str, args: Dict[str, Any]) -> str:
+        """Generate cache key from operation and arguments"""
+        import hashlib
+        # Sort args for consistent hashing
+        sorted_args = json.dumps(args, sort_keys=True)
+        key_str = f"{operation}:{sorted_args}"
+        return hashlib.md5(key_str.encode()).hexdigest()
+
+    def get(self, operation: str, args: Dict[str, Any]) -> Optional[Any]:
+        """Get cached result if available"""
+        cache_key = self.get_cache_key(operation, args)
+
+        # Check memory cache first
+        if cache_key in self.memory_cache:
+            return self.memory_cache[cache_key]
+
+        # Check disk cache
+        cache_file = self.cache_dir / f"{cache_key}.json"
+        if cache_file.exists():
+            with open(cache_file, 'r') as f:
+                cached_data = json.load(f)
+                self.memory_cache[cache_key] = cached_data
+                return cached_data
+
+        return None
+
+    def set(self, operation: str, args: Dict[str, Any], result: Any):
+        """Cache result for future use"""
+        cache_key = self.get_cache_key(operation, args)
+
+        # Save to memory
+        self.memory_cache[cache_key] = result
+
+        # Save to disk
+        cache_file = self.cache_dir / f"{cache_key}.json"
+        try:
+            with open(cache_file, 'w') as f:
+                json.dump(result, f)
+        except Exception:
+            pass  # Non-critical if caching fails
+
 class APEXAClient:
     def __init__(self):
         self.session: Optional[ClientSession] = None
@@ -186,6 +401,12 @@ class APEXAClient:
 
         # Smart context manager for session persistence
         self.context = ExperimentContext()
+
+        # Initialize smart features
+        self.batch_processor = BatchProcessor()
+        self.error_preventor = ErrorPreventor()
+        self.workflow_builder = WorkflowBuilder()
+        self.cache = SmartCache()
 
         # Determine environment based on model (dev models require dev endpoint)
         self.anl_username = os.getenv("ANL_USERNAME")
@@ -446,6 +667,37 @@ class APEXAClient:
         # Clean output - just show what we're doing
         print(f"\n→ {tool_name.replace('midas_', '').replace('_', ' ').title()}")
 
+        # ===== ERROR PREVENTION =====
+        # Validate parameters before execution
+        if "integrate_2d_to_1d" in tool_name:
+            is_valid, error_msg = self.error_preventor.validate_integration_params(arguments)
+            if not is_valid:
+                print(f"✗ Validation Error: {error_msg}")
+                return json.dumps({
+                    "status": "validation_error",
+                    "error": error_msg,
+                    "suggestion": "Please check your parameters and try again"
+                })
+
+        elif "ff_hedm" in tool_name:
+            is_valid, error_msg = self.error_preventor.validate_ff_hedm_params(arguments)
+            if not is_valid:
+                print(f"✗ Validation Error: {error_msg}")
+                return json.dumps({
+                    "status": "validation_error",
+                    "error": error_msg,
+                    "suggestion": "Please check your parameters and try again"
+                })
+
+        # ===== SMART CACHING =====
+        # Check cache for expensive read-only operations
+        cacheable_operations = ["filesystem_read_file", "filesystem_list_directory"]
+        if tool_name in cacheable_operations:
+            cached_result = self.cache.get(tool_name, arguments)
+            if cached_result:
+                print(" (from cache)")
+                return cached_result
+
         if "_" in tool_name:
             server_name, original_tool_name = tool_name.split("_", 1)
         else:
@@ -459,6 +711,10 @@ class APEXAClient:
             session = self.sessions[server_name]
             result = await session.call_tool(original_tool_name, arguments)
             result_text = str(result.content[0].text if result.content else "No result")
+
+            # Cache result if applicable
+            if tool_name in cacheable_operations:
+                self.cache.set(tool_name, arguments, result_text)
 
             # Record analysis in context
             self.context.add_analysis(tool_name, result_text)
@@ -982,7 +1238,7 @@ ARGUMENTS: {"image_path": "/path/data.ge5", "calibration_file": "/path/calib.txt
         print(f"👤 User: {self.anl_username}")
         print(f"🔌 Servers: {', '.join(list(self.sessions.keys()))}")
         print()
-        print("Commands: analyze, models, tools, servers, ls, run, clear, help, quit")
+        print("Commands: analyze, batch, workflow, session, models, tools, servers, clear, help, quit")
         print()
         
         # Command history
@@ -1017,6 +1273,130 @@ ARGUMENTS: {"image_path": "/path/data.ge5", "calibration_file": "/path/calib.txt
                     self.show_available_models()
                 elif user_input.lower() == 'servers':
                     print(f"Connected: {list(self.sessions.keys())}")
+
+                # ===== NEW SMART COMMANDS =====
+                elif user_input.lower().startswith('batch '):
+                    # Batch processing command
+                    # Example: batch integrate *.ge5 with calib.txt dark.tif
+                    parts = user_input[6:].strip().split()
+                    if len(parts) < 2:
+                        print("Usage: batch integrate <pattern> with <calibration_file> [dark_file]")
+                        continue
+
+                    # operation = parts[0]  # e.g., "integrate" - reserved for future
+                    pattern = parts[1]    # e.g., "*.ge5"
+
+                    # Parse additional arguments
+                    calibration_file = None
+                    dark_file = None
+
+                    if 'with' in parts:
+                        with_idx = parts.index('with')
+                        calibration_file = parts[with_idx + 1] if len(parts) > with_idx + 1 else None
+                        dark_file = parts[with_idx + 2] if len(parts) > with_idx + 2 else None
+
+                    # Find files matching pattern
+                    from glob import glob
+                    files = glob(pattern)
+
+                    if not files:
+                        print(f"No files found matching: {pattern}")
+                        continue
+
+                    print(f"Found {len(files)} files to process")
+                    confirm = input(f"Process all {len(files)} files? (yes/no): ")
+
+                    if confirm.lower() in ['yes', 'y']:
+                        kwargs = {}
+                        if calibration_file:
+                            kwargs['calibration_file'] = calibration_file
+                        if dark_file:
+                            kwargs['dark_file'] = dark_file
+
+                        results = await self.batch_processor.process_batch(
+                            self,
+                            "midas_integrate_2d_to_1d",
+                            files,
+                            **kwargs
+                        )
+
+                        print(f"\n{'='*60}")
+                        print(f"Batch Processing Complete:")
+                        print(f"  Total: {results['total_files']}")
+                        print(f"  ✓ Successful: {results['successful']}")
+                        print(f"  ✗ Failed: {results['failed']}")
+                        print(f"{'='*60}\n")
+
+                elif user_input.lower().startswith('workflow '):
+                    # Workflow command
+                    # Example: workflow phase_analysis or workflow list
+                    workflow_cmd = user_input[9:].strip()
+
+                    if workflow_cmd == 'list':
+                        print("\nAvailable Workflows:")
+                        print("="*50)
+                        for name, steps in self.workflow_builder.workflows.items():
+                            print(f"\n{name}:")
+                            for i, step in enumerate(steps, 1):
+                                print(f"  {i}. {step['description']}")
+                    else:
+                        workflow = self.workflow_builder.get_workflow(workflow_cmd)
+                        if workflow:
+                            print(f"\nExecuting workflow: {workflow_cmd}")
+                            print("="*50)
+                            for i, step in enumerate(workflow, 1):
+                                print(f"\nStep {i}: {step['description']}")
+                                # Note: Would need user input for arguments
+                                print(f"  Tool: {step['tool']}")
+                            print("\nNote: Use natural language queries to execute workflows with your data")
+                        else:
+                            print(f"Unknown workflow: {workflow_cmd}")
+                            print("Use 'workflow list' to see available workflows")
+
+                elif user_input.lower().startswith('session '):
+                    # Session management
+                    # Example: session save my_experiment, session load my_experiment, session list
+                    session_cmd = user_input[8:].strip().split()
+
+                    if not session_cmd:
+                        print("Usage: session <save|load|list> [name]")
+                        continue
+
+                    action = session_cmd[0]
+
+                    if action == 'save':
+                        session_name = session_cmd[1] if len(session_cmd) > 1 else None
+                        saved_file = self.context.save_session(session_name)
+                        print(f"✓ Session saved: {saved_file}")
+
+                    elif action == 'load':
+                        if len(session_cmd) < 2:
+                            print("Usage: session load <session_name>")
+                            continue
+                        session_name = session_cmd[1]
+                        if self.context.load_session(session_name):
+                            print(f"✓ Session loaded: {session_name}")
+                            print(self.context.get_summary())
+                        else:
+                            print(f"✗ Session not found: {session_name}")
+
+                    elif action == 'list':
+                        sessions = self.context.list_sessions()
+                        if sessions:
+                            print("\nSaved Sessions:")
+                            for session in sessions:
+                                print(f"  - {session}")
+                        else:
+                            print("No saved sessions found")
+
+                    elif action == 'summary':
+                        print("\nCurrent Session:")
+                        print(self.context.get_summary())
+
+                    else:
+                        print(f"Unknown session command: {action}")
+                        print("Available: save, load, list, summary")
+
                 elif user_input.lower() == 'tools':
                     tools = await self.get_all_available_tools()
                     print(f"\nAvailable tools ({len(tools)}):")
@@ -1024,28 +1404,43 @@ ARGUMENTS: {"image_path": "/path/data.ge5", "calibration_file": "/path/calib.txt
                         print(f"  - {tool['function']['name']}: {tool['function']['description'][:80]}")
                 elif user_input.lower() == 'help':
                     print("""
-Beamline Assistant Commands:
+APEXA Smart Commands:
 
-  analyze <query>  - Run full diffraction analysis
-  models           - Show available AI models
-  model <name>     - Switch to different model
-  tools            - List all available analysis tools
-  servers          - Show connected MCP servers
-  ls <path>        - List directory contents
-  run <command>    - Execute system command (whitelisted)
-  clear            - Clear conversation history
-  help             - Show this help
-  quit             - Exit assistant
+📊 Analysis & Processing:
+  analyze <query>                      - Run AI-powered analysis
+  batch integrate <pattern> with ...   - Process multiple files at once
+  workflow list                        - Show available workflows
+  workflow <name>                      - Execute predefined workflow
 
-Natural Language Queries:
-  - "I have peaks at X, Y, Z degrees. What phases?"
-  - "Run FF-HEDM workflow in <directory>"
-  - "Analyze quality of <image.tif>"
-  - "Integrate pattern from <image>"
-  - "Read the Parameters.txt file there" (remembers context)
+💾 Session Management:
+  session save [name]                  - Save current session
+  session load <name>                  - Load saved session
+  session list                         - List all saved sessions
+  session summary                      - Show current session info
 
-Use ↑/↓ arrow keys for command history
-Use Tab for command completion
+🔧 Tools & Configuration:
+  models                               - Show available AI models
+  model <name>                         - Switch AI model
+  tools                                - List all analysis tools
+  servers                              - Show connected servers
+  clear                                - Clear conversation history
+  help                                 - Show this help
+  quit                                 - Exit APEXA
+
+💡 Natural Language Examples:
+  • "Integrate data.ge5 with dark.ge5 using calib.txt"
+  • "I have peaks at 12.5, 18.2, 25.8 degrees. What phases?"
+  • "Run FF-HEDM workflow in /path/to/data"
+  • "Analyze the diffraction rings in image.tif"
+
+✨ Smart Features:
+  • Automatic error prevention and validation
+  • Proactive next-step suggestions after each analysis
+  • Session persistence with auto-save
+  • Smart caching for faster repeated operations
+  • Batch processing for multiple files
+
+Use ↑/↓ arrows for command history | Tab for completion
                     """)
                 elif user_input.startswith('model '):
                     model_name = user_input[6:].strip()

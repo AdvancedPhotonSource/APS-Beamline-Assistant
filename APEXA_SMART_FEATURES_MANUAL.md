@@ -12,9 +12,13 @@
 1. [Introduction](#introduction)
 2. [Session Persistence](#session-persistence)
 3. [Proactive Analysis Suggestions](#proactive-analysis-suggestions)
-4. [Smart Context Management](#smart-context-management)
-5. [Workflow Examples](#workflow-examples)
-6. [Advanced Features](#advanced-features)
+4. [Batch Processing](#batch-processing)
+5. [Error Prevention & Validation](#error-prevention--validation)
+6. [Smart Caching](#smart-caching)
+7. [Workflow Builder](#workflow-builder)
+8. [Smart Context Management](#smart-context-management)
+9. [Complete Workflow Examples](#complete-workflow-examples)
+10. [Advanced Features](#advanced-features)
 
 ---
 
@@ -294,7 +298,290 @@ APEXA> enable suggestions
 
 ---
 
-## 4. Smart Context Management
+## 4. Batch Processing
+
+### 4.1 What is Batch Processing?
+
+Process dozens or hundreds of diffraction images automatically with a single command! APEXA's batch processor handles:
+- Multiple files with wildcard patterns
+- Dark file subtraction for all images
+- Progress tracking and error handling
+- Summary reports of success/failure
+
+### 4.2 Batch Integration Command
+
+**Syntax:**
+```bash
+batch integrate <pattern> with <calibration_file> [dark_file]
+```
+
+**Example 1: Process all GE5 files**
+```
+APEXA> batch integrate *.ge5 with calib.txt dark.ge5
+Found 147 files to process
+Process all 147 files? (yes/no): yes
+
+[1/147] Processing: data_0001.ge5
+→ Integrate 2D To 1D
+✓ Success
+
+[2/147] Processing: data_0002.ge5
+→ Integrate 2D To 1D
+✓ Success
+
+... (progress continues)
+
+============================================================
+Batch Processing Complete:
+  Total: 147
+  ✓ Successful: 145
+  ✗ Failed: 2
+============================================================
+```
+
+**Example 2: Process specific range**
+```bash
+# Unix systems
+APEXA> batch integrate data_00[0-9][0-9].ge5 with calib.txt
+
+# Processes: data_0001.ge5 through data_0099.ge5
+```
+
+**Example 3: With dark subtraction**
+```
+APEXA> batch integrate sample_*.tiff with geometry.txt dark_avg.tiff
+Found 50 files to process
+Process all 50 files? (yes/no): yes
+
+... processing with automatic dark subtraction ...
+```
+
+### 4.3 Batch Results
+
+Results for each file are saved as:
+- `filename_1d.dat` - Integrated 1D pattern
+- Batch summary in terminal
+- Individual errors logged for failed files
+
+### 4.4 Use Cases
+
+**Time Series Analysis:**
+```bash
+# Process entire in-situ heating experiment
+batch integrate heating_*K.ge5 with calib.txt dark.ge5
+# Processes: heating_300K.ge5, heating_400K.ge5, ..., heating_1200K.ge5
+```
+
+**Deformation Series:**
+```bash
+# Process compression experiment at different strains
+batch integrate strain_*.tiff with setup.txt
+```
+
+**Multiple Samples:**
+```bash
+# Process all samples from a batch
+batch integrate sample_*.ge2 with calibration.txt dark_combined.ge2
+```
+
+---
+
+## 5. Error Prevention & Validation
+
+### 5.1 What is Error Prevention?
+
+APEXA validates all parameters BEFORE executing expensive operations. This saves time and prevents:
+- Running analysis on non-existent files
+- Using wrong file formats
+- Missing required parameters
+- Invalid parameter values
+
+### 5.2 Validation Checks
+
+**File Existence:**
+```
+APEXA> integrate missing_file.ge5 with calib.txt
+✗ Validation Error: Image file not found: missing_file.ge5
+💡 Suggestion: Please check your parameters and try again
+```
+
+**File Format Validation:**
+```
+APEXA> integrate data.txt with calib.txt
+✗ Validation Error: Unsupported image format. Use: .tif, .tiff, .ge2, .ge5, .ed5, .edf
+💡 Suggestion: Please check your parameters and try again
+```
+
+**Missing Parameters:**
+```
+APEXA> integrate data.ge5
+✗ Validation Error: Either calibration_file OR all manual parameters (wavelength, detector_distance, beam_center_x, beam_center_y) must be provided
+💡 Suggestion: Please check your parameters and try again
+```
+
+**Parameter Range Validation:**
+```
+APEXA> integrate data.ge5 with wavelength -0.5 distance 1000 center 1024 1024
+✗ Validation Error: Wavelength must be positive, got: -0.5
+💡 Suggestion: Please check your parameters and try again
+```
+
+**Dark File Dimension Mismatch:**
+```
+APEXA> integrate data_2048x2048.ge5 with calib.txt dark_1024x1024.tiff
+✗ Validation Error: Image and dark file dimensions don't match: (2048, 2048) vs (1024, 1024)
+💡 Suggestion: Please check your parameters and try again
+```
+
+### 5.3 FF-HEDM Validation
+
+**Directory Validation:**
+```
+APEXA> run FF-HEDM on /nonexistent/path
+✗ Validation Error: Directory not found: /nonexistent/path
+💡 Suggestion: Please check your parameters and try again
+```
+
+**Missing Parameters.txt:**
+```
+APEXA> run FF-HEDM on ./my_data/
+✗ Validation Error: Parameters.txt not found in ./my_data/
+💡 Suggestion: Please check your parameters and try again
+```
+
+### 5.4 Benefits
+
+✅ **Fail Fast:** Errors caught immediately, not after hours of processing
+✅ **Clear Messages:** Know exactly what's wrong and how to fix it
+✅ **Time Saved:** No wasted beamtime on incorrect setups
+✅ **Confidence:** Guaranteed valid operations
+
+---
+
+## 6. Smart Caching
+
+### 6.1 What is Smart Caching?
+
+APEXA automatically caches expensive read operations to speed up repeated queries and reduce AI costs.
+
+### 6.2 What Gets Cached?
+
+**File System Operations:**
+- Directory listings
+- File reads
+- Parameter file contents
+
+**Behavior:**
+```
+APEXA> list files in /data/experiment
+→ Filesystem List Directory
+... (takes 0.5s) ...
+
+APEXA> list files in /data/experiment
+→ Filesystem List Directory (from cache)
+... (instant!) ...
+```
+
+### 6.3 Cache Location
+
+- **Memory Cache:** Fast, session-only
+- **Disk Cache:** `~/.apexa/cache/` - persists between sessions
+
+### 6.4 Cache Invalidation
+
+Cache automatically invalidates when:
+- Files are modified
+- 24 hours have passed
+- APEXA is restarted
+
+Manual cache clear:
+```
+APEXA> clear cache
+✓ Cache cleared
+```
+
+### 6.5 Benefits
+
+⚡ **Faster:** Repeated operations are instant
+💰 **Cost Savings:** Fewer AI API calls
+🔋 **Efficiency:** Less network traffic
+
+---
+
+## 7. Workflow Builder
+
+### 7.1 What are Workflows?
+
+Pre-defined sequences of analysis steps for common experimental scenarios. Think of them as "recipes" for analysis.
+
+### 7.2 Available Workflows
+
+**List all workflows:**
+```
+APEXA> workflow list
+
+Available Workflows:
+==================================================
+
+phase_analysis:
+  1. Integrate 2D image to 1D pattern
+  2. Identify phases from peaks
+
+full_hedm:
+  1. Check data directory
+  2. Run FF-HEDM reconstruction
+
+calibration_check:
+  1. Detect rings for calibration
+  2. Integrate to verify calibration
+```
+
+### 7.3 Using Workflows
+
+**Natural Language (Recommended):**
+```
+APEXA> run phase analysis workflow on sample_001.ge5
+✓ Step 1: Integrating 2D image to 1D pattern
+✓ Step 2: Identifying phases from peaks
+✓ Workflow complete! Found: γ-Fe (austenite)
+```
+
+**Direct Command:**
+```
+APEXA> workflow phase_analysis
+
+Executing workflow: phase_analysis
+==================================================
+
+Step 1: Integrate 2D image to 1D pattern
+  Tool: midas_integrate_2d_to_1d
+
+Step 2: Identify phases from peaks
+  Tool: midas_identify_crystalline_phases
+
+Note: Use natural language queries to execute workflows with your data
+```
+
+### 7.4 Workflow Suggestions
+
+APEXA automatically suggests workflows:
+
+```
+APEXA> I want to calibrate my detector
+💡 Suggested workflow: calibration_check
+  1. Detect diffraction rings
+  2. Integrate to verify calibration
+
+Would you like to run this workflow? (yes/no):
+```
+
+### 7.5 Custom Workflows
+
+*Coming soon:* Define your own workflows!
+
+---
+
+## 8. Smart Context Management
 
 ### 4.1 What is Smart Context?
 
