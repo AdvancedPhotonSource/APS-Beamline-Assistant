@@ -344,6 +344,307 @@ class WorkflowBuilder:
 
         return None
 
+class ImageAnalyzer:
+    """Multimodal image analysis - AI can see and analyze diffraction images"""
+
+    @staticmethod
+    def analyze_image_quality(image_path: str) -> Dict[str, Any]:
+        """Analyze diffraction image quality using vision
+
+        Args:
+            image_path: Path to diffraction image
+
+        Returns:
+            Dictionary with quality metrics and AI observations
+        """
+        try:
+            import fabio
+            import numpy as np
+            from scipy import ndimage
+
+            img = fabio.open(image_path)
+            data = img.data.astype(float)
+
+            # Calculate quality metrics
+            metrics = {
+                "image_path": image_path,
+                "dimensions": data.shape,
+                "data_type": str(data.dtype),
+                "statistics": {
+                    "min": float(np.min(data)),
+                    "max": float(np.max(data)),
+                    "mean": float(np.mean(data)),
+                    "median": float(np.median(data)),
+                    "std": float(np.std(data))
+                }
+            }
+
+            # Signal-to-noise ratio
+            background = np.percentile(data, 10)
+            signal = np.percentile(data, 99)
+            snr = (signal - background) / np.std(data[data < np.percentile(data, 20)])
+            metrics["signal_to_noise"] = float(snr)
+
+            # Detect saturation
+            max_val = np.max(data)
+            if data.dtype == np.uint16:
+                saturation_threshold = 65535 * 0.95
+            else:
+                saturation_threshold = max_val * 0.95
+
+            saturated_pixels = np.sum(data >= saturation_threshold)
+            saturation_percent = (saturated_pixels / data.size) * 100
+            metrics["saturation_percent"] = float(saturation_percent)
+
+            # Hot pixel detection
+            median_filtered = ndimage.median_filter(data, size=3)
+            diff = np.abs(data - median_filtered)
+            hot_pixels = np.sum(diff > 10 * np.std(diff))
+            metrics["hot_pixels"] = int(hot_pixels)
+
+            # Overall quality assessment
+            quality = "Excellent"
+            issues = []
+
+            if snr < 5:
+                quality = "Poor"
+                issues.append("Low signal-to-noise ratio")
+            elif snr < 10:
+                quality = "Fair"
+                issues.append("Moderate signal-to-noise ratio")
+
+            if saturation_percent > 1:
+                quality = "Poor" if quality != "Poor" else quality
+                issues.append(f"Saturation detected ({saturation_percent:.1f}% pixels)")
+
+            if hot_pixels > data.size * 0.01:
+                issues.append(f"Many hot pixels detected ({hot_pixels})")
+
+            metrics["overall_quality"] = quality
+            metrics["issues"] = issues
+
+            return metrics
+
+        except Exception as e:
+            return {
+                "error": str(e),
+                "image_path": image_path
+            }
+
+    @staticmethod
+    def detect_rings_visual(image_path: str) -> Dict[str, Any]:
+        """Detect diffraction rings visually
+
+        Args:
+            image_path: Path to diffraction image
+
+        Returns:
+            Ring detection results
+        """
+        try:
+            import fabio
+            import numpy as np
+            from scipy import ndimage
+
+            img = fabio.open(image_path)
+            data = img.data.astype(float)
+
+            # Simple ring detection via radial integration
+            center_y, center_x = np.array(data.shape) // 2
+            y, x = np.indices(data.shape)
+            r = np.sqrt((x - center_x)**2 + (y - center_y)**2).astype(int)
+
+            # Radial profile
+            radial_profile = ndimage.mean(data, labels=r, index=np.arange(0, r.max()))
+
+            # Find peaks in radial profile
+            from scipy.signal import find_peaks
+            peaks, properties = find_peaks(radial_profile,
+                                          height=np.percentile(radial_profile, 75),
+                                          distance=20)
+
+            ring_radii = peaks.tolist()
+            ring_intensities = [float(radial_profile[p]) for p in peaks]
+
+            return {
+                "image_path": image_path,
+                "rings_detected": len(ring_radii),
+                "ring_radii_pixels": ring_radii,
+                "ring_intensities": ring_intensities,
+                "center_position": [int(center_x), int(center_y)],
+                "quality": "Good" if len(ring_radii) > 3 else "Check calibration"
+            }
+
+        except Exception as e:
+            return {
+                "error": str(e),
+                "image_path": image_path
+            }
+
+    @staticmethod
+    def create_image_summary(image_path: str) -> str:
+        """Create human-readable summary for AI vision
+
+        Args:
+            image_path: Path to image
+
+        Returns:
+            Text summary suitable for AI multimodal understanding
+        """
+        quality = ImageAnalyzer.analyze_image_quality(image_path)
+        rings = ImageAnalyzer.detect_rings_visual(image_path)
+
+        summary = f"""
+📸 Image Analysis: {Path(image_path).name}
+
+Image Properties:
+  Dimensions: {quality.get('dimensions', 'N/A')}
+  Signal-to-Noise: {quality.get('signal_to_noise', 0):.1f}
+  Overall Quality: {quality.get('overall_quality', 'Unknown')}
+
+Quality Issues:
+{chr(10).join('  • ' + issue for issue in quality.get('issues', [])) if quality.get('issues') else '  ✓ No issues detected'}
+
+Diffraction Rings:
+  Rings Detected: {rings.get('rings_detected', 0)}
+  Ring Radii: {rings.get('ring_radii_pixels', [])}
+  Assessment: {rings.get('quality', 'N/A')}
+
+Statistics:
+  Min/Max Intensity: {quality.get('statistics', {}).get('min', 0):.0f} / {quality.get('statistics', {}).get('max', 0):.0f}
+  Mean Intensity: {quality.get('statistics', {}).get('mean', 0):.0f}
+  Saturation: {quality.get('saturation_percent', 0):.2f}%
+  Hot Pixels: {quality.get('hot_pixels', 0)}
+"""
+        return summary
+
+class RealtimeFeedback:
+    """Real-time experiment feedback during beamtime"""
+
+    def __init__(self):
+        self.monitoring = False
+        self.watch_directory = None
+        self.last_check_time = None
+        self.processed_files = set()
+        self.alerts = []
+
+    def start_monitoring(self, directory: str, check_interval: int = 5):
+        """Start monitoring directory for new diffraction images
+
+        Args:
+            directory: Directory to watch
+            check_interval: Check for new files every N seconds
+        """
+        self.monitoring = True
+        self.watch_directory = Path(directory)
+        self.last_check_time = datetime.now()
+        self.check_interval = check_interval
+
+        return {
+            "status": "monitoring_started",
+            "directory": str(self.watch_directory),
+            "check_interval": check_interval,
+            "message": f"Real-time monitoring active on {directory}"
+        }
+
+    def stop_monitoring(self):
+        """Stop real-time monitoring"""
+        self.monitoring = False
+        return {
+            "status": "monitoring_stopped",
+            "files_processed": len(self.processed_files),
+            "alerts_generated": len(self.alerts)
+        }
+
+    def check_new_files(self) -> List[Dict[str, Any]]:
+        """Check for new diffraction images and analyze them
+
+        Returns:
+            List of new file analyses
+        """
+        if not self.monitoring or not self.watch_directory:
+            return []
+
+        new_analyses = []
+
+        # Find new image files
+        for ext in ['.tif', '.tiff', '.ge2', '.ge5', '.ed5', '.edf']:
+            for img_file in self.watch_directory.glob(f'*{ext}'):
+                if img_file.stat().st_mtime > self.last_check_time.timestamp():
+                    if str(img_file) not in self.processed_files:
+                        # New file detected! Analyze it
+                        analysis = self._analyze_and_alert(img_file)
+                        new_analyses.append(analysis)
+                        self.processed_files.add(str(img_file))
+
+        self.last_check_time = datetime.now()
+        return new_analyses
+
+    def _analyze_and_alert(self, image_path: Path) -> Dict[str, Any]:
+        """Analyze new image and generate alerts if needed
+
+        Args:
+            image_path: Path to new image
+
+        Returns:
+            Analysis with alerts
+        """
+        quality = ImageAnalyzer.analyze_image_quality(str(image_path))
+        rings = ImageAnalyzer.detect_rings_visual(str(image_path))
+
+        analysis = {
+            "timestamp": datetime.now().isoformat(),
+            "file": image_path.name,
+            "quality": quality,
+            "rings": rings,
+            "alerts": []
+        }
+
+        # Generate alerts for issues
+        if quality.get('overall_quality') == 'Poor':
+            alert = {
+                "level": "WARNING",
+                "message": f"Poor image quality detected in {image_path.name}",
+                "details": quality.get('issues', [])
+            }
+            analysis["alerts"].append(alert)
+            self.alerts.append(alert)
+
+        if quality.get('saturation_percent', 0) > 1:
+            alert = {
+                "level": "CRITICAL",
+                "message": f"Detector saturation in {image_path.name}",
+                "details": f"{quality.get('saturation_percent', 0):.1f}% pixels saturated"
+            }
+            analysis["alerts"].append(alert)
+            self.alerts.append(alert)
+
+        if rings.get('rings_detected', 0) < 3:
+            alert = {
+                "level": "INFO",
+                "message": f"Few diffraction rings in {image_path.name}",
+                "details": f"Only {rings.get('rings_detected', 0)} rings detected"
+            }
+            analysis["alerts"].append(alert)
+
+        return analysis
+
+    def get_session_summary(self) -> Dict[str, Any]:
+        """Get summary of monitoring session
+
+        Returns:
+            Session statistics
+        """
+        return {
+            "monitoring_active": self.monitoring,
+            "directory": str(self.watch_directory) if self.watch_directory else None,
+            "files_processed": len(self.processed_files),
+            "total_alerts": len(self.alerts),
+            "critical_alerts": len([a for a in self.alerts if a['level'] == 'CRITICAL']),
+            "warning_alerts": len([a for a in self.alerts if a['level'] == 'WARNING']),
+            "recent_alerts": self.alerts[-5:] if self.alerts else []
+        }
+
 class SmartCache:
     """Cache expensive operations to reduce AI costs and improve speed"""
 
@@ -407,6 +708,8 @@ class APEXAClient:
         self.error_preventor = ErrorPreventor()
         self.workflow_builder = WorkflowBuilder()
         self.cache = SmartCache()
+        self.image_analyzer = ImageAnalyzer()
+        self.realtime_feedback = RealtimeFeedback()
 
         # Determine environment based on model (dev models require dev endpoint)
         self.anl_username = os.getenv("ANL_USERNAME")
@@ -1238,7 +1541,7 @@ ARGUMENTS: {"image_path": "/path/data.ge5", "calibration_file": "/path/calib.txt
         print(f"👤 User: {self.anl_username}")
         print(f"🔌 Servers: {', '.join(list(self.sessions.keys()))}")
         print()
-        print("Commands: analyze, batch, workflow, session, models, tools, servers, clear, help, quit")
+        print("Commands: analyze, batch, workflow, session, image, monitor, models, tools, clear, help, quit")
         print()
         
         # Command history
@@ -1397,6 +1700,112 @@ ARGUMENTS: {"image_path": "/path/data.ge5", "calibration_file": "/path/calib.txt
                         print(f"Unknown session command: {action}")
                         print("Available: save, load, list, summary")
 
+                elif user_input.lower().startswith('image '):
+                    # Image analysis command
+                    # Example: image analyze sample.ge5, image quality sample.ge5
+                    parts = user_input[6:].strip().split()
+                    if len(parts) < 2:
+                        print("Usage: image <analyze|quality|rings> <image_path>")
+                        continue
+
+                    action = parts[0]
+                    image_path = parts[1]
+
+                    if action == 'analyze':
+                        print(f"\n📸 Analyzing image: {image_path}")
+                        summary = self.image_analyzer.create_image_summary(image_path)
+                        print(summary)
+
+                    elif action == 'quality':
+                        print(f"\n🔍 Quality check: {image_path}")
+                        quality = self.image_analyzer.analyze_image_quality(image_path)
+                        if 'error' in quality:
+                            print(f"✗ Error: {quality['error']}")
+                        else:
+                            print(f"  Overall Quality: {quality['overall_quality']}")
+                            print(f"  Signal-to-Noise: {quality['signal_to_noise']:.1f}")
+                            print(f"  Saturation: {quality['saturation_percent']:.2f}%")
+                            if quality['issues']:
+                                print(f"  Issues:")
+                                for issue in quality['issues']:
+                                    print(f"    • {issue}")
+
+                    elif action == 'rings':
+                        print(f"\n🔍 Ring detection: {image_path}")
+                        rings = self.image_analyzer.detect_rings_visual(image_path)
+                        if 'error' in rings:
+                            print(f"✗ Error: {rings['error']}")
+                        else:
+                            print(f"  Rings Detected: {rings['rings_detected']}")
+                            print(f"  Ring Radii (pixels): {rings['ring_radii_pixels']}")
+                            print(f"  Assessment: {rings['quality']}")
+
+                    else:
+                        print(f"Unknown image command: {action}")
+                        print("Available: analyze, quality, rings")
+
+                elif user_input.lower().startswith('monitor '):
+                    # Real-time monitoring command
+                    # Example: monitor start /data/experiment, monitor stop, monitor status
+                    parts = user_input[8:].strip().split()
+                    if not parts:
+                        print("Usage: monitor <start|stop|status|check> [directory]")
+                        continue
+
+                    action = parts[0]
+
+                    if action == 'start':
+                        if len(parts) < 2:
+                            print("Usage: monitor start <directory>")
+                            continue
+                        directory = parts[1]
+                        result = self.realtime_feedback.start_monitoring(directory)
+                        print(f"\n🔄 {result['message']}")
+                        print(f"   Checking every {result['check_interval']} seconds")
+                        print(f"   Press Ctrl+C to stop or use 'monitor stop'")
+
+                    elif action == 'stop':
+                        result = self.realtime_feedback.stop_monitoring()
+                        print(f"\n⏹️  Monitoring stopped")
+                        print(f"   Files processed: {result['files_processed']}")
+                        print(f"   Alerts generated: {result['alerts_generated']}")
+
+                    elif action == 'status':
+                        summary = self.realtime_feedback.get_session_summary()
+                        print(f"\n📊 Monitoring Status:")
+                        print(f"   Active: {summary['monitoring_active']}")
+                        if summary['monitoring_active']:
+                            print(f"   Directory: {summary['directory']}")
+                        print(f"   Files Processed: {summary['files_processed']}")
+                        print(f"   Total Alerts: {summary['total_alerts']}")
+                        print(f"     ⚠️  Warnings: {summary['warning_alerts']}")
+                        print(f"     🚨 Critical: {summary['critical_alerts']}")
+
+                        if summary['recent_alerts']:
+                            print(f"\n   Recent Alerts:")
+                            for alert in summary['recent_alerts']:
+                                icon = "🚨" if alert['level'] == 'CRITICAL' else "⚠️" if alert['level'] == 'WARNING' else "ℹ️"
+                                print(f"     {icon} {alert['message']}")
+
+                    elif action == 'check':
+                        new_files = self.realtime_feedback.check_new_files()
+                        if not new_files:
+                            print("\n✓ No new files detected")
+                        else:
+                            print(f"\n🆕 Found {len(new_files)} new file(s):")
+                            for analysis in new_files:
+                                print(f"\n  📁 {analysis['file']}")
+                                print(f"     Quality: {analysis['quality']['overall_quality']}")
+                                print(f"     Rings: {analysis['rings']['rings_detected']}")
+                                if analysis['alerts']:
+                                    for alert in analysis['alerts']:
+                                        icon = "🚨" if alert['level'] == 'CRITICAL' else "⚠️" if alert['level'] == 'WARNING' else "ℹ️"
+                                        print(f"     {icon} {alert['message']}")
+
+                    else:
+                        print(f"Unknown monitor command: {action}")
+                        print("Available: start, stop, status, check")
+
                 elif user_input.lower() == 'tools':
                     tools = await self.get_all_available_tools()
                     print(f"\nAvailable tools ({len(tools)}):")
@@ -1411,6 +1820,17 @@ APEXA Smart Commands:
   batch integrate <pattern> with ...   - Process multiple files at once
   workflow list                        - Show available workflows
   workflow <name>                      - Execute predefined workflow
+
+📸 Image Analysis (Multimodal):
+  image analyze <file>                 - Full image analysis with AI
+  image quality <file>                 - Check signal, noise, saturation
+  image rings <file>                   - Detect diffraction rings
+
+🔄 Real-time Monitoring:
+  monitor start <directory>            - Start watching for new images
+  monitor stop                         - Stop monitoring
+  monitor status                       - Show monitoring stats
+  monitor check                        - Check for new files now
 
 💾 Session Management:
   session save [name]                  - Save current session
@@ -1434,6 +1854,8 @@ APEXA Smart Commands:
   • "Analyze the diffraction rings in image.tif"
 
 ✨ Smart Features:
+  • Multimodal image analysis - AI can "see" your images!
+  • Real-time feedback during beamtime
   • Automatic error prevention and validation
   • Proactive next-step suggestions after each analysis
   • Session persistence with auto-save

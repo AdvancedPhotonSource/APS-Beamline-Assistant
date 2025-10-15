@@ -17,8 +17,9 @@
 6. [Smart Caching](#smart-caching)
 7. [Workflow Builder](#workflow-builder)
 8. [Smart Context Management](#smart-context-management)
-9. [Complete Workflow Examples](#complete-workflow-examples)
-10. [Advanced Features](#advanced-features)
+9. [Multimodal Image Analysis](#multimodal-image-analysis)
+10. [Real-time Feedback During Beamtime](#real-time-feedback-during-beamtime)
+11. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -916,7 +917,251 @@ APEXA's suggestions are based on scientific best practices. Following them helps
 
 ---
 
-## 8. Troubleshooting
+## 9. Multimodal Image Analysis
+
+### 9.1 What is Multimodal Analysis?
+
+APEXA can "see" and understand your diffraction images! No need to describe what you see - just point APEXA at the image and it will analyze:
+- Image quality (signal, noise, saturation)
+- Diffraction ring detection
+- Hot pixel detection
+- Overall assessment
+
+### 9.2 Quick Image Check
+
+**Check image quality before running expensive analysis:**
+```
+APEXA> image quality /data/sample_001.ge5
+
+🔍 Quality check: sample_001.ge5
+  Overall Quality: Excellent
+  Signal-to-Noise: 45.3
+  Saturation: 0.02%
+```
+
+**Detect rings to verify calibration:**
+```
+APEXA> image rings /data/CeO2_calibration.ge5
+
+🔍 Ring detection: CeO2_calibration.ge5
+  Rings Detected: 12
+  Ring Radii (pixels): [245, 356, 435, 612, 701, 845, ...]
+  Assessment: Good
+```
+
+**Full analysis with AI summary:**
+```
+APEXA> image analyze /data/sample_001.ge5
+
+📸 Image Analysis: sample_001.ge5
+
+Image Properties:
+  Dimensions: (2048, 2048)
+  Signal-to-Noise: 45.3
+  Overall Quality: Excellent
+
+Quality Issues:
+  ✓ No issues detected
+
+Diffraction Rings:
+  Rings Detected: 8
+  Ring Radii: [245, 356, 435, 612, 701, 845, 923, 1012]
+  Assessment: Good
+
+Statistics:
+  Min/Max Intensity: 50 / 12543
+  Mean Intensity: 325
+  Saturation: 0.02%
+  Hot Pixels: 15
+```
+
+### 9.3 Use Cases
+
+**Before Integration:**
+```
+# Check if image quality is good enough
+APEXA> image quality sample.ge5
+# If quality is poor, adjust exposure time or detector settings
+```
+
+**Calibration Verification:**
+```
+# Detect rings to check calibration
+APEXA> image rings CeO2_standard.ge5
+# If few rings detected, check sample/beam alignment
+```
+
+**Batch Quality Control:**
+```
+# Check multiple images quickly
+APEXA> image quality data_0001.ge5
+APEXA> image quality data_0002.ge5
+APEXA> image quality data_0003.ge5
+```
+
+### 9.4 What Gets Analyzed?
+
+| **Metric** | **What It Tells You** |
+|------------|----------------------|
+| **Signal-to-Noise** | Data quality - higher is better (>10 is good) |
+| **Saturation** | Detector overexposure - should be <1% |
+| **Hot Pixels** | Bad detector pixels - indicates issues if >0.1% |
+| **Ring Count** | Calibration quality - more rings = better |
+| **Overall Quality** | Excellent / Good / Fair / Poor |
+
+### 9.5 Natural Language Integration
+
+You can also just ask APEXA naturally:
+
+```
+APEXA> What's the quality of sample_001.ge5?
+# APEXA will automatically run image quality check
+
+APEXA> Check if there are diffraction rings in the calibration image
+# APEXA will run ring detection
+
+APEXA> Is the signal good enough in this image?
+# APEXA will analyze and tell you
+```
+
+---
+
+## 10. Real-time Feedback During Beamtime
+
+### 10.1 What is Real-time Monitoring?
+
+During beamtime, APEXA can watch your data directory and automatically:
+- Detect new images as they're collected
+- Analyze quality instantly
+- Alert you to problems (saturation, poor signal, etc.)
+- Track statistics across the entire run
+
+### 10.2 Start Monitoring
+
+**Monitor a directory:**
+```
+APEXA> monitor start /data/experiment_run1
+
+🔄 Real-time monitoring active on /data/experiment_run1
+   Checking every 5 seconds
+   Press Ctrl+C to stop or use 'monitor stop'
+```
+
+APEXA now watches the directory and automatically analyzes new images!
+
+### 10.3 Real-time Alerts
+
+**Example alerts during beamtime:**
+
+```
+🆕 Found 1 new file(s):
+
+  📁 sample_0042.ge5
+     Quality: Poor
+     Rings: 2
+     ⚠️  WARNING: Poor image quality detected in sample_0042.ge5
+     ⚠️  WARNING: Few diffraction rings in sample_0042.ge5
+```
+
+```
+🆕 Found 1 new file(s):
+
+  📁 sample_0055.ge5
+     Quality: Poor
+     Rings: 8
+     🚨 CRITICAL: Detector saturation in sample_0055.ge5
+```
+
+**Action immediately!** APEXA caught the problem before you wasted time on bad data.
+
+### 10.4 Check Status
+
+**See monitoring statistics:**
+```
+APEXA> monitor status
+
+📊 Monitoring Status:
+   Active: True
+   Directory: /data/experiment_run1
+   Files Processed: 127
+   Total Alerts: 8
+     ⚠️  Warnings: 6
+     🚨 Critical: 2
+
+   Recent Alerts:
+     🚨 Detector saturation in sample_0055.ge5
+     ⚠️  Poor image quality detected in sample_0042.ge5
+     ⚠️  Few diffraction rings in sample_0038.ge5
+```
+
+### 10.5 Manual Check
+
+**Check for new files without auto-monitoring:**
+```
+APEXA> monitor check
+
+🆕 Found 3 new file(s):
+
+  📁 sample_0128.ge5
+     Quality: Excellent
+     Rings: 12
+     ✓ No alerts
+
+  📁 sample_0129.ge5
+     Quality: Excellent
+     Rings: 12
+     ✓ No alerts
+```
+
+### 10.6 Stop Monitoring
+
+```
+APEXA> monitor stop
+
+⏹️  Monitoring stopped
+   Files processed: 135
+   Alerts generated: 8
+```
+
+### 10.7 Beamtime Workflow
+
+**Complete beamtime monitoring workflow:**
+
+```bash
+# 1. Start your experiment
+APEXA> monitor start /data/my_experiment
+
+# 2. Begin data collection at beamline
+# APEXA watches in background and alerts you to issues
+
+# 3. Check status periodically
+APEXA> monitor status
+
+# 4. If you see critical alerts, adjust detector/beam settings immediately
+
+# 5. After run is complete
+APEXA> monitor stop
+APEXA> session save "experiment_2025_10_15"
+```
+
+### 10.8 Alert Levels
+
+| **Level** | **Icon** | **Meaning** | **Action** |
+|-----------|----------|------------|------------|
+| **CRITICAL** | 🚨 | Major problem (saturation, etc.) | Fix immediately! |
+| **WARNING** | ⚠️  | Quality issue | Investigate |
+| **INFO** | ℹ️  | FYI notification | Note for later |
+
+### 10.9 Benefits
+
+✅ **Catch problems early** - Before wasting beamtime
+✅ **Automatic QC** - No manual checking needed
+✅ **Complete log** - Track everything that happened
+✅ **Peace of mind** - APEXA is watching while you focus on science
+
+---
+
+## 11. Troubleshooting
 
 ### Session not loading?
 

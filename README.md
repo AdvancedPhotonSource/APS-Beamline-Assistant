@@ -42,12 +42,17 @@ APEXA> list files in /data
 APEXA> read the Parameters.txt file there
 ```
 
-### New Features
+### ✨ Smart Features
 
-- **Dark File Subtraction**: Automatic background correction for cleaner diffraction patterns
-- **Multi-Format Support**: TIFF, GE2/GE5, ED5, EDF detector formats
-- **Smart Suggestions**: Proactive next-step recommendations after each analysis
-- **Session Persistence**: Automatic tracking of experimental workflows
+- **🔍 Multimodal Image Analysis**: AI can "see" and analyze your diffraction images directly
+- **🔄 Real-time Monitoring**: Automatic alerts during beamtime for quality issues
+- **📦 Batch Processing**: Process hundreds of files with one command
+- **🛡️ Error Prevention**: Validate parameters before execution
+- **🌑 Dark File Subtraction**: Automatic background correction
+- **📁 Multi-Format Support**: TIFF, GE2/GE5, ED5, EDF detector formats
+- **💡 Smart Suggestions**: Proactive next-step recommendations
+- **💾 Session Persistence**: Automatic tracking of experimental workflows
+- **⚡ Smart Caching**: Faster repeated operations, lower AI costs
 
 ## Adding Analysis Tools
 
