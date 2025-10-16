@@ -645,6 +645,327 @@ class RealtimeFeedback:
             "recent_alerts": self.alerts[-5:] if self.alerts else []
         }
 
+class PlottingEngine:
+    """Advanced plotting for diffraction data visualization"""
+
+    def __init__(self, output_dir: Path = None):
+        self.output_dir = output_dir or Path.home() / ".apexa" / "plots"
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+
+    def plot_2d_image(self, image_path: str, scale: str = "linear", save: bool = True, show: bool = False) -> Dict[str, Any]:
+        """Plot 2D diffraction image with enhancements
+
+        Args:
+            image_path: Path to diffraction image
+            scale: "linear" or "log" for intensity scale
+            save: Save plot to file
+            show: Display plot interactively
+
+        Returns:
+            Dictionary with plot info and statistics
+        """
+        try:
+            import numpy as np
+            import matplotlib.pyplot as plt
+            import matplotlib.colors as colors
+            import fabio
+
+            # Load image
+            img = fabio.open(str(Path(image_path).expanduser().absolute()))
+            data = img.data.astype(float)
+
+            # Create figure
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+
+            # Linear scale
+            im1 = ax1.imshow(data, cmap='viridis', origin='lower')
+            ax1.set_title(f'{Path(image_path).name} - Linear Scale')
+            ax1.set_xlabel('X (pixels)')
+            ax1.set_ylabel('Y (pixels)')
+            plt.colorbar(im1, ax=ax1, label='Intensity')
+
+            # Log scale
+            data_log = np.copy(data)
+            data_log[data_log <= 0] = 1  # Avoid log(0)
+            im2 = ax2.imshow(data_log, cmap='viridis', norm=colors.LogNorm(), origin='lower')
+            ax2.set_title(f'{Path(image_path).name} - Log Scale')
+            ax2.set_xlabel('X (pixels)')
+            ax2.set_ylabel('Y (pixels)')
+            plt.colorbar(im2, ax=ax2, label='Intensity (log)')
+
+            plt.tight_layout()
+
+            # Save or show
+            output_path = None
+            if save:
+                output_path = self.output_dir / f"{Path(image_path).stem}_2d.png"
+                plt.savefig(output_path, dpi=150, bbox_inches='tight')
+
+            if show:
+                plt.show()
+            else:
+                plt.close()
+
+            # Statistics
+            stats = {
+                "mean": float(np.mean(data)),
+                "max": float(np.max(data)),
+                "min": float(np.min(data)),
+                "std": float(np.std(data))
+            }
+
+            return {
+                "status": "success",
+                "plot_saved": str(output_path) if output_path else None,
+                "statistics": stats,
+                "message": f"2D plot created for {Path(image_path).name}"
+            }
+
+        except Exception as e:
+            return {
+                "status": "error",
+                "error": str(e)
+            }
+
+    def plot_radial_profile(self, image_path: str, save: bool = True, show: bool = False) -> Dict[str, Any]:
+        """Plot radial intensity profile with peak detection
+
+        Args:
+            image_path: Path to diffraction image
+            save: Save plot to file
+            show: Display plot interactively
+
+        Returns:
+            Dictionary with plot info and detected peaks
+        """
+        try:
+            import numpy as np
+            import matplotlib.pyplot as plt
+            import fabio
+            from scipy import signal
+
+            # Load image
+            img = fabio.open(str(Path(image_path).expanduser().absolute()))
+            data = img.data.astype(float)
+
+            # Calculate center
+            center_y, center_x = np.array(data.shape) / 2
+
+            # Create radial profile
+            y, x = np.indices(data.shape)
+            r = np.sqrt((x - center_x)**2 + (y - center_y)**2)
+            r = r.astype(int)
+
+            # Bin by radius
+            tbin = np.bincount(r.ravel(), data.ravel())
+            nr = np.bincount(r.ravel())
+            radial_prof = tbin / nr
+
+            # Remove NaN values
+            radial_prof = radial_prof[~np.isnan(radial_prof)]
+            radii = np.arange(len(radial_prof))
+
+            # Detect peaks
+            peaks, properties = signal.find_peaks(radial_prof, prominence=np.std(radial_prof))
+
+            # Create plot
+            fig, ax = plt.subplots(figsize=(10, 6))
+            ax.plot(radii, radial_prof, 'b-', linewidth=1, label='Radial Profile')
+            ax.plot(peaks, radial_prof[peaks], 'ro', markersize=8, label=f'Peaks ({len(peaks)} found)')
+
+            ax.set_xlabel('Radius (pixels)')
+            ax.set_ylabel('Average Intensity')
+            ax.set_title(f'Radial Profile - {Path(image_path).name}')
+            ax.legend()
+            ax.grid(True, alpha=0.3)
+
+            plt.tight_layout()
+
+            # Save or show
+            output_path = None
+            if save:
+                output_path = self.output_dir / f"{Path(image_path).stem}_radial.png"
+                plt.savefig(output_path, dpi=150, bbox_inches='tight')
+
+            if show:
+                plt.show()
+            else:
+                plt.close()
+
+            return {
+                "status": "success",
+                "plot_saved": str(output_path) if output_path else None,
+                "peaks_detected": len(peaks),
+                "peak_positions": peaks.tolist(),
+                "message": f"Radial profile plotted with {len(peaks)} rings detected"
+            }
+
+        except Exception as e:
+            return {
+                "status": "error",
+                "error": str(e)
+            }
+
+    def plot_1d_pattern(self, pattern_file: str, save: bool = True, show: bool = False) -> Dict[str, Any]:
+        """Plot 1D integrated diffraction pattern
+
+        Args:
+            pattern_file: Path to 1D pattern file (.dat, .xy, .chi)
+            save: Save plot to file
+            show: Display plot interactively
+
+        Returns:
+            Dictionary with plot info and peak information
+        """
+        try:
+            import numpy as np
+            import matplotlib.pyplot as plt
+            from scipy import signal
+
+            # Load 1D pattern
+            pattern_path = Path(pattern_file).expanduser().absolute()
+            data = np.loadtxt(pattern_path)
+
+            if data.ndim == 1:
+                # Single column - assume it's intensity only
+                q = np.arange(len(data))
+                intensity = data
+            else:
+                # Two columns - Q and intensity
+                q = data[:, 0]
+                intensity = data[:, 1]
+
+            # Detect peaks
+            peaks, properties = signal.find_peaks(intensity, prominence=np.std(intensity)*2)
+
+            # Create plot with two subplots (linear and log)
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
+
+            # Linear scale
+            ax1.plot(q, intensity, 'b-', linewidth=1, label='Integrated Pattern')
+            ax1.plot(q[peaks], intensity[peaks], 'ro', markersize=6, label=f'Peaks ({len(peaks)})')
+            ax1.set_ylabel('Intensity')
+            ax1.set_title(f'1D Pattern - {Path(pattern_file).name} (Linear)')
+            ax1.legend()
+            ax1.grid(True, alpha=0.3)
+
+            # Log scale
+            ax2.semilogy(q, intensity, 'b-', linewidth=1, label='Integrated Pattern')
+            ax2.semilogy(q[peaks], intensity[peaks], 'ro', markersize=6, label=f'Peaks ({len(peaks)})')
+            ax2.set_xlabel('Q (Å⁻¹)' if q.max() < 20 else '2θ (degrees)')
+            ax2.set_ylabel('Intensity (log)')
+            ax2.set_title(f'1D Pattern - {Path(pattern_file).name} (Log)')
+            ax2.legend()
+            ax2.grid(True, alpha=0.3)
+
+            plt.tight_layout()
+
+            # Save or show
+            output_path = None
+            if save:
+                output_path = self.output_dir / f"{Path(pattern_file).stem}_1d.png"
+                plt.savefig(output_path, dpi=150, bbox_inches='tight')
+
+            if show:
+                plt.show()
+            else:
+                plt.close()
+
+            return {
+                "status": "success",
+                "plot_saved": str(output_path) if output_path else None,
+                "peaks_detected": len(peaks),
+                "peak_positions": q[peaks].tolist(),
+                "message": f"1D pattern plotted with {len(peaks)} peaks detected"
+            }
+
+        except Exception as e:
+            return {
+                "status": "error",
+                "error": str(e)
+            }
+
+    def plot_comparison(self, files: list, labels: list = None, save: bool = True, show: bool = False) -> Dict[str, Any]:
+        """Compare multiple 1D patterns in one plot
+
+        Args:
+            files: List of pattern file paths
+            labels: Optional custom labels for each pattern
+            save: Save plot to file
+            show: Display plot interactively
+
+        Returns:
+            Dictionary with plot info
+        """
+        try:
+            import numpy as np
+            import matplotlib.pyplot as plt
+
+            if not labels:
+                labels = [Path(f).stem for f in files]
+
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10))
+            colors = plt.cm.tab10(np.linspace(0, 1, len(files)))
+
+            for i, (file, label, color) in enumerate(zip(files, labels, colors)):
+                # Load pattern
+                data = np.loadtxt(Path(file).expanduser().absolute())
+
+                if data.ndim == 1:
+                    q = np.arange(len(data))
+                    intensity = data
+                else:
+                    q = data[:, 0]
+                    intensity = data[:, 1]
+
+                # Normalize for comparison
+                intensity_norm = intensity / np.max(intensity)
+
+                # Plot
+                ax1.plot(q, intensity_norm, color=color, linewidth=1.5,
+                        label=label, alpha=0.8)
+                ax2.semilogy(q, intensity_norm, color=color, linewidth=1.5,
+                           label=label, alpha=0.8)
+
+            # Linear scale
+            ax1.set_ylabel('Normalized Intensity')
+            ax1.set_title('Pattern Comparison (Linear)')
+            ax1.legend()
+            ax1.grid(True, alpha=0.3)
+
+            # Log scale
+            ax2.set_xlabel('Q (Å⁻¹)' if q.max() < 20 else '2θ (degrees)')
+            ax2.set_ylabel('Normalized Intensity (log)')
+            ax2.set_title('Pattern Comparison (Log)')
+            ax2.legend()
+            ax2.grid(True, alpha=0.3)
+
+            plt.tight_layout()
+
+            # Save or show
+            output_path = None
+            if save:
+                output_path = self.output_dir / f"comparison_{len(files)}patterns.png"
+                plt.savefig(output_path, dpi=150, bbox_inches='tight')
+
+            if show:
+                plt.show()
+            else:
+                plt.close()
+
+            return {
+                "status": "success",
+                "plot_saved": str(output_path) if output_path else None,
+                "patterns_compared": len(files),
+                "message": f"Comparison plot created for {len(files)} patterns"
+            }
+
+        except Exception as e:
+            return {
+                "status": "error",
+                "error": str(e)
+            }
+
 class SmartCache:
     """Cache expensive operations to reduce AI costs and improve speed"""
 
@@ -710,6 +1031,7 @@ class APEXAClient:
         self.cache = SmartCache()
         self.image_analyzer = ImageAnalyzer()
         self.realtime_feedback = RealtimeFeedback()
+        self.plotting = PlottingEngine()
 
         # Determine environment based on model (dev models require dev endpoint)
         self.anl_username = os.getenv("ANL_USERNAME")
@@ -1863,6 +2185,95 @@ ARGUMENTS: {"image_path": "/path/data.ge5", "calibration_file": "/path/calib.txt
                         print(f"Unknown monitor command: {action}")
                         print("Available: start, stop, status, check")
 
+                elif user_input.lower().startswith('plot '):
+                    # Plotting command
+                    # Examples: plot 2d sample.ge5, plot radial data.tiff, plot 1d pattern.dat
+                    #           plot compare file1.dat file2.dat file3.dat
+                    cmd_text = user_input[5:].strip()
+
+                    # Extract plot type
+                    plot_type = None
+                    for possible_type in ['2d', 'radial', '1d', 'pattern', 'compare', 'comparison']:
+                        if cmd_text.lower().startswith(possible_type):
+                            plot_type = possible_type
+                            cmd_text = cmd_text[len(possible_type):].strip()
+                            break
+
+                    if not plot_type:
+                        print("Usage: plot <2d|radial|1d|compare> <file(s)>")
+                        print("Examples:")
+                        print("  plot 2d sample.ge5           - Plot 2D diffraction image")
+                        print("  plot radial data.tiff        - Plot radial intensity profile")
+                        print("  plot 1d pattern.dat          - Plot 1D integrated pattern")
+                        print("  plot compare file1.dat file2.dat - Compare multiple patterns")
+                        continue
+
+                    # Parse file path(s)
+                    files = cmd_text.split()
+                    if not files:
+                        print("Please specify file(s) to plot")
+                        continue
+
+                    # Handle different plot types
+                    if plot_type == '2d':
+                        if len(files) != 1:
+                            print("2D plot requires exactly one image file")
+                            continue
+
+                        print(f"\n📊 Plotting 2D image: {files[0]}")
+                        result = self.plotting.plot_2d_image(files[0])
+
+                        if result['status'] == 'success':
+                            print(f"✓ Plot saved: {result['plot_saved']}")
+                            print(f"  Statistics:")
+                            print(f"    Mean: {result['statistics']['mean']:.1f}")
+                            print(f"    Max: {result['statistics']['max']:.1f}")
+                            print(f"    Std: {result['statistics']['std']:.1f}")
+                        else:
+                            print(f"✗ Error: {result['error']}")
+
+                    elif plot_type == 'radial':
+                        if len(files) != 1:
+                            print("Radial plot requires exactly one image file")
+                            continue
+
+                        print(f"\n📊 Plotting radial profile: {files[0]}")
+                        result = self.plotting.plot_radial_profile(files[0])
+
+                        if result['status'] == 'success':
+                            print(f"✓ {result['message']}")
+                            print(f"  Plot saved: {result['plot_saved']}")
+                        else:
+                            print(f"✗ Error: {result['error']}")
+
+                    elif plot_type in ['1d', 'pattern']:
+                        if len(files) != 1:
+                            print("1D pattern plot requires exactly one data file")
+                            continue
+
+                        print(f"\n📊 Plotting 1D pattern: {files[0]}")
+                        result = self.plotting.plot_1d_pattern(files[0])
+
+                        if result['status'] == 'success':
+                            print(f"✓ {result['message']}")
+                            print(f"  Plot saved: {result['plot_saved']}")
+                        else:
+                            print(f"✗ Error: {result['error']}")
+
+                    elif plot_type in ['compare', 'comparison']:
+                        if len(files) < 2:
+                            print("Comparison requires at least 2 pattern files")
+                            continue
+
+                        print(f"\n📊 Comparing {len(files)} patterns...")
+                        result = self.plotting.plot_comparison(files)
+
+                        if result['status'] == 'success':
+                            print(f"✓ {result['message']}")
+                            print(f"  Plot saved: {result['plot_saved']}")
+                        else:
+                            print(f"✗ Error: {result['error']}")
+
                 elif user_input.lower() == 'tools':
                     tools = await self.get_all_available_tools()
                     print(f"\nAvailable tools ({len(tools)}):")
@@ -1882,6 +2293,12 @@ APEXA Smart Commands:
   image analyze <file>                 - Full image analysis with AI
   image quality <file>                 - Check signal, noise, saturation
   image rings <file>                   - Detect diffraction rings
+
+📈 Plotting & Visualization:
+  plot 2d <file>                       - Plot 2D diffraction image
+  plot radial <file>                   - Plot radial intensity profile
+  plot 1d <file>                       - Plot 1D integrated pattern
+  plot compare <file1> <file2> ...     - Compare multiple patterns
 
 🔄 Real-time Monitoring:
   monitor start <directory>            - Start watching for new images
@@ -1909,9 +2326,11 @@ APEXA Smart Commands:
   • "I have peaks at 12.5, 18.2, 25.8 degrees. What phases?"
   • "Run FF-HEDM workflow in /path/to/data"
   • "Analyze the diffraction rings in image.tif"
+  • "Plot the radial profile of sample.ge5"
 
 ✨ Smart Features:
   • Multimodal image analysis - AI can "see" your images!
+  • Advanced plotting & visualization with matplotlib
   • Real-time feedback during beamtime
   • Automatic error prevention and validation
   • Proactive next-step suggestions after each analysis

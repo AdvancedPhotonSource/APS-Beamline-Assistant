@@ -19,7 +19,8 @@
 8. [Smart Context Management](#smart-context-management)
 9. [Multimodal Image Analysis](#multimodal-image-analysis)
 10. [Real-time Feedback During Beamtime](#real-time-feedback-during-beamtime)
-11. [Troubleshooting](#troubleshooting)
+11. [Advanced Plotting & Visualization](#advanced-plotting--visualization)
+12. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -1161,7 +1162,424 @@ APEXA> session save "experiment_2025_10_15"
 
 ---
 
-## 11. Troubleshooting
+## 11. Advanced Plotting & Visualization
+
+### 11.1 Overview
+
+APEXA includes a powerful plotting engine built on matplotlib that creates publication-quality visualizations of your diffraction data. All plots are automatically saved to `~/.apexa/plots/` for easy access.
+
+**What can you plot?**
+- 📸 2D diffraction images (linear and log scale)
+- 📊 Radial intensity profiles with peak detection
+- 📈 1D integrated patterns with peak identification
+- 🔄 Multi-pattern comparisons (overlay multiple datasets)
+
+### 11.2 2D Image Plotting
+
+**Visualize raw 2D diffraction images with dual-scale display.**
+
+#### Basic Usage
+
+```
+APEXA> plot 2d sample.ge5
+```
+
+**Output:**
+```
+📊 Plotting 2D image: sample.ge5
+✓ Plot saved: /home/username/.apexa/plots/sample_2d.png
+  Statistics:
+    Mean: 342.5
+    Max: 65535.0
+    Std: 1234.2
+```
+
+#### What You Get
+
+The plot includes:
+- **Left panel**: Linear scale - See overall intensity distribution
+- **Right panel**: Log scale - Reveal weak features and rings
+- **Colorbars**: Intensity values for both scales
+- **Statistics**: Mean, max, standard deviation of pixel intensities
+
+#### Supported Formats
+
+All detector formats work:
+- TIFF (.tif, .tiff)
+- GE detectors (.ge2, .ge5)
+- Mar detectors (.ed5)
+- ESRF (.edf)
+
+#### Example Use Cases
+
+```
+# Quick visual check before integration
+APEXA> plot 2d data/fresh_sample.ge5
+
+# Compare with reference
+APEXA> plot 2d reference_material.tiff
+
+# Check dark image quality
+APEXA> plot 2d dark_background.ge2
+```
+
+### 11.3 Radial Profile Plotting
+
+**Extract and visualize radial intensity distribution with automatic ring detection.**
+
+#### Basic Usage
+
+```
+APEXA> plot radial sample.ge5
+```
+
+**Output:**
+```
+📊 Plotting radial profile: sample.ge5
+✓ Radial profile plotted with 16 rings detected
+  Plot saved: /home/username/.apexa/plots/sample_radial.png
+```
+
+#### What You Get
+
+- **Radial profile curve**: Average intensity vs. radius from beam center
+- **Peak markers**: Red dots at detected diffraction rings
+- **Ring count**: Number of crystalline phases/d-spacings
+- **Grid overlay**: Easy reading of radius and intensity values
+
+#### How It Works
+
+1. Calculates beam center (assumes image center)
+2. Bins pixels by radial distance
+3. Averages intensity in each radial bin
+4. Detects peaks using scipy signal processing
+5. Marks peaks with prominence > 1 standard deviation
+
+#### Radial Profile Interpretation
+
+**What the peaks tell you:**
+- **Sharp, intense peaks** = Strong crystalline texture
+- **Many peaks** = Multiple phases or polycrystalline
+- **Broad peaks** = Small crystallites or strain
+- **No peaks** = Amorphous material
+
+#### Example Workflow
+
+```
+# Check image quality first
+APEXA> image quality sample.ge5
+# Output: 16 rings detected
+
+# Visualize the rings
+APEXA> plot radial sample.ge5
+# Creates plot showing all 16 rings
+
+# Now integrate to 1D for quantitative analysis
+APEXA> integrate sample.ge5 to 1D using calib.txt
+```
+
+### 11.4 1D Pattern Plotting
+
+**Visualize integrated diffraction patterns with automatic peak detection.**
+
+#### Basic Usage
+
+```
+APEXA> plot 1d pattern.dat
+```
+
+**Output:**
+```
+📊 Plotting 1D pattern: pattern.dat
+✓ 1D pattern plotted with 23 peaks detected
+  Plot saved: /home/username/.apexa/plots/pattern_1d.png
+```
+
+#### What You Get
+
+The plot shows **two panels**:
+- **Top panel**: Linear scale - Overall pattern shape
+- **Bottom panel**: Log scale - Reveals weak peaks
+- **Peak markers**: Red dots at detected Bragg peaks
+- **Smart axis labels**: Automatically detects Q (Å⁻¹) or 2θ (degrees)
+
+#### Input File Formats
+
+APEXA automatically handles:
+
+**Two-column format** (most common):
+```
+# Q(A^-1)  Intensity
+0.5  120.3
+0.51 125.8
+0.52 130.1
+```
+
+**Single-column format** (intensity only):
+```
+120.3
+125.8
+130.1
+```
+
+#### Peak Detection
+
+Peaks are detected using:
+- **Prominence threshold**: 2× standard deviation
+- **Scipy find_peaks**: Robust peak finding
+- **Smart filtering**: Avoids noise spikes
+
+#### Example Use Cases
+
+```
+# View integrated pattern
+APEXA> plot 1d integrated_pattern.dat
+
+# Compare before/after processing
+APEXA> plot 1d raw.chi
+APEXA> plot 1d background_subtracted.chi
+
+# Quick peak count
+APEXA> plot 1d mystery_phase.xy
+# Output: 23 peaks detected → Check against database
+```
+
+### 11.5 Multi-Pattern Comparison
+
+**Overlay multiple 1D patterns to compare samples, temperatures, or time points.**
+
+#### Basic Usage
+
+```
+APEXA> plot compare sample1.dat sample2.dat sample3.dat
+```
+
+**Output:**
+```
+📊 Comparing 3 patterns...
+✓ Comparison plot created for 3 patterns
+  Plot saved: /home/username/.apexa/plots/comparison_3patterns.png
+```
+
+#### What You Get
+
+- **Normalized overlay**: All patterns scaled to same height for comparison
+- **Color-coded**: Each pattern has distinct color from tab10 colormap
+- **Two panels**: Linear (top) and log (bottom) scales
+- **Legend**: Shows file names for each pattern
+- **Aligned axes**: Easy to spot peak shifts
+
+#### Normalization
+
+All patterns are normalized to max=1.0 to enable fair comparison regardless of:
+- Different counting times
+- Different beam intensities
+- Different sample amounts
+
+#### Example: Temperature Series
+
+```
+# Compare phase transitions during heating
+APEXA> plot compare 300K.dat 400K.dat 500K.dat 600K.dat
+```
+
+**What to look for:**
+- **Peak shifts** → Thermal expansion
+- **Peak splitting** → Phase transition
+- **New peaks** → New phase formation
+- **Peak disappearance** → Phase decomposition
+
+#### Example: Time Series During Reaction
+
+```
+# Monitor in-situ reaction
+APEXA> plot compare t0min.dat t5min.dat t10min.dat t15min.dat
+```
+
+**What to look for:**
+- **Reactant peaks decreasing**
+- **Product peaks growing**
+- **Intermediate phases appearing/disappearing**
+
+#### Example: Sample Comparison
+
+```
+# Compare different synthesis conditions
+APEXA> plot compare as_synthesized.dat annealed_500C.dat annealed_800C.dat
+```
+
+### 11.6 Integration with Analysis Workflow
+
+**Plotting works seamlessly with other APEXA features.**
+
+#### Example 1: Monitor + Plot Pipeline
+
+```
+# Start monitoring beamtime
+APEXA> monitor start /data/experiment
+
+# When new file arrives, APEXA automatically analyzes it
+# Then manually plot interesting ones:
+APEXA> plot 2d /data/experiment/sample_0042.ge5
+APEXA> plot radial /data/experiment/sample_0042.ge5
+```
+
+#### Example 2: Batch Integration + Comparison
+
+```
+# Integrate all files in a series
+APEXA> batch integrate *.ge5 with dark.ge5 using calib.txt
+
+# Compare all integrated patterns
+APEXA> plot compare integrated_*.dat
+```
+
+#### Example 3: Image Analysis → Decision → Plot
+
+```
+# Quick quality check
+APEXA> image quality sample.ge5
+# Output: Excellent quality, 18 rings
+
+# Good quality → Worth plotting
+APEXA> plot 2d sample.ge5
+APEXA> plot radial sample.ge5
+
+# Bad quality → Skip and fix collection
+APEXA> image quality bad_sample.ge5
+# Output: Poor quality, saturation issues
+# → Don't waste time plotting, fix detector setup
+```
+
+### 11.7 Customization & Advanced Usage
+
+#### Plot Output Location
+
+All plots are saved to:
+```
+~/.apexa/plots/
+```
+
+**Automatic naming:**
+- 2D plots: `{filename}_2d.png`
+- Radial: `{filename}_radial.png`
+- 1D: `{filename}_1d.png`
+- Comparison: `comparison_{N}patterns.png`
+
+#### Resolution
+
+All plots are saved at **150 DPI** - suitable for:
+- ✅ PowerPoint presentations
+- ✅ Lab notebooks
+- ✅ Quick figures for papers
+- ⚠️  For publication, you may want to re-generate at 300+ DPI
+
+#### File Formats
+
+Currently saves as **PNG** (portable, universal).
+
+Future versions may support:
+- PDF (vector graphics)
+- SVG (editable in Inkscape/Illustrator)
+- EPS (LaTeX compatibility)
+
+### 11.8 Tips & Best Practices
+
+#### ✅ DO
+
+- **Plot 2D first** - Visual check before integration
+- **Use radial plots** - Quick ring count and quality assessment
+- **Compare normalized** - Use `plot compare` for multiple samples
+- **Check both scales** - Linear and log reveal different features
+- **Save important plots** - Copy from `~/.apexa/plots/` to your results folder
+
+#### ❌ DON'T
+
+- **Don't plot without checking quality** - Use `image quality` first
+- **Don't compare too many** - More than 5-6 patterns gets cluttered
+- **Don't ignore log scale** - Weak features often matter!
+- **Don't forget to organize** - Plots accumulate quickly in `~/.apexa/plots/`
+
+### 11.9 Troubleshooting Plots
+
+#### "Error: File not found"
+
+```
+# Make sure file path is correct
+APEXA> plot 2d /full/path/to/sample.ge5
+
+# Or navigate to directory first
+APEXA> cd /data/experiment
+APEXA> plot 2d sample.ge5
+```
+
+#### "Error: Could not load image"
+
+- **Check format**: APEXA supports TIFF, GE2, GE5, ED5, EDF
+- **Check corruption**: Try opening in ImageJ or fabio
+- **Check permissions**: Ensure file is readable
+
+#### "No peaks detected"
+
+This is normal for:
+- Amorphous materials
+- Very weak diffraction
+- Highly textured samples (rings not visible radially)
+
+#### Plot window not showing?
+
+Plots are **saved automatically**, you don't need to see the window.
+
+Check: `~/.apexa/plots/{filename}.png`
+
+### 11.10 Example Session: Complete Analysis with Plotting
+
+```
+# 1. Check image quality
+APEXA> image quality sample_RT.ge5
+   → Excellent quality, 16 rings, SNR: 45.3
+
+# 2. Visualize the 2D pattern
+APEXA> plot 2d sample_RT.ge5
+   → Saved to ~/.apexa/plots/sample_RT_2d.png
+
+# 3. Check radial distribution
+APEXA> plot radial sample_RT.ge5
+   → 16 rings detected and plotted
+
+# 4. Integrate to 1D
+APEXA> integrate sample_RT.ge5 with dark_RT.ge5 using calib.txt
+   → Created sample_RT_integrated.dat
+
+# 5. Plot 1D pattern
+APEXA> plot 1d sample_RT_integrated.dat
+   → 23 peaks detected and marked
+
+# 6. Heat sample and repeat
+APEXA> integrate sample_500C.ge5 with dark_RT.ge5 using calib.txt
+APEXA> integrate sample_800C.ge5 with dark_RT.ge5 using calib.txt
+
+# 7. Compare temperature series
+APEXA> plot compare sample_RT_integrated.dat sample_500C_integrated.dat sample_800C_integrated.dat
+   → Comparison shows peak shift from thermal expansion!
+
+# 8. Save plots to paper folder
+APEXA> run bash cp ~/.apexa/plots/comparison_3patterns.png ~/paper/figures/
+```
+
+### 11.11 Benefits
+
+✅ **Fast visualization** - No need to open separate software
+✅ **Automatic peak detection** - Don't miss important features
+✅ **Dual-scale display** - See both strong and weak features
+✅ **Publication-ready** - 150 DPI PNG files
+✅ **Integrated workflow** - Plot directly from APEXA prompt
+✅ **Batch-friendly** - Easy to compare multiple patterns
+✅ **Non-destructive** - Original data files never modified
+
+---
+
+## 12. Troubleshooting
 
 ### Session not loading?
 

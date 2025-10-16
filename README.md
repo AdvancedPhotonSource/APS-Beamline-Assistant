@@ -37,6 +37,8 @@ AI-powered beamline scientist for synchrotron X-ray diffraction analysis at Argo
 ```
 APEXA> integrate the .tiff file from 2D to 1D
 APEXA> integrate data.ge5 with dark file dark.ge5 using calib.txt
+APEXA> plot 2d sample.ge5
+APEXA> plot radial data.tiff
 APEXA> run FF-HEDM workflow on /data/experiment
 APEXA> list files in /data
 APEXA> read the Parameters.txt file there
@@ -45,6 +47,7 @@ APEXA> read the Parameters.txt file there
 ### ✨ Smart Features
 
 - **🔍 Multimodal Image Analysis**: AI can "see" and analyze your diffraction images directly
+- **📈 Advanced Plotting**: 2D images, radial profiles, 1D patterns, multi-pattern comparisons
 - **🔄 Real-time Monitoring**: Automatic alerts during beamtime for quality issues
 - **📦 Batch Processing**: Process hundreds of files with one command
 - **🛡️ Error Prevention**: Validate parameters before execution
