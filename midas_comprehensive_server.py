@@ -2206,6 +2206,225 @@ async def identify_crystalline_phases(
     except Exception as e:
         return format_result({"error": str(e), "status": "error"})
 
+@mcp.tool()
+async def midas_auto_calibrate(
+    image_file: str,
+    parameters_file: str,
+    dark_file: str = "",
+    lsd_guess: float = 1000000.0,
+    bc_x_guess: float = 0.0,
+    bc_y_guess: float = 0.0,
+    make_plots: int = 1,
+    stopping_strain: float = 0.003
+) -> str:
+    """Auto-calibrate detector using MIDAS with calibrant (CeO2, LaB6, etc.).
+
+    This tool uses MIDAS's AutoCalibrateZarr.py to automatically find:
+    - Beam center (BC_X, BC_Y)
+    - Sample-to-detector distance (Lsd)
+    - Detector tilt angles (tx, ty, tz)
+
+    Args:
+        image_file: Path to calibrant image (.tif, .tiff, .ge2, .ge5, .h5, .zarr.zip)
+        parameters_file: MIDAS parameters file with SpaceGroup, LatticeParameter, Wavelength, etc.
+        dark_file: Optional dark image for background subtraction
+        lsd_guess: Initial guess for detector distance in mm (default: 1000000 = auto-detect)
+        bc_x_guess: Initial guess for beam center X in pixels (default: 0 = image center)
+        bc_y_guess: Initial guess for beam center Y in pixels (default: 0 = image center)
+        make_plots: Generate diagnostic plots (1=yes, 0=no)
+        stopping_strain: Convergence criterion - stop when pseudo-strain < this value
+
+    Returns:
+        JSON with calibrated parameters (beam center, distance, tilts)
+
+    Example:
+        Auto-calibrate CeO2 standard at 71keV:
+        {
+            "image_file": "CeO2_calibrant.tif",
+            "parameters_file": "Parameters.txt",
+            "lsd_guess": 2000.0,
+            "stopping_strain": 0.003
+        }
+
+    Parameter File Format:
+        SpaceGroup 225              # CeO2 = 225 (cubic)
+        LatticeParameter 5.411      # CeO2 lattice in Angstroms
+        Wavelength 0.1741           # 71 keV = 0.1741 Angstrom
+        px 200                      # Pixel size in microns
+        SkipFrame 0
+    """
+    try:
+        if not MIDAS_AVAILABLE:
+            return format_result({
+                "tool": "midas_auto_calibrate",
+                "status": "error",
+                "error": "MIDAS installation not found"
+            })
+
+        # Locate AutoCalibrateZarr.py
+        autocal_script = MIDAS_ROOT / "utils" / "AutoCalibrateZarr.py"
+        if not autocal_script.exists():
+            return format_result({
+                "tool": "midas_auto_calibrate",
+                "status": "error",
+                "error": f"AutoCalibrateZarr.py not found at {autocal_script}"
+            })
+
+        # Expand paths
+        image_path = Path(image_file).expanduser().absolute()
+        param_path = Path(parameters_file).expanduser().absolute()
+
+        if not image_path.exists():
+            return format_result({
+                "tool": "midas_auto_calibrate",
+                "status": "error",
+                "error": f"Image file not found: {image_path}"
+            })
+
+        if not param_path.exists():
+            return format_result({
+                "tool": "midas_auto_calibrate",
+                "status": "error",
+                "error": f"Parameters file not found: {param_path}"
+            })
+
+        # Determine file type for ConvertFile flag
+        suffix = image_path.suffix.lower()
+        if suffix in ['.zip'] and 'zarr' in image_path.name.lower():
+            convert_file = 0  # Already zarr zip
+        elif suffix in ['.h5', '.hdf5']:
+            convert_file = 1  # HDF5
+        elif suffix in ['.ge2', '.ge3', '.ge4', '.ge5']:
+            convert_file = 2  # GE binary
+        elif suffix in ['.tif', '.tiff']:
+            convert_file = 3  # TIFF
+        else:
+            return format_result({
+                "tool": "midas_auto_calibrate",
+                "status": "error",
+                "error": f"Unsupported file format: {suffix}"
+            })
+
+        # Build command
+        cmd = [
+            sys.executable,
+            str(autocal_script),
+            "-dataFN", str(image_path),
+            "-paramFN", str(param_path),
+            "-ConvertFile", str(convert_file),
+            "-MakePlots", str(make_plots),
+            "-StoppingStrain", str(stopping_strain)
+        ]
+
+        # Add optional parameters
+        if dark_file:
+            dark_path = Path(dark_file).expanduser().absolute()
+            if dark_path.exists():
+                cmd.extend(["-darkFN", str(dark_path)])
+
+        if lsd_guess < 1000000:  # User provided a real guess
+            cmd.extend(["-LsdGuess", str(lsd_guess)])
+
+        if bc_x_guess != 0.0 or bc_y_guess != 0.0:
+            cmd.extend(["-BCGuess", str(bc_x_guess), str(bc_y_guess)])
+
+        # Add bad pixel and gap intensity defaults
+        cmd.extend(["-BadPxIntensity", "-2"])
+        cmd.extend(["-GapIntensity", "-1"])
+
+        # Run calibration
+        result = subprocess.run(
+            cmd,
+            cwd=str(image_path.parent),
+            capture_output=True,
+            text=True,
+            timeout=600  # 10 minute timeout
+        )
+
+        if result.returncode != 0:
+            return format_result({
+                "tool": "midas_auto_calibrate",
+                "status": "error",
+                "error": f"Calibration failed with code {result.returncode}",
+                "stderr": result.stderr,
+                "stdout": result.stdout
+            })
+
+        # Parse output for calibrated parameters
+        output = result.stdout
+
+        # Look for calibrated parameters in output
+        calibrated_params = {
+            "bc_x": None,
+            "bc_y": None,
+            "lsd": None,
+            "tx": None,
+            "ty": None,
+            "tz": None,
+            "final_strain": None
+        }
+
+        # Parse the output (AutoCalibrateZarr prints results)
+        for line in output.split('\n'):
+            if 'BC' in line and 'pixels' in line:
+                parts = line.split()
+                if len(parts) >= 3:
+                    try:
+                        calibrated_params['bc_x'] = float(parts[1])
+                        calibrated_params['bc_y'] = float(parts[2])
+                    except:
+                        pass
+            elif 'Lsd' in line or 'Distance' in line:
+                parts = line.split()
+                for i, part in enumerate(parts):
+                    if part.replace('.','').replace('-','').isdigit():
+                        try:
+                            calibrated_params['lsd'] = float(part)
+                            break
+                        except:
+                            pass
+            elif 'strain' in line.lower():
+                parts = line.split()
+                for part in parts:
+                    if part.replace('.','').replace('-','').replace('e','').isdigit():
+                        try:
+                            calibrated_params['final_strain'] = float(part)
+                        except:
+                            pass
+
+        # Look for generated zarr file
+        zarr_file = None
+        for f in image_path.parent.glob("*.zarr.zip"):
+            if f.stat().st_mtime > (image_path.stat().st_mtime - 60):  # Created recently
+                zarr_file = str(f)
+                break
+
+        return format_result({
+            "tool": "midas_auto_calibrate",
+            "status": "success",
+            "image_file": str(image_path),
+            "parameters_file": str(param_path),
+            "calibrated_parameters": calibrated_params,
+            "zarr_file": zarr_file,
+            "convergence_achieved": calibrated_params['final_strain'] is not None and
+                                   calibrated_params['final_strain'] < stopping_strain if calibrated_params['final_strain'] else False,
+            "output": output,
+            "message": "Auto-calibration completed. Check calibrated_parameters for beam center, distance, and tilts."
+        })
+
+    except subprocess.TimeoutExpired:
+        return format_result({
+            "tool": "midas_auto_calibrate",
+            "status": "error",
+            "error": "Calibration timed out (>10 minutes)"
+        })
+    except Exception as e:
+        return format_result({
+            "tool": "midas_auto_calibrate",
+            "status": "error",
+            "error": str(e)
+        })
+
 # =============================================================================
 # SERVER MAIN
 # =============================================================================
@@ -2237,6 +2456,7 @@ if __name__ == "__main__":
     print("  - validate_midas_installation", file=sys.stderr)
     print("  - get_midas_workflow_status", file=sys.stderr)
     print("\nBasic Analysis:", file=sys.stderr)
+    print("  - midas_auto_calibrate", file=sys.stderr)
     print("  - detect_diffraction_rings", file=sys.stderr)
     print("  - integrate_2d_to_1d", file=sys.stderr)
     print("  - identify_crystalline_phases", file=sys.stderr)
