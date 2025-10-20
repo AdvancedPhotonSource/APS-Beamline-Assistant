@@ -1,0 +1,86 @@
+# Detector Calibration Parameters for CeO2
+# E = 71 keV, Initial Distance = 7000 mm
+# Auto-generated for MIDAS calibration
+
+# ============================================================================
+# CALIBRANT MATERIAL - CeO2 (Ceria)
+# ============================================================================
+LatticeConstant 5.41134 5.41134 5.41134 90 90 90
+SpaceGroup 225
+
+# ============================================================================
+# INITIAL DETECTOR GEOMETRY
+# ============================================================================
+# Sample-to-detector distance (microns) - initial guess 7000 mm = 7,000,000 microns
+Lsd 7000000.0
+
+# Beam center position (pixels) - initial guess at image center
+BC 1447.5 1447.5
+
+# Detector tilt angles (degrees) - start with 0
+tx 0.0
+ty 0.0
+tz 0.0
+
+# Distortion parameters
+p0 0.0
+p1 0.0
+p2 0.0
+
+# ============================================================================
+# DETECTOR SPECIFICATIONS
+# ============================================================================
+# Image size
+NrPixels 2895
+
+# Pixel size (microns) - typical for GE detectors, adjust if known
+px 200.0
+
+# ============================================================================
+# EXPERIMENTAL SETUP
+# ============================================================================
+# X-ray wavelength for 71 keV
+# E(keV) = 12.398 / λ(Å)
+# λ = 12.398 / 71 = 0.1746 Å
+Wavelength 0.1746
+
+# Sample rotation parameters
+Wedge 0.0
+OmegaStep 0.5
+BeamThickness 200
+
+# Omega range for calibration
+NOmegaRanges 1
+OmegaRange_0_Start 0
+OmegaRange_0_End 90
+
+# ============================================================================
+# CALIBRATION SETTINGS
+# ============================================================================
+# Parameters to refine
+RefineLsd 1
+RefineBC 1
+RefineTilt 1
+RefineWedge 0
+
+# Calibration method (2 = full geometry optimization)
+CalibrationMethod 2
+
+# Use at least 5 CeO2 rings
+MinCalibrationRings 5
+
+# Maximum 2theta for calibration
+Max2Theta 30.0
+
+# ============================================================================
+# OUTPUT
+# ============================================================================
+CalibratedParamsFile Parameters_calibrated.txt
+SaveCalibrationReport 1
+PlotCalibration 1
+
+# ============================================================================
+# PROCESSING OPTIONS
+# ============================================================================
+UseOMP 1
+nCPUs 4

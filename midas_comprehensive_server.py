@@ -1920,23 +1920,32 @@ async def integrate_2d_to_1d(
     dark_file: str = None,
     output_file: str = None
 ) -> str:
-    """Integrate 2D diffraction image to 1D pattern using MIDAS Integrator or pyFAI.
+    """Integrate 2D diffraction image to 1D pattern using MIDAS Integrator.
 
     Converts a 2D detector image into a 1D azimuthally-integrated intensity vs. 2θ pattern.
+    Uses MIDAS's native Integrator executable (not pyFAI) for consistency with MIDAS workflows.
     Supports dark image subtraction and various detector formats (TIFF, GE2/GE5, ED5, EDF).
 
     Args:
         image_path: Path to 2D diffraction image (.tiff, .ge2, .ge5, .ed5, .edf)
-        calibration_file: Optional calibration/parameter file with detector geometry
-        wavelength: X-ray wavelength in Angstroms (if not in calibration file)
-        detector_distance: Sample-to-detector distance in mm (if not in calibration file)
-        beam_center_x: Beam center X coordinate in pixels (if not in calibration file)
-        beam_center_y: Beam center Y coordinate in pixels (if not in calibration file)
+        calibration_file: MIDAS parameters file with detector geometry (wavelength, distance, BC, etc.)
+        wavelength: X-ray wavelength in Angstroms (creates temp param file if calibration_file not provided)
+        detector_distance: Sample-to-detector distance in mm
+        beam_center_x: Beam center X coordinate in pixels
+        beam_center_y: Beam center Y coordinate in pixels
         dark_file: Optional dark image file for background subtraction (.tiff, .ge2, .ge5, .ed5)
         output_file: Output filename for 1D pattern (default: image_name_1d.dat)
 
     Returns:
-        JSON with integration results and 1D pattern statistics
+        JSON with integration results using MIDAS Integrator
+
+    Example:
+        With calibration file from midas_auto_calibrate:
+        integrate_2d_to_1d("CeO2.tif", "ParametersCalibrated.txt", dark_file="dark.tif")
+
+        Or provide parameters directly:
+        integrate_2d_to_1d("CeO2.tif", wavelength=0.1741, detector_distance=1998.5,
+                          beam_center_x=1450, beam_center_y=1426)
     """
     try:
         image_path = Path(image_path).expanduser().absolute()
@@ -1954,185 +1963,122 @@ async def integrate_2d_to_1d(
 
         output_path = image_path.parent / output_file
 
-        # Try using pyFAI if available (faster and more flexible)
-        if MIDAS_PYTHON_AVAILABLE:
-            try:
-                import fabio
-                import pyFAI
-                try:
-                    from pyFAI.integrator.azimuthal import AzimuthalIntegrator
-                except ImportError:
-                    from pyFAI.azimuthalIntegrator import AzimuthalIntegrator  # fallback for older versions
-
-                # Load image
-                img = fabio.open(str(image_path))
-                data = img.data.astype(float)  # Convert to float for dark subtraction
-
-                # Load and subtract dark image if provided
-                if dark_file:
-                    dark_path = Path(dark_file).expanduser().absolute()
-                    if not dark_path.exists():
-                        return format_result({
-                            "tool": "integrate_2d_to_1d",
-                            "status": "error",
-                            "error": f"Dark file not found: {dark_path}"
-                        })
-
-                    try:
-                        dark_img = fabio.open(str(dark_path))
-                        dark_data = dark_img.data.astype(float)
-
-                        # Verify dimensions match
-                        if data.shape != dark_data.shape:
-                            return format_result({
-                                "tool": "integrate_2d_to_1d",
-                                "status": "error",
-                                "error": f"Image and dark file dimensions don't match: {data.shape} vs {dark_data.shape}"
-                            })
-
-                        # Subtract dark image
-                        data = data - dark_data
-
-                        # Clip negative values to zero
-                        data = np.clip(data, 0, None)
-
-                    except Exception as e:
-                        return format_result({
-                            "tool": "integrate_2d_to_1d",
-                            "status": "error",
-                            "error": f"Failed to load/subtract dark file: {str(e)}"
-                        })
-
-                # Setup integrator
-                ai = AzimuthalIntegrator()
-
-                # Load calibration or use provided parameters
-                if calibration_file:
-                    cal_path = Path(calibration_file).expanduser()
-                    if cal_path.exists():
-                        ai.load(str(cal_path))
-                    else:
-                        return format_result({
-                            "tool": "integrate_2d_to_1d",
-                            "status": "error",
-                            "error": f"Calibration file not found: {cal_path}"
-                        })
-                else:
-                    # Use provided parameters
-                    if (wavelength is not None and detector_distance is not None and
-                        beam_center_x is not None and beam_center_y is not None):
-                        # Convert to pyFAI units
-                        ai.wavelength = wavelength * 1e-10  # Angstrom to meters
-                        ai.dist = detector_distance / 1000.0  # mm to meters
-
-                        # For GE detectors, pixel size is typically 200 microns
-                        pixel_size = 200e-6  # 200 microns in meters
-                        ai.pixel1 = pixel_size  # pixel size in meters (dimension 1)
-                        ai.pixel2 = pixel_size  # pixel size in meters (dimension 2)
-
-                        # PONI points are in meters from corner
-                        ai.poni1 = beam_center_y * pixel_size
-                        ai.poni2 = beam_center_x * pixel_size
-                    else:
-                        return format_result({
-                            "tool": "integrate_2d_to_1d",
-                            "status": "error",
-                            "error": "Either calibration_file or all geometry parameters (wavelength, detector_distance, beam_center_x, beam_center_y) must be provided"
-                        })
-
-                # Perform integration
-                result = ai.integrate1d(data, npt=2048, unit="2th_deg")
-                two_theta = result[0]  # 2theta in degrees
-                intensity = result[1]
-
-                # Save to file
-                with open(output_path, 'w') as f:
-                    f.write("# 2D to 1D integration using pyFAI\n")
-                    f.write(f"# Source: {image_path.name}\n")
-                    if dark_file:
-                        f.write(f"# Dark file: {Path(dark_file).name} (subtracted)\n")
-                    f.write("# 2theta(deg)  Intensity\n")
-                    for tth, I in zip(two_theta, intensity):
-                        f.write(f"{tth:.4f}  {I:.2f}\n")
-
-                # Calculate statistics
-                peak_intensity = float(np.max(intensity))
-                background = float(np.percentile(intensity, 10))
-                signal_to_noise = peak_intensity / background if background > 0 else 0
-
-                # Find approximate peak positions
-                from scipy.signal import find_peaks
-                peaks, properties = find_peaks(intensity, height=background*3, distance=10)
-                peak_positions = [float(two_theta[p]) for p in peaks[:10]]  # Top 10 peaks
-
-                dark_msg = f" (with dark subtraction from {Path(dark_file).name})" if dark_file else ""
-                return format_result({
-                    "tool": "integrate_2d_to_1d",
-                    "status": "success",
-                    "method": "pyFAI",
-                    "input_image": str(image_path),
-                    "dark_file": str(dark_file) if dark_file else None,
-                    "output_file": str(output_path),
-                    "integration_parameters": {
-                        "wavelength_angstrom": wavelength,
-                        "detector_distance_mm": detector_distance,
-                        "beam_center": [beam_center_x, beam_center_y] if beam_center_x else None,
-                        "calibration_file": calibration_file,
-                        "dark_subtraction": bool(dark_file)
-                    },
-                    "pattern_statistics": {
-                        "n_points": len(two_theta),
-                        "2theta_range_deg": [float(two_theta[0]), float(two_theta[-1])],
-                        "peak_intensity": peak_intensity,
-                        "background_level": background,
-                        "signal_to_noise": signal_to_noise,
-                        "peak_positions_deg": peak_positions
-                    },
-                    "message": f"Successfully integrated {image_path.name} to 1D pattern{dark_msg} with {len(peak_positions)} peaks detected"
-                })
-
-            except ImportError:
-                pass  # Fall through to MIDAS Integrator
-            except Exception as e:
-                return format_result({
-                    "tool": "integrate_2d_to_1d",
-                    "status": "error",
-                    "method": "pyFAI",
-                    "error": f"pyFAI integration failed: {str(e)}"
-                })
-
-        # Fallback: Use MIDAS Integrator executable
-        if calibration_file:
-            cal_path = Path(calibration_file).expanduser()
+        # Primary method: Use MIDAS Integrator (preferred for consistency with MIDAS workflow)
+        if MIDAS_AVAILABLE and calibration_file:
+            cal_path = Path(calibration_file).expanduser().absolute()
             if not cal_path.exists():
                 return format_result({
                     "tool": "integrate_2d_to_1d",
                     "status": "error",
-                    "error": f"Calibration file not found: {cal_path}"
+                    "error": f"Parameters file not found: {cal_path}"
                 })
 
+            # Locate MIDAS Integrator executable
+            integrator_exe = MIDAS_ROOT / "FF_HEDM" / "bin" / "Integrator"
+            if not integrator_exe.exists():
+                return format_result({
+                    "tool": "integrate_2d_to_1d",
+                    "status": "error",
+                    "error": f"MIDAS Integrator not found at {integrator_exe}"
+                })
+
+            # Build command: Integrator ParamFN ImageName (optional)DarkName
+            cmd = [str(integrator_exe), str(cal_path), str(image_path)]
+
+            # Add dark file if provided
+            if dark_file:
+                dark_path = Path(dark_file).expanduser().absolute()
+                if not dark_path.exists():
+                    return format_result({
+                        "tool": "integrate_2d_to_1d",
+                        "status": "error",
+                        "error": f"Dark file not found: {dark_path}"
+                    })
+                cmd.append(str(dark_path))
+
             # Run MIDAS Integrator
-            result = run_midas_executable(
-                "Integrator",
-                str(cal_path),
-                cwd=str(image_path.parent),
-                timeout=300
+            try:
+                result = subprocess.run(
+                    cmd,
+                    cwd=str(image_path.parent),
+                    capture_output=True,
+                    text=True,
+                    timeout=300  # 5 minute timeout
+                )
+
+                if result.returncode != 0:
+                    return format_result({
+                        "tool": "integrate_2d_to_1d",
+                        "status": "error",
+                        "method": "MIDAS Integrator",
+                        "error": f"Integration failed with code {result.returncode}",
+                        "stderr": result.stderr,
+                        "stdout": result.stdout
+                    })
+
+                # MIDAS Integrator creates output files in the working directory
+                # Look for generated 1D pattern file
+                output_1d = None
+                for pattern in ["*_1d.txt", "*_integ.dat", "*_integrated.dat"]:
+                    matches = list(image_path.parent.glob(pattern))
+                    if matches:
+                        # Find most recent
+                        output_1d = max(matches, key=lambda p: p.stat().st_mtime)
+                        break
+
+                dark_msg = f" with dark subtraction from {Path(dark_file).name}" if dark_file else ""
+
+                return format_result({
+                    "tool": "integrate_2d_to_1d",
+                    "status": "success",
+                    "method": "MIDAS Integrator",
+                    "input_image": str(image_path),
+                    "parameters_file": str(cal_path),
+                    "dark_file": str(dark_file) if dark_file else None,
+                    "output_file": str(output_1d) if output_1d else "Check working directory for output",
+                    "stdout": result.stdout,
+                    "message": f"Successfully integrated {image_path.name} using MIDAS Integrator{dark_msg}"
+                })
+
+            except subprocess.TimeoutExpired:
+                return format_result({
+                    "tool": "integrate_2d_to_1d",
+                    "status": "error",
+                    "error": "Integration timed out (>5 minutes)"
+                })
+            except Exception as e:
+                return format_result({
+                    "tool": "integrate_2d_to_1d",
+                    "status": "error",
+                    "method": "MIDAS Integrator",
+                    "error": str(e)
+                })
+
+        # If no calibration file, create one from provided parameters
+        elif wavelength is not None and detector_distance is not None and beam_center_x is not None and beam_center_y is not None:
+            # Create temporary MIDAS parameters file
+            temp_params = image_path.parent / "temp_integration_params.txt"
+
+            with open(temp_params, 'w') as f:
+                f.write(f"Wavelength {wavelength}\n")
+                f.write(f"Distance {detector_distance}\n")
+                f.write(f"BC {beam_center_y} {beam_center_x}\n")  # MIDAS uses Y X order
+                f.write(f"px 200\n")  # Default GE detector pixel size
+                f.write(f"SpaceGroup 1\n")  # Generic
+
+            # Recursively call with the temp parameters file
+            return await integrate_2d_to_1d(
+                image_path=str(image_path),
+                calibration_file=str(temp_params),
+                dark_file=dark_file,
+                output_file=output_file
             )
 
-            return format_result({
-                "tool": "integrate_2d_to_1d",
-                "status": "completed" if result["success"] else "failed",
-                "method": "MIDAS Integrator",
-                "input_image": str(image_path),
-                "calibration_file": str(cal_path),
-                "execution": result,
-                "message": "Check output files in the same directory as input image"
-            })
         else:
             return format_result({
                 "tool": "integrate_2d_to_1d",
                 "status": "error",
-                "error": "Calibration file required for MIDAS Integrator method. Alternatively, provide all geometry parameters for pyFAI."
+                "error": "Either parameters_file or all geometry parameters (wavelength, detector_distance, beam_center_x, beam_center_y) must be provided"
             })
 
     except Exception as e:
