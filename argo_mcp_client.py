@@ -1465,23 +1465,44 @@ TOOL_CALL: midas_integrate_2d_to_1d
 ARGUMENTS: {"image_path": "/path/data.ge5", "calibration_file": "/path/calib.txt", "dark_file": "/path/dark.ge5"}
 "
 
-🔧 AVAILABLE TOOLS:
-- midas_identify_crystalline_phases
-  Args: {"peak_positions": [12.5, 18.2]}
-- midas_run_ff_hedm_full_workflow
-  Args: {"example_dir": "~/path", "n_cpus": 20}
-- midas_detect_diffraction_rings
-  Args: {"image_path": "/path/image.tif"}
-- midas_integrate_2d_to_1d
+🔧 AVAILABLE TOOLS (MIDAS-NATIVE WORKFLOW):
+
+⚠️  CRITICAL: Use MIDAS tools (not pyFAI) for calibration and integration!
+
+- midas_auto_calibrate ⭐ NEW - Auto-calibrate detector with calibrant
+  Args: {"image_path": "CeO2.tif", "parameters_file": "Params.txt", "lsd_guess": 2000, "bc_x_guess": 1450, "bc_y_guess": 1426}
+  Uses: MIDAS AutoCalibrateZarr.py → CalibrantOMP executable
+  Returns: Refined beam center, distance, tilt angles
+
+- midas_integrate_2d_to_1d ⭐ UPDATED - Now uses MIDAS Integrator (not pyFAI!)
   Args: {"image_path": "/path/image.tif", "calibration_file": "calib.txt"}
   Or: {"image_path": "/path/image.tif", "wavelength": 0.22, "detector_distance": 1000, "beam_center_x": 1024, "beam_center_y": 1024}
   With dark subtraction: {"image_path": "/path/image.tif", "calibration_file": "calib.txt", "dark_file": "/path/dark.tif"}
+  Uses: MIDAS Integrator executable (native MIDAS workflow)
+
+- midas_identify_crystalline_phases
+  Args: {"peak_positions": [12.5, 18.2]}
+
+- midas_run_ff_hedm_full_workflow
+  Args: {"example_dir": "~/path", "n_cpus": 20}
+
+- midas_detect_diffraction_rings
+  Args: {"image_path": "/path/image.tif"}
+
 - filesystem_read_file
   Args: {"file_path": "/path/file"}
+
 - filesystem_list_directory
   Args: {"path": "/path/dir"}
+
 - executor_run_command
   Args: {"command": "ls -la"}
+
+📊 TYPICAL MIDAS WORKFLOW:
+1. Auto-calibrate with standard (CeO2, LaB6): midas_auto_calibrate
+2. Get refined parameters (BC, distance, tilts)
+3. Integrate 2D → 1D with calibrated params: midas_integrate_2d_to_1d
+4. Analyze 1D pattern in GSAS-II or identify phases
 
 ⚠️ REMEMBER:
 - ALWAYS use "TOOL_CALL:" and "ARGUMENTS:" format
