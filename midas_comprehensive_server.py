@@ -2288,10 +2288,19 @@ async def midas_auto_calibrate(
         )
 
         if result.returncode != 0:
+            error_msg = f"Calibration failed with code {result.returncode}"
+
+            # Check for common issues
+            if "ModuleNotFoundError" in result.stderr or "ImportError" in result.stderr:
+                error_msg += "\n\nMissing Python dependencies for MIDAS AutoCalibrateZarr.py"
+                error_msg += "\nRequired: zarr, numpy, scipy, diplib, matplotlib, pandas, plotly, h5py, numba"
+                error_msg += "\n\nOn beamline computers, ensure MIDAS Python environment is activated."
+                error_msg += "\nFor local testing: pip install zarr numpy scipy diplib matplotlib pandas plotly h5py numba"
+
             return format_result({
                 "tool": "midas_auto_calibrate",
                 "status": "error",
-                "error": f"Calibration failed with code {result.returncode}",
+                "error": error_msg,
                 "stderr": result.stderr,
                 "stdout": result.stdout
             })
