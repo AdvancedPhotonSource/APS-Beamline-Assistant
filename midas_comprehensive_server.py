@@ -2296,10 +2296,10 @@ async def midas_auto_calibrate(
                 "stdout": result.stdout
             })
 
-        # Parse output for calibrated parameters
+        # Read the calibrated parameters from refined_MIDAS_params.txt
         output = result.stdout
+        refined_params_file = image_path.parent / "refined_MIDAS_params.txt"
 
-        # Look for calibrated parameters in output
         calibrated_params = {
             "bc_x": None,
             "bc_y": None,
@@ -2307,36 +2307,63 @@ async def midas_auto_calibrate(
             "tx": None,
             "ty": None,
             "tz": None,
-            "final_strain": None
+            "p0": None,
+            "p1": None,
+            "p2": None,
+            "p3": None,
+            "wavelength": None,
+            "px": None
         }
 
-        # Parse the output (AutoCalibrateZarr prints results)
+        if refined_params_file.exists():
+            # Parse the refined parameters file
+            with open(refined_params_file, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith('#'):
+                        continue
+
+                    parts = line.split()
+                    if len(parts) < 2:
+                        continue
+
+                    key = parts[0]
+                    if key == 'BC':
+                        # BC format: "BC y x" (MIDAS uses Y X order)
+                        if len(parts) >= 3:
+                            calibrated_params['bc_y'] = float(parts[1])
+                            calibrated_params['bc_x'] = float(parts[2])
+                    elif key == 'Lsd':
+                        calibrated_params['lsd'] = float(parts[1])
+                    elif key == 'tx':
+                        calibrated_params['tx'] = float(parts[1])
+                    elif key == 'ty':
+                        calibrated_params['ty'] = float(parts[1])
+                    elif key == 'tz':
+                        calibrated_params['tz'] = float(parts[1])
+                    elif key == 'p0':
+                        calibrated_params['p0'] = float(parts[1])
+                    elif key == 'p1':
+                        calibrated_params['p1'] = float(parts[1])
+                    elif key == 'p2':
+                        calibrated_params['p2'] = float(parts[1])
+                    elif key == 'p3':
+                        calibrated_params['p3'] = float(parts[1])
+                    elif key == 'Wavelength':
+                        calibrated_params['wavelength'] = float(parts[1])
+                    elif key == 'px':
+                        calibrated_params['px'] = float(parts[1])
+
+        # Also parse mean strain from stdout for convergence info
+        mean_strain = None
         for line in output.split('\n'):
-            if 'BC' in line and 'pixels' in line:
-                parts = line.split()
-                if len(parts) >= 3:
+            if 'Mean Strain:' in line:
+                parts = line.split(':')
+                if len(parts) == 2:
                     try:
-                        calibrated_params['bc_x'] = float(parts[1])
-                        calibrated_params['bc_y'] = float(parts[2])
+                        mean_strain = float(parts[1].strip())
                     except:
                         pass
-            elif 'Lsd' in line or 'Distance' in line:
-                parts = line.split()
-                for i, part in enumerate(parts):
-                    if part.replace('.','').replace('-','').isdigit():
-                        try:
-                            calibrated_params['lsd'] = float(part)
-                            break
-                        except:
-                            pass
-            elif 'strain' in line.lower():
-                parts = line.split()
-                for part in parts:
-                    if part.replace('.','').replace('-','').replace('e','').isdigit():
-                        try:
-                            calibrated_params['final_strain'] = float(part)
-                        except:
-                            pass
 
         # Look for generated zarr file
         zarr_file = None
@@ -2345,17 +2372,21 @@ async def midas_auto_calibrate(
                 zarr_file = str(f)
                 break
 
+        # Check convergence
+        convergence_achieved = mean_strain is not None and mean_strain < stopping_strain if mean_strain else False
+
         return format_result({
             "tool": "midas_auto_calibrate",
             "status": "success",
             "image_file": str(image_path),
-            "parameters_file": str(param_path),
+            "input_parameters_file": str(param_path),
+            "calibrated_parameters_file": str(refined_params_file) if refined_params_file.exists() else None,
             "calibrated_parameters": calibrated_params,
+            "mean_strain": mean_strain,
+            "convergence_achieved": convergence_achieved,
             "zarr_file": zarr_file,
-            "convergence_achieved": calibrated_params['final_strain'] is not None and
-                                   calibrated_params['final_strain'] < stopping_strain if calibrated_params['final_strain'] else False,
-            "output": output,
-            "message": "Auto-calibration completed. Check calibrated_parameters for beam center, distance, and tilts."
+            "stdout": output,
+            "message": f"Auto-calibration completed! Beam center: ({calibrated_params['bc_x']}, {calibrated_params['bc_y']}), Distance: {calibrated_params['lsd']} mm. Parameters saved to refined_MIDAS_params.txt"
         })
 
     except subprocess.TimeoutExpired:
