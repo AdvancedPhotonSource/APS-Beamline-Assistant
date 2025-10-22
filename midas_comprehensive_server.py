@@ -2161,7 +2161,8 @@ async def midas_auto_calibrate(
     bc_x_guess: float = 0.0,
     bc_y_guess: float = 0.0,
     make_plots: int = 1,
-    stopping_strain: float = 0.003
+    stopping_strain: float = 0.003,
+    image_transform: str = ""
 ) -> str:
     """Auto-calibrate detector using MIDAS with calibrant (CeO2, LaB6, etc.).
 
@@ -2179,17 +2180,19 @@ async def midas_auto_calibrate(
         bc_y_guess: Initial guess for beam center Y in pixels (default: 0 = image center)
         make_plots: Generate diagnostic plots (1=yes, 0=no)
         stopping_strain: Convergence criterion - stop when pseudo-strain < this value
+        image_transform: Image transformation options: "0" (none), "1" (flip LR), "2" (flip UD), "3" (transpose), or space-separated combinations like "1 2"
 
     Returns:
         JSON with calibrated parameters (beam center, distance, tilts)
 
     Example:
-        Auto-calibrate CeO2 standard at 71keV:
+        Auto-calibrate CeO2 standard at 71keV with flip UD:
         {
             "image_file": "CeO2_calibrant.tif",
             "parameters_file": "Parameters.txt",
-            "lsd_guess": 2000.0,
-            "stopping_strain": 0.003
+            "lsd_guess": 650.0,
+            "stopping_strain": 0.00011,
+            "image_transform": "2"
         }
 
     Parameter File Format:
@@ -2277,6 +2280,13 @@ async def midas_auto_calibrate(
         # Add bad pixel and gap intensity defaults
         cmd.extend(["-BadPxIntensity", "-2"])
         cmd.extend(["-GapIntensity", "-1"])
+
+        # Add image transformation options if provided
+        if image_transform:
+            # Parse transform string - can be "2" or "1 2 3" etc.
+            transforms = image_transform.strip().split()
+            if transforms:
+                cmd.extend(["-ImTransOpt"] + transforms)
 
         # Run calibration
         result = subprocess.run(
