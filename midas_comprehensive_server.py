@@ -2203,20 +2203,24 @@ async def midas_auto_calibrate(
         SkipFrame 0
     """
     try:
-        if not MIDAS_AVAILABLE:
-            return format_result({
-                "tool": "midas_auto_calibrate",
-                "status": "error",
-                "error": "MIDAS installation not found"
-            })
-
         # Locate AutoCalibrateZarr.py
+        # Note: We don't check MIDAS_AVAILABLE here because that only checks for
+        # pyFAI/fabio dependencies, not MIDAS executables. AutoCalibrateZarr.py
+        # has its own dependencies managed within the MIDAS environment.
         autocal_script = MIDAS_ROOT / "utils" / "AutoCalibrateZarr.py"
         if not autocal_script.exists():
+            # Provide helpful error message with installation paths
+            checked_paths = [
+                Path.home() / ".MIDAS",
+                Path.home() / "MIDAS",
+                Path.home() / "opt" / "MIDAS",
+                Path("/opt/MIDAS")
+            ]
+            paths_msg = "\n  ".join([f"- {p}" for p in checked_paths])
             return format_result({
                 "tool": "midas_auto_calibrate",
                 "status": "error",
-                "error": f"AutoCalibrateZarr.py not found at {autocal_script}"
+                "error": f"AutoCalibrateZarr.py not found at {autocal_script}\n\nMIDAS installation not found. Checked:\n  {paths_msg}\n\nSet MIDAS_PATH environment variable or install MIDAS to one of these locations."
             })
 
         # Expand paths
