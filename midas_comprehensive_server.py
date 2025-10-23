@@ -43,11 +43,12 @@ def find_midas_installation() -> Path:
             return midas_path
 
     # Check common installation locations
+    # Priority order: Check source installations (with utils/) before built installations
     common_paths = [
-        Path.home() / ".MIDAS",           # Beamline standard
-        Path.home() / "MIDAS",            # Home directory
-        Path.home() / "opt" / "MIDAS",    # macOS/dev
-        Path("/opt/MIDAS"),               # System-wide
+        Path.home() / "opt" / "MIDAS",    # Source git clone (has utils/AutoCalibrateZarr.py)
+        Path.home() / "MIDAS",            # Home directory source
+        Path("/opt/MIDAS"),               # System-wide source
+        Path.home() / ".MIDAS",           # Built installation (may lack utils/)
         Path.cwd() / "MIDAS"              # Current directory
     ]
 
