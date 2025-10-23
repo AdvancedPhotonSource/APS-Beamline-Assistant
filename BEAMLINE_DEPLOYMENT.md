@@ -15,9 +15,9 @@ Critical fixes and enhancements for MIDAS workflows:
 5. ✅ **Enhanced error messages** - Helpful troubleshooting information
 
 **Key Commits:**
-- [`28d2db3`] **Latest:** Fix MIDAS path priority (check ~/opt/MIDAS first)
-- [`f3caf16`] Remove MIDAS_AVAILABLE check blocking auto-calibration
-- [`ac60af6`] Add diagnostic output for MIDAS availability
+- [`30c530d`] **Latest:** Comprehensive environment handling for all MIDAS tools
+- [`e404934`] Auto-detect MIDAS Python (conda midas_env)
+- [`28d2db3`] Fix MIDAS path priority (check ~/opt/MIDAS first)
 - [`e47b1ce`] Robust auto-calibration based on official manual
 - [`1b921fb`] Complete MIDAS workflows reference
 
@@ -38,9 +38,45 @@ git fetch && git checkout pawan-modular-v2 && git pull
 ```
 Found MIDAS installation at: /home/beams/S1IDUSER/opt/MIDAS
 ✓ AutoCalibrateZarr.py found at /home/beams/S1IDUSER/opt/MIDAS/utils/AutoCalibrateZarr.py
+Using MIDAS conda environment: /home/beams/S1IDUSER/miniconda3/envs/midas_env/bin/python
+✓ MIDAS scientific dependencies available
 ```
 
-**Note:** The server now checks `~/opt/MIDAS` (source git clone with utils/) BEFORE `~/.MIDAS` (built binaries). This ensures AutoCalibrateZarr.py is found.
+**Key Features:**
+- **Automatic environment detection** - No manual conda activation needed!
+- **UV + Conda separation** - MCP server runs in UV, MIDAS tools use conda midas_env
+- **Complete path handling** - Python scripts use conda, C++ binaries get proper LD_LIBRARY_PATH
+
+---
+
+## Environment Architecture
+
+APEXA uses a **dual-environment strategy** that automatically handles UV and conda:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ UV Environment (beamline-assistant)                         │
+│ - Runs MCP servers (filesystem, executor, midas)            │
+│ - Runs APEXA client                                          │
+│ - No MIDAS Python dependencies needed                       │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              │ Automatically detects & uses
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Conda midas_env                                              │
+│ - Python with zarr, diplib, numpy, scipy, etc.              │
+│ - Used by AutoCalibrateZarr.py and all MIDAS Python scripts │
+│ - Shared libraries for C++ binaries (Integrator, etc.)      │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**How it works:**
+1. `find_midas_python()` - Auto-detects conda midas_env Python
+2. `get_midas_env()` - Sets LD_LIBRARY_PATH for C++ binaries
+3. All MIDAS tools use correct environment automatically
+
+**No manual activation needed!**
 
 ---
 
