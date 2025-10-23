@@ -70,6 +70,14 @@ MIDAS_FF_V7 = MIDAS_ROOT / "FF_HEDM" / "v7"
 MIDAS_NF_V7 = MIDAS_ROOT / "NF_HEDM" / "v7"
 MIDAS_UTILS = MIDAS_ROOT / "utils"
 
+# Diagnostic: Check for critical MIDAS scripts
+_autocal_script = MIDAS_UTILS / "AutoCalibrateZarr.py"
+if _autocal_script.exists():
+    print(f"✓ AutoCalibrateZarr.py found at {_autocal_script}", file=sys.stderr)
+else:
+    print(f"⚠ AutoCalibrateZarr.py NOT found at {_autocal_script}", file=sys.stderr)
+    print(f"  Auto-calibration will not work until MIDAS is properly installed", file=sys.stderr)
+
 # Add MIDAS Python modules to path
 for path in [MIDAS_UTILS, MIDAS_FF_V7, MIDAS_NF_V7]:
     if path.exists():
@@ -2209,18 +2217,34 @@ async def midas_auto_calibrate(
         # has its own dependencies managed within the MIDAS environment.
         autocal_script = MIDAS_ROOT / "utils" / "AutoCalibrateZarr.py"
         if not autocal_script.exists():
-            # Provide helpful error message with installation paths
-            checked_paths = [
-                Path.home() / ".MIDAS",
-                Path.home() / "MIDAS",
-                Path.home() / "opt" / "MIDAS",
-                Path("/opt/MIDAS")
-            ]
-            paths_msg = "\n  ".join([f"- {p}" for p in checked_paths])
+            # Provide diagnostic information about what was found
+            utils_dir = MIDAS_ROOT / "utils"
+            utils_exists = utils_dir.exists()
+
+            diagnostic_info = f"MIDAS_ROOT detected: {MIDAS_ROOT}\n"
+            diagnostic_info += f"utils/ directory exists: {utils_exists}\n"
+
+            if utils_exists:
+                try:
+                    utils_contents = [f.name for f in utils_dir.iterdir() if f.name.endswith('.py')][:10]
+                    diagnostic_info += f"Python files in utils/: {', '.join(utils_contents) if utils_contents else 'none'}\n"
+                except:
+                    diagnostic_info += "Could not list utils/ contents\n"
+
+            # Check for alternative locations
+            alt_locations = []
+            for name in ["AutoCalibrateZarr.py", "deprecated_AutoCalibrate.py", "AutoCalibrate.py"]:
+                script_path = MIDAS_ROOT / "utils" / name
+                if script_path.exists():
+                    alt_locations.append(str(script_path))
+
+            if alt_locations:
+                diagnostic_info += f"\nFound alternative scripts:\n  " + "\n  ".join(alt_locations)
+
             return format_result({
                 "tool": "midas_auto_calibrate",
                 "status": "error",
-                "error": f"AutoCalibrateZarr.py not found at {autocal_script}\n\nMIDAS installation not found. Checked:\n  {paths_msg}\n\nSet MIDAS_PATH environment variable or install MIDAS to one of these locations."
+                "error": f"AutoCalibrateZarr.py not found at expected location: {autocal_script}\n\n{diagnostic_info}\n\nTo fix:\n1. Set MIDAS_PATH environment variable to your MIDAS installation\n2. Ensure AutoCalibrateZarr.py exists in MIDAS/utils/\n3. Use a recent MIDAS version from https://github.com/marinerhemant/MIDAS"
             })
 
         # Expand paths
