@@ -30,13 +30,15 @@ def find_midas_python() -> str:
     """Find Python interpreter with MIDAS dependencies (zarr, diplib, etc.).
 
     Priority order:
-    1. conda midas_env environment
-    2. Current Python (if it has zarr)
+    1. Current Python (if it has zarr) - UV with MIDAS deps installed
+    2. conda midas_env environment
     3. System python3
+    4. Fallback to current Python
     """
     # Check if current environment has zarr (may be UV with MIDAS deps)
     try:
         import zarr
+        print(f"Current Python has zarr, using: {sys.executable}", file=sys.stderr)
         return sys.executable
     except ImportError:
         pass
@@ -61,6 +63,35 @@ def find_midas_python() -> str:
     # Fallback to current Python
     print(f"WARNING: MIDAS Python environment not found, using current: {sys.executable}", file=sys.stderr)
     return sys.executable
+
+def get_midas_env() -> dict:
+    """Get environment variables needed for MIDAS executables.
+
+    Sets up library paths for C++ binaries and ensures Python environment is correct.
+    """
+    env = os.environ.copy()
+
+    # Add MIDAS library paths for C++ binaries
+    lib_paths = [
+        str(MIDAS_BIN.parent / "lib"),
+        str(MIDAS_ROOT / "lib"),
+    ]
+
+    if "LD_LIBRARY_PATH" in env:
+        env["LD_LIBRARY_PATH"] = ":".join(lib_paths + [env["LD_LIBRARY_PATH"]])
+    else:
+        env["LD_LIBRARY_PATH"] = ":".join(lib_paths)
+
+    # For macOS
+    if "DYLD_LIBRARY_PATH" in env:
+        env["DYLD_LIBRARY_PATH"] = ":".join(lib_paths + [env["DYLD_LIBRARY_PATH"]])
+    else:
+        env["DYLD_LIBRARY_PATH"] = ":".join(lib_paths)
+
+    # Set MIDAS_PATH for scripts that need it
+    env["MIDAS_PATH"] = str(MIDAS_ROOT)
+
+    return env
 
 def find_midas_installation() -> Path:
     """Find MIDAS installation by checking common locations.
@@ -198,6 +229,9 @@ def run_midas_executable(executable: str, param_file: str, cwd: str = None,
         }
 
     try:
+        # Use MIDAS environment with proper library paths
+        if env is None:
+            env = get_midas_env()
         result = subprocess.run(
             [str(exe_path), str(param_file)],
             capture_output=True,
@@ -229,7 +263,7 @@ def run_midas_executable(executable: str, param_file: str, cwd: str = None,
 
 def run_python_script(script_name: str, args: list, cwd: str = None,
                       timeout: int = 7200) -> dict:
-    """Run a MIDAS Python script and return results."""
+    """Run a MIDAS Python script using the correct conda environment."""
     # Try multiple possible locations
     possible_paths = [
         MIDAS_UTILS / script_name,
@@ -252,7 +286,9 @@ def run_python_script(script_name: str, args: list, cwd: str = None,
         }
 
     try:
-        cmd = ["python", str(script_path)] + args
+        # Use MIDAS Python (conda midas_env) instead of "python"
+        midas_python = find_midas_python()
+        cmd = [midas_python, str(script_path)] + args
         result = subprocess.run(
             cmd,
             capture_output=True,
@@ -2041,14 +2077,15 @@ async def integrate_2d_to_1d(
                     })
                 cmd.append(str(dark_path))
 
-            # Run MIDAS Integrator
+            # Run MIDAS Integrator with proper environment
             try:
                 result = subprocess.run(
                     cmd,
                     cwd=str(image_path.parent),
                     capture_output=True,
                     text=True,
-                    timeout=300  # 5 minute timeout
+                    timeout=300,  # 5 minute timeout
+                    env=get_midas_env()  # Set proper library paths
                 )
 
                 if result.returncode != 0:
@@ -2400,13 +2437,14 @@ async def midas_auto_calibrate(
         cmd.extend(["-BadPxIntensity", "-2"])
         cmd.extend(["-GapIntensity", "-1"])
 
-        # Run calibration
+        # Run calibration with MIDAS environment
         result = subprocess.run(
             cmd,
             cwd=str(image_path.parent),
             capture_output=True,
             text=True,
-            timeout=600  # 10 minute timeout
+            timeout=600,  # 10 minute timeout
+            env=get_midas_env()  # Set proper library paths and environment
         )
 
         if result.returncode != 0:
