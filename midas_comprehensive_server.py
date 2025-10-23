@@ -26,6 +26,42 @@ logging.getLogger("fastmcp").setLevel(logging.WARNING)
 # CONFIGURATION & PATHS
 # =============================================================================
 
+def find_midas_python() -> str:
+    """Find Python interpreter with MIDAS dependencies (zarr, diplib, etc.).
+
+    Priority order:
+    1. conda midas_env environment
+    2. Current Python (if it has zarr)
+    3. System python3
+    """
+    # Check if current environment has zarr (may be UV with MIDAS deps)
+    try:
+        import zarr
+        return sys.executable
+    except ImportError:
+        pass
+
+    # Look for conda midas_env
+    conda_base = os.environ.get("CONDA_PREFIX_1") or os.environ.get("CONDA_PREFIX") or Path.home() / "miniconda3"
+    if isinstance(conda_base, str):
+        conda_base = Path(conda_base)
+
+    midas_env_python = conda_base / "envs" / "midas_env" / "bin" / "python"
+    if midas_env_python.exists():
+        print(f"Using MIDAS conda environment: {midas_env_python}", file=sys.stderr)
+        return str(midas_env_python)
+
+    # Try system python3
+    import shutil
+    python3_path = shutil.which("python3")
+    if python3_path:
+        print(f"Using system Python: {python3_path}", file=sys.stderr)
+        return python3_path
+
+    # Fallback to current Python
+    print(f"WARNING: MIDAS Python environment not found, using current: {sys.executable}", file=sys.stderr)
+    return sys.executable
+
 def find_midas_installation() -> Path:
     """Find MIDAS installation by checking common locations.
 
@@ -2315,8 +2351,10 @@ async def midas_auto_calibrate(
             })
 
         # Build command with all parameters according to MIDAS manual
+        # Use MIDAS Python (conda midas_env) instead of current Python (UV)
+        midas_python = find_midas_python()
         cmd = [
-            sys.executable,
+            midas_python,
             str(autocal_script),
             "-dataFN", str(image_path),
             "-paramFN", str(param_path),
