@@ -15,6 +15,7 @@ Critical fixes and enhancements for MIDAS workflows:
 5. ✅ **Enhanced error messages** - Helpful troubleshooting information
 
 **Key Commits:**
+- [`28d2db3`] **Latest:** Fix MIDAS path priority (check ~/opt/MIDAS first)
 - [`f3caf16`] Remove MIDAS_AVAILABLE check blocking auto-calibration
 - [`ac60af6`] Add diagnostic output for MIDAS availability
 - [`e47b1ce`] Robust auto-calibration based on official manual
@@ -26,17 +27,20 @@ Critical fixes and enhancements for MIDAS workflows:
 
 ```bash
 # 1. Update code
-cd /home/beams/S1IDUSER/beamline-assistant-dev
+cd ~/CAI/git/APS-Beamline-Assistant
 git fetch && git checkout pawan-modular-v2 && git pull
 
-# 2. Restart MCP server
-pkill -f midas_comprehensive_server
-uv run python midas_comprehensive_server.py &
-
-# 3. Restart APEXA
-pkill -f argo_mcp_client
-uv run python argo_mcp_client.py
+# 2. Restart APEXA (this will restart all servers)
+./start_beamline_assistant.sh
 ```
+
+**Expected output:**
+```
+Found MIDAS installation at: /home/beams/S1IDUSER/opt/MIDAS
+✓ AutoCalibrateZarr.py found at /home/beams/S1IDUSER/opt/MIDAS/utils/AutoCalibrateZarr.py
+```
+
+**Note:** The server now checks `~/opt/MIDAS` (source git clone with utils/) BEFORE `~/.MIDAS` (built binaries). This ensures AutoCalibrateZarr.py is found.
 
 ---
 
