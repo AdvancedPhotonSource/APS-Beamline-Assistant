@@ -1469,10 +1469,14 @@ ARGUMENTS: {"image_path": "/path/data.ge5", "calibration_file": "/path/calib.txt
 
 ⚠️  CRITICAL: Use MIDAS tools (not pyFAI) for calibration and integration!
 
-- midas_auto_calibrate ⭐ NEW - Auto-calibrate detector with calibrant
-  Args: {"image_path": "CeO2.tif", "parameters_file": "Params.txt", "lsd_guess": 2000, "bc_x_guess": 1450, "bc_y_guess": 1426}
-  Uses: MIDAS AutoCalibrateZarr.py → CalibrantOMP executable
-  Returns: Refined beam center, distance, tilt angles
+- midas_auto_calibrate ⭐ PRIMARY CALIBRATION TOOL - Iterative geometric refinement
+  Required: {"image_file": "CeO2.tif", "parameters_file": "Params.txt"}
+  Optional: {"lsd_guess": 650000, "stopping_strain": 0.0001, "mult_factor": 2.5, "dark_file": "dark.tif"}
+  Advanced: {"bc_x_guess": 1024, "bc_y_guess": 1024, "first_ring_nr": 1, "eta_bin_size": 5.0, "threshold": 500, "save_plots_hdf": "diag.h5", "image_transform": "2"}
+  Uses: MIDAS AutoCalibrateZarr.py → CalibrantOMP (least-squares fitting with outlier rejection)
+  Returns: Refined BC, Lsd, tilts (tx/ty/tz), distortion (p0-p3), convergence metrics
+  Outputs: refined_MIDAS_params.txt (use for integration), autocal.log (iteration history)
+  Defaults: stopping_strain=0.00004, mult_factor=2.5, auto-detect BC and Lsd from rings
 
 - midas_integrate_2d_to_1d ⭐ UPDATED - Now uses MIDAS Integrator (not pyFAI!)
   Args: {"image_path": "/path/image.tif", "calibration_file": "calib.txt"}

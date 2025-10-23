@@ -2168,45 +2168,76 @@ async def midas_auto_calibrate(
     lsd_guess: float = 1000000.0,
     bc_x_guess: float = 0.0,
     bc_y_guess: float = 0.0,
-    make_plots: int = 1,
-    stopping_strain: float = 0.003,
-    image_transform: str = ""
+    stopping_strain: float = 0.00004,
+    mult_factor: float = 2.5,
+    first_ring_nr: int = 1,
+    eta_bin_size: float = 5.0,
+    threshold: int = 0,
+    make_plots: int = 0,
+    save_plots_hdf: str = "",
+    image_transform: str = "",
+    data_loc: str = ""
 ) -> str:
-    """Auto-calibrate detector using MIDAS with calibrant (CeO2, LaB6, etc.).
+    """Auto-calibrate detector geometry using MIDAS AutoCalibrateZarr.py with calibrant material.
 
-    This tool uses MIDAS's AutoCalibrateZarr.py to automatically find:
-    - Beam center (BC_X, BC_Y)
-    - Sample-to-detector distance (Lsd)
-    - Detector tilt angles (tx, ty, tz)
+    This is the primary calibration tool for FF-HEDM experiments. It analyzes a 2D diffraction
+    image of a known calibrant (e.g., CeO2, LaB6) and iteratively refines geometric parameters
+    until convergence. The script uses MIDAS's CalibrantOMP binary for robust least-squares
+    fitting with automatic outlier rejection.
+
+    Based on MIDAS manual: https://github.com/marinerhemant/MIDAS/blob/master/manuals/FF_autocalibrate.md
 
     Args:
-        image_file: Path to calibrant image (.tif, .tiff, .ge2, .ge5, .h5, .zarr.zip)
-        parameters_file: MIDAS parameters file with SpaceGroup, LatticeParameter, Wavelength, etc.
-        dark_file: Optional dark image for background subtraction
-        lsd_guess: Initial guess for detector distance in mm (default: 1000000 = auto-detect)
-        bc_x_guess: Initial guess for beam center X in pixels (default: 0 = image center)
-        bc_y_guess: Initial guess for beam center Y in pixels (default: 0 = image center)
-        make_plots: Generate diagnostic plots (1=yes, 0=no)
-        stopping_strain: Convergence criterion - stop when pseudo-strain < this value
-        image_transform: Image transformation options: "0" (none), "1" (flip LR), "2" (flip UD), "3" (transpose), or space-separated combinations like "1 2"
+        image_file: Path to calibrant diffraction image (.tif, .tiff, .ge2-5, .h5, .zarr.zip)
+        parameters_file: MIDAS parameter file containing material properties (SpaceGroup, LatticeParameter, Wavelength, px)
+        dark_file: Optional path to dark field image for background subtraction
+        lsd_guess: Initial sample-to-detector distance guess in µm (default: 1000000 = auto-detect from ring ratios)
+        bc_x_guess: Initial beam center X coordinate in pixels (default: 0.0 = auto-detect from ring geometry)
+        bc_y_guess: Initial beam center Y coordinate in pixels (default: 0.0 = auto-detect from ring geometry)
+        stopping_strain: Convergence criterion - refinement stops when mean pseudo-strain < this value (default: 0.00004)
+        mult_factor: Outlier rejection multiplier - rings with strain > mult_factor × median_strain are excluded (default: 2.5)
+        first_ring_nr: Index (1-based) of first prominent ring for initial Lsd estimation (default: 1)
+        eta_bin_size: Azimuthal bin size in degrees for CalibrantOMP fitting (default: 5.0)
+        threshold: Manual intensity threshold for ring segmentation (default: 0 = auto-calculate)
+        make_plots: Display matplotlib plots during refinement (0=no, 1=yes) (default: 0)
+        save_plots_hdf: Path to HDF5 file for saving all intermediate data/plots for offline analysis (default: "" = don't save)
+        image_transform: Image transformation - "0"=none, "1"=flip LR, "2"=flip UD, "3"=transpose, or space-separated combo (default: "" = none)
+        data_loc: HDF5 dataset path if not standard location (default: "" = use /entry/data/data)
 
     Returns:
-        JSON with calibrated parameters (beam center, distance, tilts)
+        JSON with calibrated geometric parameters and convergence metrics
 
-    Example:
-        Auto-calibrate CeO2 standard at 71keV with flip UD:
+    Outputs:
+        - refined_MIDAS_params.txt: Final converged parameters (Lsd, BC, tx, ty, tz, p0-p3)
+        - autocal.log: Detailed execution log with iteration history
+        - calibrant_screen_out.csv: Raw CalibrantOMP output (for debugging)
+        - [optional] HDF5 file with all intermediate arrays and plots
+
+    Example Usage:
+        Standard CeO2 calibration at ~650mm:
         {
-            "image_file": "CeO2_calibrant.tif",
-            "parameters_file": "Parameters.txt",
-            "lsd_guess": 650.0,
-            "stopping_strain": 0.00011,
+            "image_file": "/data/CeO2_61keV_650mm.tif",
+            "parameters_file": "/data/Params_CeO2.txt",
+            "lsd_guess": 650000,
+            "stopping_strain": 0.0001
+        }
+
+        High-precision calibration with diagnostics:
+        {
+            "image_file": "LaB6_calibrant.h5",
+            "parameters_file": "Params_LaB6.txt",
+            "dark_file": "dark.h5",
+            "lsd_guess": 200000,
+            "stopping_strain": 0.00004,
+            "mult_factor": 3.0,
+            "save_plots_hdf": "calibration_diagnostics.h5",
             "image_transform": "2"
         }
 
-    Parameter File Format:
-        SpaceGroup 225              # CeO2 = 225 (cubic)
-        LatticeParameter 5.411      # CeO2 lattice in Angstroms
-        Wavelength 0.1741           # 71 keV = 0.1741 Angstrom
+    Required Parameter File Format:
+        SpaceGroup 225              # CeO2: 225, LaB6: 221, Si: 227
+        LatticeParameter 5.411      # CeO2 lattice constant in Angstroms
+        Wavelength 0.2021           # X-ray wavelength in Angstroms (61.332 keV)
         px 200                      # Pixel size in microns
         SkipFrame 0
     """
@@ -2282,15 +2313,18 @@ async def midas_auto_calibrate(
                 "error": f"Unsupported file format: {suffix}"
             })
 
-        # Build command
+        # Build command with all parameters according to MIDAS manual
         cmd = [
             sys.executable,
             str(autocal_script),
             "-dataFN", str(image_path),
             "-paramFN", str(param_path),
             "-ConvertFile", str(convert_file),
-            "-MakePlots", str(make_plots),
-            "-StoppingStrain", str(stopping_strain)
+            "-StoppingStrain", str(stopping_strain),
+            "-MultFactor", str(mult_factor),
+            "-FirstRingNr", str(first_ring_nr),
+            "-EtaBinSize", str(eta_bin_size),
+            "-MakePlots", str(make_plots)
         ]
 
         # Add optional parameters
@@ -2299,15 +2333,22 @@ async def midas_auto_calibrate(
             if dark_path.exists():
                 cmd.extend(["-darkFN", str(dark_path)])
 
-        if lsd_guess < 1000000:  # User provided a real guess
-            cmd.extend(["-LsdGuess", str(lsd_guess)])
+        if lsd_guess < 1000000:  # User provided a real guess (not auto-detect)
+            cmd.extend(["-LsdGuess", str(int(lsd_guess))])  # Convert to int µm
 
         if bc_x_guess != 0.0 or bc_y_guess != 0.0:
-            cmd.extend(["-BCGuess", str(bc_x_guess), str(bc_y_guess)])
+            # MIDAS expects BCGuess as Y X (not X Y!)
+            cmd.extend(["-BCGuess", str(bc_y_guess), str(bc_x_guess)])
 
-        # Add bad pixel and gap intensity defaults
-        cmd.extend(["-BadPxIntensity", "-2"])
-        cmd.extend(["-GapIntensity", "-1"])
+        if threshold > 0:  # Manual threshold specified
+            cmd.extend(["-Threshold", str(threshold)])
+
+        if save_plots_hdf:  # Save diagnostic HDF5
+            hdf_path = Path(save_plots_hdf).expanduser().absolute()
+            cmd.extend(["-SavePlotsHDF", str(hdf_path)])
+
+        if data_loc:  # Non-standard HDF5 dataset location
+            cmd.extend(["-dataLoc", data_loc])
 
         # Add image transformation options if provided
         if image_transform:
@@ -2315,6 +2356,10 @@ async def midas_auto_calibrate(
             transforms = image_transform.strip().split()
             if transforms:
                 cmd.extend(["-ImTransOpt"] + transforms)
+
+        # Add beamline-standard bad pixel and gap intensity markers
+        cmd.extend(["-BadPxIntensity", "-2"])
+        cmd.extend(["-GapIntensity", "-1"])
 
         # Run calibration
         result = subprocess.run(
@@ -2401,14 +2446,54 @@ async def midas_auto_calibrate(
                     elif key == 'px':
                         calibrated_params['px'] = float(parts[1])
 
-        # Also parse mean strain from stdout for convergence info
-        mean_strain = None
-        for line in output.split('\n'):
-            if 'Mean Strain:' in line:
-                parts = line.split(':')
-                if len(parts) == 2:
+        # Parse convergence metrics from autocal.log
+        autocal_log = image_path.parent / "autocal.log"
+        convergence_metrics = {
+            "num_iterations": None,
+            "final_mean_strain": None,
+            "excluded_rings": [],
+            "converged": False
+        }
+
+        if autocal_log.exists():
+            with open(autocal_log, 'r') as f:
+                log_content = f.read()
+
+                # Count iterations
+                iterations = log_content.count('INFO - Iteration')
+                if iterations > 0:
+                    convergence_metrics["num_iterations"] = iterations
+
+                # Parse final mean strain from last INFO line
+                info_lines = [l for l in log_content.split('\n') if 'INFO -' in l and 'Mean Strain' in l]
+                if info_lines:
+                    last_line = info_lines[-1]
                     try:
-                        mean_strain = float(parts[1].strip())
+                        # Format: "INFO - Mean Strain: 0.000123"
+                        strain_val = float(last_line.split('Mean Strain:')[-1].strip())
+                        convergence_metrics["final_mean_strain"] = strain_val
+                        convergence_metrics["converged"] = strain_val < stopping_strain
+                    except:
+                        pass
+
+                # Parse excluded rings
+                excluded_lines = [l for l in log_content.split('\n') if 'Excluding ring' in l]
+                for line in excluded_lines:
+                    try:
+                        ring_num = int(line.split('ring')[-1].strip().split()[0])
+                        if ring_num not in convergence_metrics["excluded_rings"]:
+                            convergence_metrics["excluded_rings"].append(ring_num)
+                    except:
+                        pass
+
+        # Also check stdout for INFO messages (if autocal.log not found)
+        if not autocal_log.exists():
+            for line in output.split('\n'):
+                if 'INFO -' in line and 'Mean Strain' in line:
+                    try:
+                        strain_val = float(line.split('Mean Strain')[-1].replace(':', '').strip())
+                        convergence_metrics["final_mean_strain"] = strain_val
+                        convergence_metrics["converged"] = strain_val < stopping_strain
                     except:
                         pass
 
@@ -2419,8 +2504,37 @@ async def midas_auto_calibrate(
                 zarr_file = str(f)
                 break
 
-        # Check convergence
-        convergence_achieved = mean_strain is not None and mean_strain < stopping_strain if mean_strain else False
+        # Build success message
+        bc_x = calibrated_params.get('bc_x')
+        bc_y = calibrated_params.get('bc_y')
+        lsd_mm = calibrated_params.get('lsd')
+
+        if lsd_mm is not None and lsd_mm > 1000:  # Convert from µm to mm
+            lsd_mm = lsd_mm / 1000.0
+
+        message = f"✓ Auto-calibration completed successfully!\n\n"
+        message += f"Refined Parameters:\n"
+        message += f"  Beam Center: ({bc_x:.2f}, {bc_y:.2f}) pixels\n"
+        message += f"  Distance (Lsd): {lsd_mm:.2f} mm\n"
+        if calibrated_params.get('tx'):
+            message += f"  Tilts: tx={calibrated_params['tx']:.6f}, ty={calibrated_params['ty']:.6f}, tz={calibrated_params['tz']:.6f} rad\n"
+
+        message += f"\nConvergence:\n"
+        if convergence_metrics["num_iterations"]:
+            message += f"  Iterations: {convergence_metrics['num_iterations']}\n"
+        if convergence_metrics["final_mean_strain"]:
+            message += f"  Final Mean Strain: {convergence_metrics['final_mean_strain']:.6f}\n"
+            message += f"  Target Strain: {stopping_strain:.6f}\n"
+            message += f"  Status: {'CONVERGED ✓' if convergence_metrics['converged'] else 'NOT CONVERGED (increase iterations or relax tolerance)'}\n"
+        if convergence_metrics["excluded_rings"]:
+            message += f"  Excluded Rings: {', '.join(map(str, convergence_metrics['excluded_rings']))}\n"
+
+        message += f"\nOutput Files:\n"
+        message += f"  • refined_MIDAS_params.txt - Use this for ff_MIDAS.py\n"
+        if autocal_log.exists():
+            message += f"  • autocal.log - Detailed iteration history\n"
+        if save_plots_hdf:
+            message += f"  • {Path(save_plots_hdf).name} - Diagnostic plots and arrays\n"
 
         return format_result({
             "tool": "midas_auto_calibrate",
@@ -2429,11 +2543,9 @@ async def midas_auto_calibrate(
             "input_parameters_file": str(param_path),
             "calibrated_parameters_file": str(refined_params_file) if refined_params_file.exists() else None,
             "calibrated_parameters": calibrated_params,
-            "mean_strain": mean_strain,
-            "convergence_achieved": convergence_achieved,
+            "convergence_metrics": convergence_metrics,
             "zarr_file": zarr_file,
-            "stdout": output,
-            "message": f"Auto-calibration completed! Beam center: ({calibrated_params['bc_x']}, {calibrated_params['bc_y']}), Distance: {calibrated_params['lsd']} mm. Parameters saved to refined_MIDAS_params.txt"
+            "message": message
         })
 
     except subprocess.TimeoutExpired:
