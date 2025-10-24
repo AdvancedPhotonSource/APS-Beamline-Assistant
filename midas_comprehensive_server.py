@@ -30,38 +30,113 @@ def find_midas_python() -> str:
     """Find Python interpreter with MIDAS dependencies (zarr, diplib, etc.).
 
     Priority order:
-    1. Current Python (if it has zarr) - UV with MIDAS deps installed
-    2. conda midas_env environment
-    3. System python3
-    4. Fallback to current Python
+    1. conda midas_env environment (dedicated MIDAS environment with all deps)
+    2. conda base environment (if it has MIDAS deps)
+    3. Current Python (if it has ALL critical MIDAS deps)
+    4. System python3
+    5. Fallback to current Python with warning
     """
-    # Check if current environment has zarr (may be UV with MIDAS deps)
+    import shutil
+
+    # Helper function to check if a Python has required deps
+    def check_python_deps(python_path: str) -> bool:
+        """Check if a Python interpreter has required MIDAS dependencies."""
+        try:
+            result = subprocess.run(
+                [python_path, "-c", "import zarr, diplib, numba, h5py, skimage"],
+                capture_output=True,
+                timeout=5
+            )
+            return result.returncode == 0
+        except:
+            return False
+
+    # PRIORITY 0: Check for manual override via MIDAS_PYTHON environment variable
+    midas_python_env = os.environ.get("MIDAS_PYTHON")
+    if midas_python_env:
+        midas_python_path = Path(midas_python_env)
+        if midas_python_path.exists():
+            print(f"✓ Using MIDAS_PYTHON from environment: {midas_python_path}", file=sys.stderr)
+            return str(midas_python_path)
+        else:
+            print(f"⚠ MIDAS_PYTHON set but not found: {midas_python_path}", file=sys.stderr)
+
+    # PRIORITY 1: Look for conda midas_env (official MIDAS environment)
+    conda_base = os.environ.get("CONDA_PREFIX_1") or os.environ.get("CONDA_PREFIX")
+
+    # Try finding conda base from CONDA_EXE
+    if not conda_base:
+        conda_exe = os.environ.get("CONDA_EXE")
+        if conda_exe:
+            conda_base = Path(conda_exe).parent.parent
+
+    # If not in conda, try common conda locations
+    if not conda_base:
+        for conda_loc in [
+            Path.home() / "opt" / "miniconda3",  # Beamline common location
+            Path.home() / "miniconda3",
+            Path.home() / "anaconda3",
+            Path.home() / ".conda",
+            Path.home() / "conda",
+            Path("/opt/conda"),
+            Path("/opt/miniconda3"),
+            Path("/opt/anaconda3")
+        ]:
+            if conda_loc.exists() and (conda_loc / "bin" / "conda").exists():
+                conda_base = conda_loc
+                print(f"Found conda installation at: {conda_base}", file=sys.stderr)
+                break
+
+    if conda_base:
+        if isinstance(conda_base, str):
+            conda_base = Path(conda_base)
+
+        # Check for MIDAS conda environments (try multiple common names)
+        for env_name in ["midas_202411", "midas_env", "midas", "MIDAS"]:
+            midas_env_python = conda_base / "envs" / env_name / "bin" / "python"
+            if midas_env_python.exists():
+                print(f"✓ Found MIDAS conda environment '{env_name}': {midas_env_python}", file=sys.stderr)
+                return str(midas_env_python)
+
+        # Check conda base environment
+        conda_python = conda_base / "bin" / "python"
+        if conda_python.exists() and check_python_deps(str(conda_python)):
+            print(f"✓ Using conda base environment (has MIDAS deps): {conda_python}", file=sys.stderr)
+            return str(conda_python)
+
+    # PRIORITY 2: Check if current environment has ALL critical MIDAS deps
     try:
         import zarr
-        print(f"Current Python has zarr, using: {sys.executable}", file=sys.stderr)
+        import diplib
+        import numba
+        import h5py
+        import skimage
+        print(f"✓ Current Python has all MIDAS dependencies: {sys.executable}", file=sys.stderr)
         return sys.executable
-    except ImportError:
-        pass
+    except ImportError as e:
+        print(f"⚠ Current Python missing MIDAS dependencies: {e}", file=sys.stderr)
 
-    # Look for conda midas_env
-    conda_base = os.environ.get("CONDA_PREFIX_1") or os.environ.get("CONDA_PREFIX") or Path.home() / "miniconda3"
-    if isinstance(conda_base, str):
-        conda_base = Path(conda_base)
-
-    midas_env_python = conda_base / "envs" / "midas_env" / "bin" / "python"
-    if midas_env_python.exists():
-        print(f"Using MIDAS conda environment: {midas_env_python}", file=sys.stderr)
-        return str(midas_env_python)
-
-    # Try system python3
-    import shutil
+    # PRIORITY 3: Try system python3
     python3_path = shutil.which("python3")
-    if python3_path:
-        print(f"Using system Python: {python3_path}", file=sys.stderr)
+    if python3_path and check_python_deps(python3_path):
+        print(f"✓ Using system Python (has MIDAS deps): {python3_path}", file=sys.stderr)
         return python3_path
 
-    # Fallback to current Python
-    print(f"WARNING: MIDAS Python environment not found, using current: {sys.executable}", file=sys.stderr)
+    # PRIORITY 4: Fallback to current Python with warning
+    print(f"", file=sys.stderr)
+    print(f"✗ ERROR: No Python with complete MIDAS dependencies found!", file=sys.stderr)
+    print(f"✗ Using current Python: {sys.executable}", file=sys.stderr)
+    print(f"", file=sys.stderr)
+    print(f"AutoCalibrateZarr.py requires: zarr, diplib, numba, h5py, scikit-image", file=sys.stderr)
+    print(f"", file=sys.stderr)
+    print(f"To fix, install the official MIDAS conda environment:", file=sys.stderr)
+    print(f"  cd ~/opt/MIDAS  # or wherever MIDAS is installed", file=sys.stderr)
+    print(f"  conda env create -f environment.yml", file=sys.stderr)
+    print(f"  # APEXA will auto-detect midas_env - no manual activation needed!", file=sys.stderr)
+    print(f"", file=sys.stderr)
+    print(f"Or manually specify Python path:", file=sys.stderr)
+    print(f"  export MIDAS_PYTHON=/path/to/conda/envs/midas_env/bin/python", file=sys.stderr)
+    print(f"", file=sys.stderr)
     return sys.executable
 
 def get_midas_env() -> dict:

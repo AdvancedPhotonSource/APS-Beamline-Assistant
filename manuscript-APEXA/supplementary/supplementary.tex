@@ -1,0 +1,334 @@
+\documentclass[11pt]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{cite}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{booktabs}
+\usepackage[margin=1in]{geometry}
+\usepackage{caption}
+\usepackage{float}
+
+\title{\textbf{Supplementary Information for:\\APEXA: An AI-Powered Autonomous Assistant for Real-Time High-Energy X-ray Diffraction Experiments}}
+
+\begin{document}
+
+\maketitle
+
+\section{Supplementary Methods}
+
+\subsection{Model Context Protocol (MCP) Architecture Details}
+
+The Model Context Protocol provides a standardized JSON-RPC interface for LLM-tool communication. Each MCP server exposes tools via JSON schema definitions consumed by the LLM. Tool invocation follows:
+
+\begin{lstlisting}[language=Python, caption=MCP Tool Definition Example]
+@mcp.tool()
+async def midas_auto_calibrate(
+    image_file: str,
+    parameters_file: str,
+    lsd_guess: float = 1000000.0,
+    stopping_strain: float = 0.00004,
+    mult_factor: float = 2.5
+) -> str:
+    """Auto-calibrate detector geometry.
+
+    Args:
+        image_file: Calibrant diffraction image
+        parameters_file: MIDAS parameter file
+        lsd_guess: Initial distance guess (um)
+        stopping_strain: Convergence criterion
+        mult_factor: Outlier rejection factor
+    """
+    # Implementation calls AutoCalibrateZarr.py
+    # Returns JSON with refined parameters
+\end{lstlisting}
+
+The Claude LLM receives tool definitions and autonomously decides when and how to invoke them based on user requests. Responses include full stdout/stderr for transparency.
+
+\subsection{Environment Detection Algorithm}
+
+The dual-environment strategy requires automatic detection of Python interpreters with MIDAS dependencies:
+
+\begin{lstlisting}[language=Python, caption=MIDAS Python Detection]
+def find_midas_python() -> str:
+    # Priority 1: Current Python if has zarr
+    try:
+        import zarr
+        return sys.executable
+    except ImportError:
+        pass
+
+    # Priority 2: conda midas_env
+    conda_base = os.environ.get("CONDA_PREFIX")
+        or Path.home() / "miniconda3"
+    midas_env = conda_base / "envs" / "midas_env"
+        / "bin" / "python"
+    if midas_env.exists():
+        return str(midas_env)
+
+    # Priority 3: system python3
+    python3 = shutil.which("python3")
+    if python3:
+        return python3
+
+    # Fallback
+    return sys.executable
+\end{lstlisting}
+
+This ensures AutoCalibrateZarr.py always executes in an environment with zarr, diplib, and other dependencies, regardless of the MCP server's environment.
+
+\subsection{Calibration Convergence Criteria}
+
+AutoCalibrateZarr.py employs iterative least-squares refinement:
+
+\begin{equation}
+\chi^2 = \sum_{i=1}^{N_{\text{rings}}} \sum_{j=1}^{N_{\eta}} \frac{(R_{ij}^{\text{obs}} - R_{ij}^{\text{calc}})^2}{\sigma_{ij}^2}
+\end{equation}
+
+where $R_{ij}^{\text{obs}}$ is the observed ring radius at azimuth $\eta_j$, $R_{ij}^{\text{calc}}$ is calculated from current geometry parameters, and $\sigma_{ij}$ is the measurement uncertainty.
+
+Pseudo-strain for ring $i$ is:
+\begin{equation}
+\epsilon_i = \frac{\langle R_i^{\text{obs}} - R_i^{\text{calc}} \rangle}{R_i^{\text{calc}}}
+\end{equation}
+
+Convergence is declared when:
+\begin{enumerate}
+    \item $\langle \epsilon \rangle < \epsilon_{\text{stop}}$ (default $4 \times 10^{-5}$)
+    \item No new outlier rings detected (rings with $\epsilon_i > \mu_f \times \text{median}(\epsilon)$, $\mu_f = 2.5$)
+\end{enumerate}
+
+\subsection{Phase Identification Algorithm}
+
+Crystallographic phase identification employs peak matching with theoretical patterns generated from CIF files:
+
+\begin{enumerate}
+    \item \textbf{Peak Detection}: Identify peaks in integrated 1D pattern using \texttt{scipy.signal.find\_peaks} with prominence threshold.
+    \item \textbf{Theoretical Calculation}: For each candidate phase, calculate allowed reflections via extinction rules and structure factors.
+    \item \textbf{Peak Matching}: Match observed peaks ($2\theta_{\text{obs}}$) to calculated ($2\theta_{\text{calc}}$) within tolerance $\Delta 2\theta$ (default 0.15°).
+    \item \textbf{Scoring}: Phase score $= N_{\text{matched}} / N_{\text{expected}}$, where $N_{\text{expected}}$ is number of theoretical peaks above intensity threshold.
+    \item \textbf{Reporting}: Phases with score $> 0.5$ and $N_{\text{matched}} \geq 3$ are reported.
+\end{enumerate}
+
+\section{Supplementary Figures}
+
+\subsection{Supplementary Figure 1: Detailed Architecture Diagram}
+
+[Placeholder: Detailed block diagram showing:
+- User interface layer (CLI)
+- LLM layer (Claude API)
+- MCP server layer (filesystem, executor, midas)
+- Tool execution layer (Python, C++ binaries)
+- Data flow arrows
+- Environment boundaries (UV vs conda)]
+
+\subsection{Supplementary Figure 2: Calibration Convergence Examples}
+
+[Placeholder: Multi-panel figure showing:
+- Panel A: Pseudo-strain vs iteration for 5 example calibrations
+- Panel B: Beam center refinement trajectories (X vs Y pixels)
+- Panel C: Excluded rings histogram
+- Panel D: Final strain distribution across all rings]
+
+\subsection{Supplementary Figure 3: Integration Performance Scaling}
+
+[Placeholder: Performance scaling plots:
+- Panel A: Integration time vs number of cores (1-64)
+- Panel B: Speedup factor vs cores (linear scaling reference)
+- Panel C: Memory usage vs dataset size
+- Panel D: Throughput (frames/sec) vs frame count]
+
+\subsection{Supplementary Figure 4: User Study Results}
+
+[Placeholder: User study analysis:
+- Panel A: Task completion time distributions (box plots)
+- Panel B: Error rates by experience level
+- Panel C: User satisfaction scores (Likert scale)
+- Panel D: Qualitative feedback word cloud]
+
+\section{Supplementary Tables}
+
+\subsection{Supplementary Table 1: Complete Calibration Results}
+
+\begin{table}[H]
+\centering
+\caption{Detailed calibration results for 15 CeO$_2$ runs}
+\begin{tabular}{lccccc}
+\toprule
+Run & Lsd (mm) & BC$_X$ (px) & BC$_Y$ (px) & Iterations & Final Strain \\
+\midrule
+1 & 651.118 & 865.47 & 702.86 & 5 & $3.8 \times 10^{-5}$ \\
+2 & 650.982 & 864.91 & 703.12 & 6 & $4.2 \times 10^{-5}$ \\
+3 & 651.243 & 865.83 & 702.54 & 4 & $3.9 \times 10^{-5}$ \\
+... & ... & ... & ... & ... & ... \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Supplementary Table 2: MCP Server Tool Inventory}
+
+\begin{table}[H]
+\centering
+\caption{Complete list of APEXA MCP tools}
+\begin{tabular}{lll}
+\toprule
+Server & Tool & Purpose \\
+\midrule
+filesystem & read\_file & Read file contents \\
+ & list\_directory & List directory contents \\
+ & find\_files & Search for files by pattern \\
+ & write\_file & Create or modify files \\
+executor & run\_command & Execute shell commands \\
+ & check\_environment & Verify software availability \\
+midas & midas\_auto\_calibrate & Detector calibration \\
+ & integrate\_2d\_to\_1d & Azimuthal integration \\
+ & identify\_phases & Phase identification \\
+ & detect\_rings & Ring detection and fitting \\
+ & run\_ff\_hedm\_workflow & Complete FF-HEDM pipeline \\
+ & create\_parameter\_file & Generate MIDAS param files \\
+ & ... & (12 additional tools) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Supplementary Table 3: Computational Requirements}
+
+\begin{table}[H]
+\centering
+\caption{Computational resource requirements for typical APEXA analyses}
+\begin{tabular}{lcccc}
+\toprule
+Analysis Type & CPU Cores & RAM (GB) & Storage (GB) & Time \\
+\midrule
+Detector Calibration & 1 & 2 & 0.5 & 45 s \\
+2D$\rightarrow$1D Integration (single) & 1 & 4 & 0.01 & 4 s \\
+2D$\rightarrow$1D Integration (batch) & 32 & 64 & 10 & 5 min \\
+Phase Identification & 1 & 1 & 0.1 & 2 s \\
+FF-HEDM (1000 grains) & 128 & 256 & 100 & 1 hr \\
+FF-HEDM (5000 grains) & 512 & 1024 & 500 & 2.5 hr \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Supplementary Discussion}
+
+\subsection{Comparison to Existing Automation Approaches}
+
+Traditional beamline automation employs: (1) scripted workflows (Python/MATLAB), (2) GUI-based pipelines (DAWN, pyFAI-GUI), or (3) specialized beamline control systems (EPICS, Tango). APEXA differs fundamentally:
+
+\begin{itemize}
+    \item \textbf{Scripted workflows}: Require programming expertise, lack error recovery, brittle to input variations
+    \item \textbf{GUI pipelines}: Limited to predefined workflows, difficult to customize, not conversational
+    \item \textbf{Control systems}: Hardware-centric, not designed for analysis, steep learning curve
+    \item \textbf{APEXA}: Natural language interface, autonomous problem-solving, extensible tool ecosystem
+\end{itemize}
+
+The key innovation is leveraging LLM reasoning for workflow planning and error recovery, rather than hard-coding analysis paths.
+
+\subsection{Error Handling and Recovery Mechanisms}
+
+APEXA implements multi-level error handling:
+
+\textbf{L1 - Tool Level}: Each MCP tool captures exceptions and returns structured error messages with diagnostic information.
+
+\textbf{L2 - LLM Reasoning}: The LLM analyzes error messages and attempts remediation (e.g., adjusting parameters, trying alternative tools).
+
+\textbf{L3 - User Fallback}: If automated recovery fails after 3 attempts, APEXA requests user guidance with suggested solutions.
+
+Example error recovery sequence:
+\begin{lstlisting}
+Initial: Auto-calibration fails (weak diffraction)
+L1: Tool returns "Convergence not achieved, strain=0.002"
+L2: LLM hypothesizes low SNR, adjusts threshold=-500
+Retry: Auto-calibration succeeds, strain=0.00004
+\end{lstlisting}
+
+\subsection{Computational Cost Analysis}
+
+Per-analysis LLM costs (Claude Sonnet 4.5, \$3/MTok input, \$15/MTok output):
+
+\begin{itemize}
+    \item Detector calibration: 120K input + 8K output tokens = \$0.48
+    \item Integration + phase ID: 80K input + 5K output tokens = \$0.32
+    \item Full FF-HEDM workflow: 350K input + 25K output tokens = \$1.43
+\end{itemize}
+
+For high-volume facilities (100 users/day), monthly LLM costs $\sim$\$4500. Edge deployment of Llama 3.1 70B (locally hosted) could reduce costs to hardware amortization only ($\sim$\$200/month on A100 GPU), though with potential capability degradation requiring further study.
+
+\subsection{Security and Data Privacy Considerations}
+
+APEXA's cloud LLM architecture raises data governance questions for sensitive or proprietary research. Mitigation strategies:
+
+\begin{enumerate}
+    \item \textbf{Data Minimization}: Only metadata and analysis parameters sent to LLM, not raw diffraction images
+    \item \textbf{Local-First Option}: Edge deployment using locally-hosted open models (Llama, Mixtral)
+    \item \textbf{Audit Logging}: Complete tool call history logged for compliance and reproducibility
+    \item \textbf{User Consent}: Explicit opt-in for cloud processing with clear data handling policies
+\end{enumerate}
+
+For classified research or export-controlled materials, local deployment is mandatory.
+
+\section{Supplementary Code Examples}
+
+\subsection{Example 1: Complete Calibration Interaction}
+
+\begin{lstlisting}[language=bash]
+User: autocalibrate the CeO2 image in /data with
+      energy=61.332keV, pixel_size=172 microns
+
+APEXA: I'll perform detector auto-calibration:
+
+1. Found: /data/CeO2_61keV_650mm.tif (9.8 MB)
+2. Creating MIDAS parameter file...
+   - SpaceGroup: 225 (CeO2 cubic)
+   - LatticeParameter: 5.411 A
+   - Wavelength: 0.2021 A (61.332 keV)
+   - Pixel size: 172 um
+   - Initial Lsd guess: 650 mm (from filename)
+
+3. Running AutoCalibrateZarr.py...
+   Iteration 1: mean_strain = 0.00234
+   Iteration 2: mean_strain = 0.00089 (excluded ring 7)
+   Iteration 3: mean_strain = 0.00041
+   Iteration 4: mean_strain = 0.00012
+   Iteration 5: mean_strain = 0.000038 ✓ CONVERGED
+
+4. Refined Parameters:
+   Beam Center: (865.47, 702.86) pixels
+   Distance: 651.118 mm
+   Tilts: tx=0.000123, ty=-0.000045, tz=0.000089 rad
+
+5. Saved: refined_MIDAS_params.txt
+
+Calibration complete! Use refined parameters
+for integration.
+\end{lstlisting}
+
+\subsection{Example 2: Error Recovery}
+
+\begin{lstlisting}[language=bash]
+User: integrate the Ti64 scan
+
+APEXA: Starting integration...
+
+ERROR: MIDAS Integrator failed
+  "Beam center outside detector bounds"
+
+Let me check the parameters file...
+Found issue: BC values are in mm, should be pixels.
+Converting: BC 177.16 178.88 mm -> BC 1030 1040 px
+
+Retrying integration...
+
+✓ Success! Integrated 1440 frames
+  Output: Ti64_scan_1d.dat
+  Detected 14 peaks (2theta: 8.2-45.3 deg)
+\end{lstlisting}
+
+\section{Supplementary References}
+
+[Additional references cited in supplementary materials]
+
+\end{document}
