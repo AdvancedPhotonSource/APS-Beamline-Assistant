@@ -142,9 +142,21 @@ def find_midas_python() -> str:
 def get_midas_env() -> dict:
     """Get environment variables needed for MIDAS executables.
 
-    Sets up library paths for C++ binaries and ensures Python environment is correct.
+    Sets up library paths for C++ binaries, adds MIDAS bin to PATH,
+    and ensures Python environment is correct.
     """
     env = os.environ.copy()
+
+    # Add MIDAS bin directory to PATH (for CalibrantOMP, Integrator, etc.)
+    midas_bin_paths = [
+        str(MIDAS_BIN),
+        str(MIDAS_ROOT / "bin"),
+    ]
+
+    if "PATH" in env:
+        env["PATH"] = ":".join(midas_bin_paths + [env["PATH"]])
+    else:
+        env["PATH"] = ":".join(midas_bin_paths)
 
     # Add MIDAS library paths for C++ binaries
     lib_paths = [
@@ -2461,6 +2473,46 @@ async def midas_auto_calibrate(
                 "status": "error",
                 "error": f"Unsupported file format: {suffix}"
             })
+
+        # WORKAROUND for MIDAS filename parsing bug:
+        # MIDAS ffGenerateZipRefactor.py has trouble when TIF files have complex names
+        # because it converts filename.tif -> filename.tif.ge, then tries to parse
+        # the stem which still contains ".tif", confusing the numeric parser.
+        #
+        # Solution: Create a simple symlink without dots in the basename
+        # Example: CeO2_650mm_61p332keV_2DFocused_0p1s_att200_004018.tif
+        #       -> CeO2_calib_000001.tif
+
+        # Always create a simple symlink for TIFF files to avoid parsing issues
+        if suffix in ['.tif', '.tiff']:
+            # Extract just the first part of filename before any numbers
+            import re
+            # Find the first meaningful word (usually material name)
+            match = re.match(r'^([A-Za-z]+)', image_path.stem)
+            prefix = match.group(1) if match else "calib"
+
+            # Create simple MIDAS-friendly name
+            midas_friendly_name = f"{prefix}_000001{image_path.suffix}"
+            midas_friendly_path = image_path.parent / midas_friendly_name
+
+            # Remove old symlink if it exists
+            if midas_friendly_path.is_symlink():
+                midas_friendly_path.unlink()
+            elif midas_friendly_path.exists():
+                # Don't overwrite real files, use different name
+                midas_friendly_name = f"{prefix}_calibration_000001{image_path.suffix}"
+                midas_friendly_path = image_path.parent / midas_friendly_name
+                if midas_friendly_path.is_symlink():
+                    midas_friendly_path.unlink()
+
+            # Create symlink
+            try:
+                midas_friendly_path.symlink_to(image_path.name)  # Relative symlink
+                print(f"✓ Created MIDAS-friendly symlink: {midas_friendly_name} -> {image_path.name}", file=sys.stderr)
+                image_path = midas_friendly_path
+            except Exception as e:
+                print(f"⚠ Could not create symlink: {e}. Using original filename.", file=sys.stderr)
+                # Continue with original filename
 
         # Build command with all parameters according to MIDAS manual
         # Use MIDAS Python (conda midas_env) instead of current Python (UV)
