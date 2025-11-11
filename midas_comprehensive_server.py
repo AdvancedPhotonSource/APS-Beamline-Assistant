@@ -194,26 +194,30 @@ def find_midas_installation() -> Path:
     """
     def validate_midas_path(path: Path) -> bool:
         """Check if path is a valid MIDAS installation."""
-        if not path.exists() or not path.is_dir():
+        try:
+            if not path.exists() or not path.is_dir():
+                return False
+
+            # Must have AutoCalibrateZarr.py for calibration
+            autocal = path / "utils" / "AutoCalibrateZarr.py"
+
+            # Must have executables (either in FF_HEDM/bin or build/bin)
+            has_executables = (
+                (path / "FF_HEDM" / "bin").exists() or
+                (path / "build" / "bin").exists()
+            )
+
+            is_valid = autocal.exists() and has_executables
+
+            if is_valid:
+                print(f"✓ Valid MIDAS installation: {path}", file=sys.stderr)
+                print(f"  - AutoCalibrateZarr.py: {autocal.exists()}", file=sys.stderr)
+                print(f"  - Executables: {has_executables}", file=sys.stderr)
+
+            return is_valid
+        except (PermissionError, OSError):
+            # Skip paths we don't have permission to access
             return False
-
-        # Must have AutoCalibrateZarr.py for calibration
-        autocal = path / "utils" / "AutoCalibrateZarr.py"
-
-        # Must have executables (either in FF_HEDM/bin or build/bin)
-        has_executables = (
-            (path / "FF_HEDM" / "bin").exists() or
-            (path / "build" / "bin").exists()
-        )
-
-        is_valid = autocal.exists() and has_executables
-
-        if is_valid:
-            print(f"✓ Valid MIDAS installation: {path}", file=sys.stderr)
-            print(f"  - AutoCalibrateZarr.py: {autocal.exists()}", file=sys.stderr)
-            print(f"  - Executables: {has_executables}", file=sys.stderr)
-
-        return is_valid
 
     # Check environment variable first
     if "MIDAS_PATH" in os.environ:
