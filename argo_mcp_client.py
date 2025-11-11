@@ -1323,9 +1323,23 @@ class APEXAClient:
                 print(" (from cache)")
                 return cached_result
 
-        if "_" in tool_name:
-            server_name, original_tool_name = tool_name.split("_", 1)
-        else:
+        # Parse server_name and tool_name
+        # Tool names might already include the server prefix (e.g., "midas_auto_calibrate")
+        # We need to identify the correct server and pass the full tool name to it
+        server_name = None
+        original_tool_name = tool_name
+
+        # Try to match against known server names
+        for srv_name in self.sessions.keys():
+            if tool_name.startswith(f"{srv_name}_"):
+                server_name = srv_name
+                # Keep the full tool name as registered in the MCP server
+                # Don't strip the prefix because the tool is registered with it
+                original_tool_name = tool_name
+                break
+
+        if not server_name:
+            # Fallback: assume it's a midas tool
             server_name = "midas"
             original_tool_name = tool_name
 

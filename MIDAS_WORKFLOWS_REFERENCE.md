@@ -1,6 +1,49 @@
 # MIDAS Workflows Reference for APEXA
 
-Comprehensive reference for all MIDAS workflows based on official manuals.
+**Last Updated:** 2025-11-03
+**Reorganization:** MIDAS-first architecture - all tools strictly follow official MIDAS manuals
+
+---
+
+## 🔄 IMPORTANT CHANGES (Nov 2025)
+
+### Tool Reorganization
+
+The MCP servers have been reorganized to strictly separate MIDAS official tools from custom utilities:
+
+**midas_comprehensive_server.py** - MIDAS Official Tools ONLY
+- ✅ All tools call official MIDAS executables or Python scripts
+- ✅ Each tool maps directly to MIDAS manual sections
+- ✅ Tool descriptions include MIDAS manual references and workflow guidance
+- 📖 Examples: `midas_auto_calibrate`, `integrate_2d_to_1d`, `run_ff_hedm_full_workflow`
+
+**analysis_utilities_server.py** - Custom Diagnostic Tools (NEW)
+- ⚠️ NOT official MIDAS tools
+- 🔧 Quick diagnostics: `detect_rings_quick`, `identify_phases_basic`
+- ℹ️ Disabled by default in servers.config
+- ⚠️ For official MIDAS workflows, DO NOT use these tools
+
+### What Changed
+
+| Old Tool Name | Status | New Location |
+|--------------|--------|--------------|
+| `detect_diffraction_rings` | Removed from MIDAS server | → `detect_rings_quick` in utilities server |
+| `identify_crystalline_phases` | Removed from MIDAS server | → `identify_phases_basic` in utilities server |
+| `midas_auto_calibrate` | ✅ Enhanced | Still in MIDAS server (with workflow guidance) |
+| `integrate_2d_to_1d` | ✅ Enhanced | Still in MIDAS server (with MIDAS Integrator) |
+
+### Why This Matters
+
+**Before:** AI could get confused between custom tools (`detect_diffraction_rings`) and official MIDAS tools (`midas_auto_calibrate`)
+
+**After:** When you request "calibrate detector", AI will ONLY use `midas_auto_calibrate` (official MIDAS AutoCalibrateZarr.py), ensuring you follow official MIDAS workflows exactly as documented.
+
+---
+
+## Workflow Overview
+
+Comprehensive reference for all MIDAS workflows based on official manuals from:
+https://github.com/marinerhemant/MIDAS/tree/master/manuals
 
 ## 1. FF-HEDM Calibration Workflow (AutoCalibrateZarr.py)
 

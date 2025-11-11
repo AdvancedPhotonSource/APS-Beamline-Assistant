@@ -1,0 +1,10 @@
+Info: 'NrFilesPerSweep' not found in parameter file. Defaulting to 1.
+Input Data: /Users/b324240/Git/beamline-assistant-dev/test1/test2/CeO_000001.tif.ge
+Parameter File: /Users/b324240/Git/beamline-assistant-dev/test1/test2/Parameters.txt
+Output Zarr: CeO_000001.tif.ge.analysis.MIDAS.zip
+
+--- Processing GE File(s) ---
+Info: Dark correction/processing is active.
+Handling as uint16. Files per scan: 1
+
+FATAL ERROR: Could not find a numeric sequence at the end of the data filename stem: 'CeO_000001.tif'

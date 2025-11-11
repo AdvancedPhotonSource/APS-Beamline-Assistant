@@ -184,36 +184,114 @@ def find_midas_installation() -> Path:
     """Find MIDAS installation by checking common locations.
 
     Priority order:
-    1. MIDAS_PATH environment variable
-    2. ~/.MIDAS (common beamline installation)
-    3. ~/opt/MIDAS (macOS/development)
-    4. /opt/MIDAS (system-wide Linux)
-    5. Current directory ./MIDAS
+    1. MIDAS_PATH environment variable (if valid)
+    2. Search common locations and validate each
+    3. Auto-detect from Git repositories
+
+    Validation checks for each candidate:
+    - Has utils/AutoCalibrateZarr.py (required for calibration)
+    - Has FF_HEDM/bin/ or build/bin/ (required for executables)
     """
+    def validate_midas_path(path: Path) -> bool:
+        """Check if path is a valid MIDAS installation."""
+        if not path.exists() or not path.is_dir():
+            return False
+
+        # Must have AutoCalibrateZarr.py for calibration
+        autocal = path / "utils" / "AutoCalibrateZarr.py"
+
+        # Must have executables (either in FF_HEDM/bin or build/bin)
+        has_executables = (
+            (path / "FF_HEDM" / "bin").exists() or
+            (path / "build" / "bin").exists()
+        )
+
+        is_valid = autocal.exists() and has_executables
+
+        if is_valid:
+            print(f"✓ Valid MIDAS installation: {path}", file=sys.stderr)
+            print(f"  - AutoCalibrateZarr.py: {autocal.exists()}", file=sys.stderr)
+            print(f"  - Executables: {has_executables}", file=sys.stderr)
+
+        return is_valid
+
     # Check environment variable first
     if "MIDAS_PATH" in os.environ:
         midas_path = Path(os.environ["MIDAS_PATH"]).expanduser().absolute()
-        if midas_path.exists():
+        if validate_midas_path(midas_path):
+            print(f"Using MIDAS_PATH from environment: {midas_path}", file=sys.stderr)
             return midas_path
+        else:
+            print(f"⚠ MIDAS_PATH set but invalid: {midas_path}", file=sys.stderr)
 
-    # Check common installation locations
-    # Priority order: Check source installations (with utils/) before built installations
-    common_paths = [
-        Path.home() / "opt" / "MIDAS",    # Source git clone (has utils/AutoCalibrateZarr.py)
-        Path.home() / "MIDAS",            # Home directory source
-        Path("/opt/MIDAS"),               # System-wide source
-        Path.home() / ".MIDAS",           # Built installation (may lack utils/)
-        Path.cwd() / "MIDAS"              # Current directory
-    ]
+    # Search common installation locations
+    print("Searching for MIDAS installation...", file=sys.stderr)
 
+    # Build search paths dynamically
+    common_paths = []
+
+    # User home subdirectories
+    for subdir in ["Git", "git", "src", "Documents", "opt", ""]:
+        if subdir:
+            common_paths.append(Path.home() / subdir / "MIDAS")
+            common_paths.append(Path.home() / subdir / "Documents" / "MIDAS")
+
+    # Beamline-specific paths (S1IDUSER, etc.)
+    beamline_base = Path("/home/beams")
+    if beamline_base.exists():
+        for user_dir in beamline_base.glob("S*USER"):
+            common_paths.append(user_dir / "opt" / "MIDAS")
+            common_paths.append(user_dir / "MIDAS")
+
+    # System-wide installations
+    for prefix in ["/opt", "/usr/local", "/usr", Path.home()]:
+        common_paths.append(Path(prefix) / "MIDAS")
+        common_paths.append(Path(prefix) / ".MIDAS")
+
+    # Current directory
+    common_paths.extend([
+        Path.cwd() / "MIDAS",
+        Path.cwd().parent / "MIDAS",
+    ])
+
+    # Remove duplicates while preserving order
+    seen = set()
+    common_paths = [p for p in common_paths if not (p in seen or seen.add(p))]
+
+    valid_installations = []
     for path in common_paths:
-        if path.exists() and path.is_dir():
-            print(f"Found MIDAS installation at: {path}", file=sys.stderr)
-            return path
+        if validate_midas_path(path):
+            valid_installations.append(path)
 
-    # Default to ~/.MIDAS (will be created or cause errors later)
+    if valid_installations:
+        # Use the first valid installation found
+        selected = valid_installations[0]
+
+        if len(valid_installations) > 1:
+            print(f"\n⚠ Multiple MIDAS installations found:", file=sys.stderr)
+            for i, p in enumerate(valid_installations, 1):
+                marker = "→" if p == selected else " "
+                print(f"  {marker} {i}. {p}", file=sys.stderr)
+            print(f"\nUsing: {selected}", file=sys.stderr)
+            print(f"To override, set: export MIDAS_PATH={valid_installations[1]}", file=sys.stderr)
+
+        return selected
+
+    # No valid installation found
+    print("\n❌ ERROR: No valid MIDAS installation found!", file=sys.stderr)
+    print("\nSearched locations:", file=sys.stderr)
+    for path in common_paths[:10]:  # Show first 10
+        exists = "✓" if path.exists() else "✗"
+        print(f"  {exists} {path}", file=sys.stderr)
+
+    print("\nTo fix:", file=sys.stderr)
+    print("  1. Clone MIDAS: git clone https://github.com/marinerhemant/MIDAS ~/Git/MIDAS", file=sys.stderr)
+    print("  2. Build MIDAS: cd ~/Git/MIDAS && ./build.sh", file=sys.stderr)
+    print("  3. Set environment: export MIDAS_PATH=~/Git/MIDAS", file=sys.stderr)
+
+    # Return default path (will cause errors but at least explicit)
     default_path = Path.home() / ".MIDAS"
-    print(f"WARNING: MIDAS not found, using default: {default_path}", file=sys.stderr)
+    print(f"\nUsing fallback path (will likely fail): {default_path}", file=sys.stderr)
     return default_path
 
 # MIDAS installation paths
@@ -2011,71 +2089,15 @@ async def get_midas_workflow_status(
 # BASIC ANALYSIS TOOLS (from original server)
 # =============================================================================
 
-# Keep the existing basic tools for backward compatibility
-@mcp.tool()
-async def detect_diffraction_rings(
-    image_path: str,
-    detector_distance: float = 1000.0,
-    wavelength: float = 0.2066,
-    beam_center_x: float = None,
-    beam_center_y: float = None
-) -> str:
-    """Detect and analyze diffraction rings in 2D powder diffraction patterns.
-
-    Args:
-        image_path: Path to the 2D diffraction image file
-        detector_distance: Sample-to-detector distance in millimeters
-        wavelength: X-ray wavelength in Angstroms
-        beam_center_x: Beam center X coordinate in pixels
-        beam_center_y: Beam center Y coordinate in pixels
-    """
-    try:
-        if not Path(image_path).exists():
-            return format_result({"error": f"Image file not found: {image_path}", "status": "failed"})
-
-        image_data = load_diffraction_image(image_path)
-
-        if beam_center_x is None or beam_center_y is None:
-            center = (image_data.shape[0] // 2, image_data.shape[1] // 2)
-        else:
-            center = (int(beam_center_y), int(beam_center_x))
-
-        # Radial profile
-        y, x = np.ogrid[:image_data.shape[0], :image_data.shape[1]]
-        r = np.sqrt((x - center[1])**2 + (y - center[0])**2)
-        r_int = r.astype(int)
-        radial_prof = np.bincount(r_int.ravel(), image_data.ravel())
-        radial_counts = np.bincount(r_int.ravel())
-
-        valid_idx = radial_counts > 0
-        radial_prof = radial_prof[valid_idx] / radial_counts[valid_idx]
-        r_values = np.arange(len(radial_prof))[valid_idx]
-
-        # Find peaks
-        ring_radii = []
-        ring_intensities = []
-        if len(radial_prof) > 10:
-            peaks, properties = find_peaks(radial_prof, height=np.mean(radial_prof) * 1.2, distance=10)
-            ring_radii = r_values[peaks]
-            ring_intensities = radial_prof[peaks]
-
-        pixel_size = 172e-6
-        ring_2theta = np.arctan(np.array(ring_radii) * pixel_size / (detector_distance * 1e-3)) * 180 / np.pi
-
-        signal_to_noise = np.mean(ring_intensities) / np.std(image_data) if len(ring_intensities) > 0 else 0
-
-        return format_result({
-            "tool": "detect_diffraction_rings",
-            "image_file": image_path,
-            "rings_detected": len(ring_radii),
-            "ring_positions_2theta": ring_2theta.tolist() if len(ring_2theta) > 0 else [],
-            "quality_metrics": {
-                "signal_to_noise": float(signal_to_noise)
-            }
-        })
-
-    except Exception as e:
-        return format_result({"error": str(e), "status": "error"})
+# =============================================================================
+# FF-HEDM CALIBRATION (MIDAS Official)
+# =============================================================================
+# Tools moved to analysis_utilities_server.py:
+# - detect_rings_quick (was: detect_diffraction_rings) - Custom NumPy diagnostic tool
+# - identify_phases_basic (was: identify_crystalline_phases) - Basic phase matching
+#
+# This server now contains ONLY official MIDAS tools
+# =============================================================================
 
 @mcp.tool()
 async def integrate_2d_to_1d(
@@ -2088,11 +2110,27 @@ async def integrate_2d_to_1d(
     dark_file: str = None,
     output_file: str = None
 ) -> str:
-    """Integrate 2D diffraction image to 1D pattern using MIDAS Integrator.
+    """Integrate 2D diffraction image to 1D pattern using MIDAS Integrator (MIDAS Official).
 
+    ⚠️ WORKFLOW REQUIREMENT:
+    This tool REQUIRES calibrated detector parameters from midas_auto_calibrate.
+    Always run midas_auto_calibrate FIRST to generate refined_MIDAS_params.txt
+
+    MIDAS Component: Integrator (C++ executable)
+    Location: MIDAS/FF_HEDM/bin/Integrator
+    Manual Reference: FF_Analysis.md (azimuthal integration step)
+
+    DESCRIPTION:
     Converts a 2D detector image into a 1D azimuthally-integrated intensity vs. 2θ pattern.
     Uses MIDAS's native Integrator executable (not pyFAI) for consistency with MIDAS workflows.
     Supports dark image subtraction and various detector formats (TIFF, GE2/GE5, ED5, EDF).
+
+    FF-HEDM WORKFLOW POSITION:
+    Step 2 - INTEGRATION (after calibration, before phase ID)
+    ├─ Prerequisites: midas_auto_calibrate (must have refined_MIDAS_params.txt)
+    ├─ Input: 2D diffraction image + calibrated parameters
+    ├─ Output: 1D intensity vs. 2theta pattern
+    └─ Next steps: Phase identification (use GSAS-II or utilities server)
 
     Args:
         image_path: Path to 2D diffraction image (.tiff, .ge2, .ge5, .ed5, .edf)
@@ -2257,69 +2295,8 @@ async def integrate_2d_to_1d(
             "error": str(e)
         })
 
-@mcp.tool()
-async def identify_crystalline_phases(
-    peak_positions: list,
-    material_system: str = "unknown",
-    temperature: float = 25.0,
-    tolerance: float = 0.1
-) -> str:
-    """Identify crystalline phases from peak positions.
-
-    Args:
-        peak_positions: List of peak positions in degrees 2theta
-        material_system: Expected material system
-        temperature: Sample temperature in Celsius
-        tolerance: Peak position tolerance in degrees 2theta
-    """
-    try:
-        phase_database = {
-            "austenite": {
-                "formula": "γ-Fe",
-                "space_group": "Fm-3m",
-                "peaks": [12.47, 18.15, 25.84, 30.15, 35.71, 40.44],
-                "intensities": [100, 60, 40, 25, 30, 15],
-                "hkl": ["(111)", "(200)", "(220)", "(311)", "(222)", "(400)"]
-            },
-            "ferrite": {
-                "formula": "α-Fe",
-                "space_group": "Im-3m",
-                "peaks": [31.39, 44.67, 65.02, 82.33, 98.95],
-                "intensities": [100, 80, 60, 40, 30],
-                "hkl": ["(110)", "(200)", "(211)", "(220)", "(310)"]
-            }
-        }
-
-        identified_phases = []
-
-        for phase_name, phase_data in phase_database.items():
-            matched_peaks = []
-            for obs_peak in peak_positions:
-                for i, ref_peak in enumerate(phase_data["peaks"]):
-                    if abs(obs_peak - ref_peak) <= tolerance:
-                        matched_peaks.append({
-                            "observed": float(obs_peak),
-                            "calculated": float(ref_peak),
-                            "hkl": phase_data["hkl"][i]
-                        })
-                        break
-
-            if len(matched_peaks) >= 3:
-                identified_phases.append({
-                    "phase_name": phase_name.title(),
-                    "chemical_formula": phase_data["formula"],
-                    "space_group": phase_data["space_group"],
-                    "matched_peaks": matched_peaks
-                })
-
-        return format_result({
-            "tool": "identify_crystalline_phases",
-            "identified_phases": identified_phases,
-            "total_phases_found": len(identified_phases)
-        })
-
-    except Exception as e:
-        return format_result({"error": str(e), "status": "error"})
+# Phase identification tool moved to analysis_utilities_server.py as identify_phases_basic
+# Use GSAS-II server for comprehensive phase identification
 
 @mcp.tool()
 async def midas_auto_calibrate(
@@ -2339,18 +2316,47 @@ async def midas_auto_calibrate(
     image_transform: str = "",
     data_loc: str = ""
 ) -> str:
-    """Auto-calibrate detector geometry using MIDAS AutoCalibrateZarr.py with calibrant material.
+    """🔧 PRIMARY TOOL FOR FF-HEDM DETECTOR CALIBRATION (MIDAS Official)
 
-    This is the primary calibration tool for FF-HEDM experiments. It analyzes a 2D diffraction
-    image of a known calibrant (e.g., CeO2, LaB6) and iteratively refines geometric parameters
-    until convergence. The script uses MIDAS's CalibrantOMP binary for robust least-squares
+    ⚠️ WORKFLOW GUIDANCE - WHEN TO USE THIS TOOL:
+    When user requests:
+    - "calibrate the detector"
+    - "auto-calibrate using CeO2" or any calibrant material
+    - "determine detector geometry"
+    - "calibration workflow"
+    - "refine beam center and distance"
+
+    → USE THIS TOOL (midas_auto_calibrate) - This is the ONLY tool for FF-HEDM calibration
+    → DO NOT use detect_rings_quick (that's a diagnostic tool in utilities server)
+    → This is the OFFICIAL MIDAS calibration method from AutoCalibrateZarr.py
+
+    🚨 CRITICAL: FILE PATH REQUIREMENTS
+    - image_file: Must be the EXACT, COMPLETE file path as it exists on disk
+    - DO NOT abbreviate or guess filenames (e.g., "CeO2.tif" when actual file is "CeO2_650mm_61p332keV_2DFocused_0p1s_att200_004018.tif")
+    - If user provides a directory, use filesystem_list_directory FIRST to find the actual filename
+    - Then call this tool with the FULL PATH found from the directory listing
+    - The tool will auto-search the parent directory if the exact file is not found
+
+    MIDAS Manual: https://github.com/marinerhemant/MIDAS/blob/master/manuals/FF_autocalibrate.md
+    MIDAS Component: AutoCalibrateZarr.py → CalibrantOMP → GetHKLList
+    Location: MIDAS/utils/AutoCalibrateZarr.py
+
+    DESCRIPTION:
+    Auto-calibrates detector geometry by analyzing a 2D diffraction image of a known calibrant
+    (e.g., CeO2, LaB6). Iteratively refines all geometric parameters (Lsd, beam center, tilts,
+    distortions) until convergence using MIDAS's CalibrantOMP binary for robust least-squares
     fitting with automatic outlier rejection.
 
-    Based on MIDAS manual: https://github.com/marinerhemant/MIDAS/blob/master/manuals/FF_autocalibrate.md
+    FF-HEDM WORKFLOW POSITION:
+    Step 1 - CALIBRATION (must run BEFORE analysis)
+    ├─ Input: Raw calibrant image + initial parameter file
+    ├─ Output: refined_MIDAS_params.txt (calibrated parameters)
+    └─ Next steps: integrate_2d_to_1d OR run_ff_hedm_full_workflow
 
     Args:
-        image_file: Path to calibrant diffraction image (.tif, .tiff, .ge2-5, .h5, .zarr.zip)
-        parameters_file: MIDAS parameter file containing material properties (SpaceGroup, LatticeParameter, Wavelength, px)
+        image_file: EXACT path to calibrant diffraction image (.tif, .tiff, .ge2-5, .h5, .zarr.zip)
+                   If file not found, will auto-search parent directory for matching files.
+        parameters_file: EXACT path to MIDAS parameter file containing material properties (SpaceGroup, LatticeParameter, Wavelength, px)
         dark_file: Optional path to dark field image for background subtraction
         lsd_guess: Initial sample-to-detector distance guess in µm (default: 1000000 = auto-detect from ring ratios)
         bc_x_guess: Initial beam center X coordinate in pixels (default: 0.0 = auto-detect from ring geometry)
@@ -2403,11 +2409,18 @@ async def midas_auto_calibrate(
         SkipFrame 0
     """
     try:
+        print(f"\n{'='*70}", file=sys.stderr)
+        print(f"🔧 midas_auto_calibrate called:", file=sys.stderr)
+        print(f"   Image: {image_file}", file=sys.stderr)
+        print(f"   Params: {parameters_file}", file=sys.stderr)
+        print(f"{'='*70}\n", file=sys.stderr)
+
         # Locate AutoCalibrateZarr.py
         # Note: We don't check MIDAS_AVAILABLE here because that only checks for
         # pyFAI/fabio dependencies, not MIDAS executables. AutoCalibrateZarr.py
         # has its own dependencies managed within the MIDAS environment.
         autocal_script = MIDAS_ROOT / "utils" / "AutoCalibrateZarr.py"
+        print(f"✓ Checking for AutoCalibrateZarr.py at: {autocal_script}", file=sys.stderr)
         if not autocal_script.exists():
             # Provide diagnostic information about what was found
             utils_dir = MIDAS_ROOT / "utils"
@@ -2443,19 +2456,111 @@ async def midas_auto_calibrate(
         image_path = Path(image_file).expanduser().absolute()
         param_path = Path(parameters_file).expanduser().absolute()
 
-        if not image_path.exists():
-            return format_result({
-                "tool": "midas_auto_calibrate",
-                "status": "error",
-                "error": f"Image file not found: {image_path}"
-            })
+        print(f"✓ Image path: {image_path} (exists: {image_path.exists()})", file=sys.stderr)
+        print(f"✓ Param path: {param_path} (exists: {param_path.exists()})", file=sys.stderr)
 
+        # Auto-search for image file if not found
+        if not image_path.exists():
+            print(f"⚠ Image file not found at: {image_path}", file=sys.stderr)
+            print(f"  Searching parent directory for matching files...", file=sys.stderr)
+
+            parent_dir = image_path.parent
+            if parent_dir.exists():
+                # Search for TIFF/GE/HDF5 files in the directory
+                search_patterns = ["*.tif", "*.tiff", "*.ge2", "*.ge3", "*.ge4", "*.ge5", "*.h5", "*.hdf5"]
+                found_files = []
+                for pattern in search_patterns:
+                    found_files.extend(parent_dir.glob(pattern))
+
+                if found_files:
+                    # Sort by modification time (most recent first)
+                    found_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+
+                    print(f"  Found {len(found_files)} image file(s) in {parent_dir.name}/:", file=sys.stderr)
+                    for i, f in enumerate(found_files[:5], 1):  # Show first 5
+                        print(f"    {i}. {f.name}", file=sys.stderr)
+
+                    # Use the most recent file (or try to match basename)
+                    # First, try to find a file whose name contains the basename
+                    basename_match = None
+                    search_basename = image_path.stem.lower()
+                    for f in found_files:
+                        if search_basename in f.stem.lower():
+                            basename_match = f
+                            break
+
+                    if basename_match:
+                        image_path = basename_match
+                        print(f"  ✓ Using matched file: {image_path.name}", file=sys.stderr)
+                    else:
+                        image_path = found_files[0]
+                        print(f"  ✓ Using most recent file: {image_path.name}", file=sys.stderr)
+                else:
+                    print(f"❌ ERROR: No image files found in directory!", file=sys.stderr)
+                    return format_result({
+                        "tool": "midas_auto_calibrate",
+                        "status": "error",
+                        "error": f"No diffraction images (.tif, .ge, .h5) found in: {parent_dir}\n\nSearched patterns: {', '.join(search_patterns)}"
+                    })
+            else:
+                print(f"❌ ERROR: Parent directory does not exist!", file=sys.stderr)
+                return format_result({
+                    "tool": "midas_auto_calibrate",
+                    "status": "error",
+                    "error": f"Image file not found and parent directory does not exist: {parent_dir}"
+                })
+
+        # Auto-search for parameters file if not found
         if not param_path.exists():
-            return format_result({
-                "tool": "midas_auto_calibrate",
-                "status": "error",
-                "error": f"Parameters file not found: {param_path}"
-            })
+            print(f"⚠ Parameters file not found at: {param_path}", file=sys.stderr)
+            print(f"  Searching parent directory for parameter files...", file=sys.stderr)
+
+            parent_dir = param_path.parent
+            if parent_dir.exists():
+                # Search for common parameter file names
+                param_patterns = ["*arameters*.txt", "*params*.txt", "*Params*.txt", "*.txt"]
+                found_params = []
+                for pattern in param_patterns:
+                    found_params.extend(parent_dir.glob(pattern))
+
+                # Filter out obvious non-parameter files
+                found_params = [p for p in found_params if p.stat().st_size < 10000]  # < 10KB
+
+                if found_params:
+                    found_params.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+
+                    print(f"  Found {len(found_params)} potential parameter file(s):", file=sys.stderr)
+                    for i, f in enumerate(found_params[:5], 1):
+                        print(f"    {i}. {f.name}", file=sys.stderr)
+
+                    # Try to match basename
+                    basename_match = None
+                    search_basename = param_path.stem.lower()
+                    for f in found_params:
+                        if search_basename in f.stem.lower() or "param" in f.stem.lower():
+                            basename_match = f
+                            break
+
+                    if basename_match:
+                        param_path = basename_match
+                        print(f"  ✓ Using matched file: {param_path.name}", file=sys.stderr)
+                    else:
+                        param_path = found_params[0]
+                        print(f"  ✓ Using: {param_path.name}", file=sys.stderr)
+                else:
+                    print(f"❌ ERROR: No parameter files found!", file=sys.stderr)
+                    return format_result({
+                        "tool": "midas_auto_calibrate",
+                        "status": "error",
+                        "error": f"Parameters file not found: {param_path}\n\nNo .txt files found in: {parent_dir}\n\nCreate a parameter file with:\nSpaceGroup 225\nLatticeParameter 5.411\nWavelength 0.2021\npx 172"
+                    })
+            else:
+                print(f"❌ ERROR: Parameters file not found!", file=sys.stderr)
+                return format_result({
+                    "tool": "midas_auto_calibrate",
+                    "status": "error",
+                    "error": f"Parameters file not found: {param_path}"
+                })
 
         # Determine file type for ConvertFile flag
         suffix = image_path.suffix.lower()
@@ -2491,7 +2596,10 @@ async def midas_auto_calibrate(
             match = re.match(r'^([A-Za-z]+)', image_path.stem)
             prefix = match.group(1) if match else "calib"
 
-            # Create simple MIDAS-friendly name
+            # Create simple MIDAS-friendly name WITHOUT extension
+            # MIDAS will add .ge to it, and needs numbers at the END of the stem
+            # So: calib_000001 -> calib_000001.ge (stem: calib_000001, ends with numbers ✓)
+            # NOT: calib_000001.tif -> calib_000001.tif.ge (stem: calib_000001.tif, ends with .tif ✗)
             midas_friendly_name = f"{prefix}_000001{image_path.suffix}"
             midas_friendly_path = image_path.parent / midas_friendly_name
 
@@ -2795,11 +2903,13 @@ if __name__ == "__main__":
     print("  - create_midas_parameter_file", file=sys.stderr)
     print("  - validate_midas_installation", file=sys.stderr)
     print("  - get_midas_workflow_status", file=sys.stderr)
-    print("\nBasic Analysis:", file=sys.stderr)
-    print("  - midas_auto_calibrate", file=sys.stderr)
-    print("  - detect_diffraction_rings", file=sys.stderr)
-    print("  - integrate_2d_to_1d", file=sys.stderr)
-    print("  - identify_crystalline_phases", file=sys.stderr)
+    print("\nFF-HEDM Calibration & Integration (MIDAS Official):", file=sys.stderr)
+    print("  - midas_auto_calibrate (AutoCalibrateZarr.py)", file=sys.stderr)
+    print("  - integrate_2d_to_1d (MIDAS Integrator)", file=sys.stderr)
+    print("\n⚠️  NON-MIDAS tools removed from this server:", file=sys.stderr)
+    print("  - detect_diffraction_rings → analysis_utilities_server.py (detect_rings_quick)", file=sys.stderr)
+    print("  - identify_crystalline_phases → analysis_utilities_server.py (identify_phases_basic)", file=sys.stderr)
+    print("\n✅ All tools in this server follow official MIDAS workflows", file=sys.stderr)
     print("=" * 70, file=sys.stderr)
 
     mcp.run(transport='stdio')

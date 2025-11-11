@@ -1,0 +1,5 @@
+SpaceGroup 225
+LatticeParameter 5.411
+Wavelength 0.2021
+px 172
+SkipFrame 0

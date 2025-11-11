@@ -1,0 +1,34 @@
+Folder /tmp/t1
+FileStem CeO
+Ext .tif.ge.analysis.MIDAS.ge5
+ImTransOpt 0
+Width 1000
+tolTilts 3
+tolBC 20
+tolLsd 15000
+tolP 2E-3
+tx 0.0
+ty 0
+tz 0
+Wedge 0
+p0 0
+p1 0
+p2 0
+p3 0
+EtaBinSize 5.0
+HeadSize 0
+BadPxIntensity -2.0
+GapIntensity -1.0
+Dark dark_CeO_000001.tif.ge.analysis.MIDAS.ge5
+StartNr 1
+EndNr 1
+Padding 6
+NrPixelsY 1475
+NrPixelsZ 1679
+px 172.0
+Wavelength 0.2021
+SpaceGroup 225
+Lsd 1000000
+RhoD 219027.29864768163
+BC 702.6137553729416 817.4683228922197
+LatticeConstant 5.411 0.0 0.0 0.0 0.0 0.0

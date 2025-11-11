@@ -1,0 +1,239 @@
+Info: 'NrFilesPerSweep' not found in parameter file. Defaulting to 1.
+Input Data: /Users/b324240/Git/beamline-assistant-dev/test1/CeO_000001.tif.ge
+Parameter File: /Users/b324240/Git/beamline-assistant-dev/test1/Parameters.txt
+Output Zarr: CeO_000001.tif.ge.analysis.MIDAS.zip
+Moving existing file to 'CeO_000001.tif.ge.analysis.MIDAS.zip.old'
+
+--- Processing GE File(s) ---
+Info: Dark correction/processing is active.
+Handling as uint16. Files per scan: 1
+Scan: 1 file(s), 1 frames/file. Skipping 0 from files 2+. Total frames to write: 1.
+  - Pre-processing threshold is set. Writing zero arrays for dark/bright.
+  - Reading file 1/1: /Users/b324240/Git/beamline-assistant-dev/test1/CeO_000001.tif.ge
+
+Written datatype for C-code: 'uint16'
+
+Writing analysis parameters to Zarr file...
+  - Info: Parameter 'RingThresh' not found. Creating with default values.
+  - Info: Parameter 'RingsToExclude' not found. Creating with default values.
+  - Info: Parameter 'OmegaRanges' not found. Creating with default values.
+  - Info: Parameter 'BoxSizes' not found. Creating with default values.
+  - Info: Parameter 'ImTransOpt' not found. Creating with default values.
+
+--- Zarr File Structure Verification ---
+/
+ ├── analysis
+ │   └── process
+ │       └── analysis_parameters
+ │           ├── BoxSizes (1, 4) float64
+ │           ├── ImTransOpt (1,) int32
+ │           ├── LatticeParameter (6,) float64
+ │           ├── LayerNr (1,) int32
+ │           ├── NrFilesPerSweep (1,) int64
+ │           ├── OmegaRanges (1, 2) float64
+ │           ├── PixelSize (1,) float64
+ │           ├── ResultFolder (1,) |S1
+ │           ├── RingThresh (1, 2) float64
+ │           ├── RingsToExclude (1, 2) float64
+ │           ├── SkipFrame (1,) int32
+ │           ├── SpaceGroup (1,) int32
+ │           ├── Wavelength (1,) float64
+ │           ├── darkFN (1,) |S1
+ │           ├── darkLoc (1,) |S13
+ │           ├── dataFN (1,) |S65
+ │           ├── dataLoc (1,) |S13
+ │           ├── numFilesPerScan (1,) int64
+ │           ├── numFrameChunks (1,) int64
+ │           ├── numPxY (1,) int64
+ │           ├── numPxZ (1,) int64
+ │           ├── omegaStep (1,) float64
+ │           ├── paramFN (1,) |S62
+ │           └── preProcThresh (1,) int64
+ ├── exchange
+ │   ├── bright (10, 1679, 1475) uint16
+ │   ├── dark (10, 1679, 1475) uint16
+ │   └── data (1, 1679, 1475) uint16
+ └── measurement
+     └── process
+         └── scan_parameters
+             ├── datatype () |S6
+             └── start (1,) float64
+
+--- Zarr Array Chunk Details ---
+Dataset: /analysis/process/analysis_parameters/BoxSizes
+  - Shape:   (1, 4)
+  - Chunks:  (1, 4)
+  - Dtype:   float64
+  - Compressor: {'id': 'blosc', 'cname': 'lz4', 'clevel': 5, 'shuffle': 1, 'blocksize': 0}
+-------------------------
+Dataset: /analysis/process/analysis_parameters/ImTransOpt
+  - Shape:   (1,)
+  - Chunks:  (1,)
+  - Dtype:   int32
+  - Compressor: {'id': 'blosc', 'cname': 'lz4', 'clevel': 5, 'shuffle': 1, 'blocksize': 0}
+-------------------------
+Dataset: /analysis/process/analysis_parameters/LatticeParameter
+  - Shape:   (6,)
+  - Chunks:  (6,)
+  - Dtype:   float64
+  - Compressor: {'id': 'blosc', 'cname': 'lz4', 'clevel': 5, 'shuffle': 1, 'blocksize': 0}
+-------------------------
+Dataset: /analysis/process/analysis_parameters/LayerNr
+  - Shape:   (1,)
+  - Chunks:  (1,)
+  - Dtype:   int32
+  - Compressor: {'id': 'blosc', 'cname': 'lz4', 'clevel': 5, 'shuffle': 1, 'blocksize': 0}
+-------------------------
+Dataset: /analysis/process/analysis_parameters/NrFilesPerSweep
+  - Shape:   (1,)
+  - Chunks:  (1,)
+  - Dtype:   int64
+  - Compressor: {'id': 'blosc', 'cname': 'lz4', 'clevel': 5, 'shuffle': 1, 'blocksize': 0}
+-------------------------
+Dataset: /analysis/process/analysis_parameters/OmegaRanges
+  - Shape:   (1, 2)
+  - Chunks:  (1, 2)
+  - Dtype:   float64
+  - Compressor: {'id': 'blosc', 'cname': 'lz4', 'clevel': 5, 'shuffle': 1, 'blocksize': 0}
+-------------------------
+Dataset: /analysis/process/analysis_parameters/PixelSize
+  - Shape:   (1,)
+  - Chunks:  (1,)
+  - Dtype:   float64
+  - Compressor: {'id': 'blosc', 'cname': 'lz4', 'clevel': 5, 'shuffle': 1, 'blocksize': 0}
+-------------------------
+Dataset: /analysis/process/analysis_parameters/ResultFolder
+  - Shape:   (1,)
+  - Chunks:  (1,)
+  - Dtype:   |S1
+  - Compressor: {'id': 'blosc', 'cname': 'lz4', 'clevel': 5, 'shuffle': 1, 'blocksize': 0}
+-------------------------
+Dataset: /analysis/process/analysis_parameters/RingThresh
+  - Shape:   (1, 2)
+  - Chunks:  (1, 2)
+  - Dtype:   float64
+  - Compressor: {'id': 'blosc', 'cname': 'lz4', 'clevel': 5, 'shuffle': 1, 'blocksize': 0}
+-------------------------
+Dataset: /analysis/process/analysis_parameters/RingsToExclude
+  - Shape:   (1, 2)
+  - Chunks:  (1, 2)
+  - Dtype:   float64
+  - Compressor: {'id': 'blosc', 'cname': 'lz4', 'clevel': 5, 'shuffle': 1, 'blocksize': 0}
+-------------------------
+Dataset: /analysis/process/analysis_parameters/SkipFrame
+  - Shape:   (1,)
+  - Chunks:  (1,)
+  - Dtype:   int32
+  - Compressor: {'id': 'blosc', 'cname': 'lz4', 'clevel': 5, 'shuffle': 1, 'blocksize': 0}
+-------------------------
+Dataset: /analysis/process/analysis_parameters/SpaceGroup
+  - Shape:   (1,)
+  - Chunks:  (1,)
+  - Dtype:   int32
+  - Compressor: {'id': 'blosc', 'cname': 'lz4', 'clevel': 5, 'shuffle': 1, 'blocksize': 0}
+-------------------------
+Dataset: /analysis/process/analysis_parameters/Wavelength
+  - Shape:   (1,)
+  - Chunks:  (1,)
+  - Dtype:   float64
+  - Compressor: {'id': 'blosc', 'cname': 'lz4', 'clevel': 5, 'shuffle': 1, 'blocksize': 0}
+-------------------------
+Dataset: /analysis/process/analysis_parameters/darkFN
+  - Shape:   (1,)
+  - Chunks:  (1,)
+  - Dtype:   |S1
+  - Compressor: {'id': 'blosc', 'cname': 'lz4', 'clevel': 5, 'shuffle': 1, 'blocksize': 0}
+-------------------------
+Dataset: /analysis/process/analysis_parameters/darkLoc
+  - Shape:   (1,)
+  - Chunks:  (1,)
+  - Dtype:   |S13
+  - Compressor: {'id': 'blosc', 'cname': 'lz4', 'clevel': 5, 'shuffle': 1, 'blocksize': 0}
+-------------------------
+Dataset: /analysis/process/analysis_parameters/dataFN
+  - Shape:   (1,)
+  - Chunks:  (1,)
+  - Dtype:   |S65
+  - Compressor: {'id': 'blosc', 'cname': 'lz4', 'clevel': 5, 'shuffle': 1, 'blocksize': 0}
+-------------------------
+Dataset: /analysis/process/analysis_parameters/dataLoc
+  - Shape:   (1,)
+  - Chunks:  (1,)
+  - Dtype:   |S13
+  - Compressor: {'id': 'blosc', 'cname': 'lz4', 'clevel': 5, 'shuffle': 1, 'blocksize': 0}
+-------------------------
+Dataset: /analysis/process/analysis_parameters/numFilesPerScan
+  - Shape:   (1,)
+  - Chunks:  (1,)
+  - Dtype:   int64
+  - Compressor: {'id': 'blosc', 'cname': 'lz4', 'clevel': 5, 'shuffle': 1, 'blocksize': 0}
+-------------------------
+Dataset: /analysis/process/analysis_parameters/numFrameChunks
+  - Shape:   (1,)
+  - Chunks:  (1,)
+  - Dtype:   int64
+  - Compressor: {'id': 'blosc', 'cname': 'lz4', 'clevel': 5, 'shuffle': 1, 'blocksize': 0}
+-------------------------
+Dataset: /analysis/process/analysis_parameters/numPxY
+  - Shape:   (1,)
+  - Chunks:  (1,)
+  - Dtype:   int64
+  - Compressor: {'id': 'blosc', 'cname': 'lz4', 'clevel': 5, 'shuffle': 1, 'blocksize': 0}
+-------------------------
+Dataset: /analysis/process/analysis_parameters/numPxZ
+  - Shape:   (1,)
+  - Chunks:  (1,)
+  - Dtype:   int64
+  - Compressor: {'id': 'blosc', 'cname': 'lz4', 'clevel': 5, 'shuffle': 1, 'blocksize': 0}
+-------------------------
+Dataset: /analysis/process/analysis_parameters/omegaStep
+  - Shape:   (1,)
+  - Chunks:  (1,)
+  - Dtype:   float64
+  - Compressor: {'id': 'blosc', 'cname': 'lz4', 'clevel': 5, 'shuffle': 1, 'blocksize': 0}
+-------------------------
+Dataset: /analysis/process/analysis_parameters/paramFN
+  - Shape:   (1,)
+  - Chunks:  (1,)
+  - Dtype:   |S62
+  - Compressor: {'id': 'blosc', 'cname': 'lz4', 'clevel': 5, 'shuffle': 1, 'blocksize': 0}
+-------------------------
+Dataset: /analysis/process/analysis_parameters/preProcThresh
+  - Shape:   (1,)
+  - Chunks:  (1,)
+  - Dtype:   int64
+  - Compressor: {'id': 'blosc', 'cname': 'lz4', 'clevel': 5, 'shuffle': 1, 'blocksize': 0}
+-------------------------
+Dataset: /exchange/bright
+  - Shape:   (10, 1679, 1475)
+  - Chunks:  (1, 1679, 1475)
+  - Dtype:   uint16
+  - Compressor: {'id': 'blosc', 'cname': 'zstd', 'clevel': 3, 'shuffle': 2, 'blocksize': 0}
+-------------------------
+Dataset: /exchange/dark
+  - Shape:   (10, 1679, 1475)
+  - Chunks:  (1, 1679, 1475)
+  - Dtype:   uint16
+  - Compressor: {'id': 'blosc', 'cname': 'zstd', 'clevel': 3, 'shuffle': 2, 'blocksize': 0}
+-------------------------
+Dataset: /exchange/data
+  - Shape:   (1, 1679, 1475)
+  - Chunks:  (1, 1679, 1475)
+  - Dtype:   uint16
+  - Compressor: {'id': 'blosc', 'cname': 'zstd', 'clevel': 3, 'shuffle': 2, 'blocksize': 0}
+-------------------------
+Dataset: /measurement/process/scan_parameters/datatype
+  - Shape:   ()
+  - Chunks:  ()
+  - Dtype:   |S6
+  - Compressor: None
+-------------------------
+Dataset: /measurement/process/scan_parameters/start
+  - Shape:   (1,)
+  - Chunks:  (1,)
+  - Dtype:   float64
+  - Compressor: {'id': 'blosc', 'cname': 'lz4', 'clevel': 5, 'shuffle': 1, 'blocksize': 0}
+-------------------------
+
+Successfully created Zarr file: CeO_000001.tif.ge.analysis.MIDAS.zip
+OutputZipName: CeO_000001.tif.ge.analysis.MIDAS.zip
