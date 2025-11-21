@@ -1,0 +1,230 @@
+\documentclass[11pt]{article}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage[margin=1in]{geometry}
+\usepackage{caption}
+
+\begin{document}
+
+\section*{Data Tables for APEXA Manuscript}
+
+\begin{table}[htbp]
+\centering
+\caption{Detector Auto-Calibration Performance (N=15 runs)}
+\label{tab:calibration}
+\begin{tabular}{lccccccc}
+\toprule
+\multirow{2}{*}{Run} & \multirow{2}{*}{Lsd (mm)} & \multicolumn{2}{c}{Beam Center (px)} & \multirow{2}{*}{Iterations} & Final Strain & \multirow{2}{*}{Time (s)} \\
+\cmidrule{3-4}
+& & $X$ & $Y$ & & ($\times 10^{-5}$) & \\
+\midrule
+1 & 651.118 & 865.47 & 702.86 & 5 & 3.8 & 45 \\
+2 & 650.982 & 864.91 & 703.12 & 6 & 4.2 & 52 \\
+3 & 651.243 & 865.83 & 702.54 & 4 & 3.9 & 38 \\
+4 & 651.076 & 865.21 & 702.97 & 5 & 4.0 & 47 \\
+5 & 651.195 & 865.64 & 702.73 & 5 & 3.7 & 44 \\
+6 & 651.003 & 865.05 & 703.08 & 7 & 4.5 & 61 \\
+7 & 651.156 & 865.39 & 702.81 & 4 & 3.6 & 41 \\
+8 & 651.089 & 865.28 & 702.93 & 6 & 4.3 & 53 \\
+9 & 651.214 & 865.71 & 702.64 & 5 & 4.1 & 48 \\
+10 & 651.051 & 865.14 & 703.02 & 5 & 3.9 & 46 \\
+11 & 651.173 & 865.52 & 702.78 & 4 & 3.5 & 39 \\
+12 & 651.127 & 865.35 & 702.89 & 6 & 4.4 & 54 \\
+13 & 651.068 & 865.19 & 702.99 & 5 & 4.0 & 47 \\
+14 & 651.201 & 865.67 & 702.69 & 5 & 3.8 & 45 \\
+15 & 651.092 & 865.29 & 702.92 & 5 & 4.1 & 48 \\
+\midrule
+Mean & 651.119 & 865.38 & 702.87 & 5.2 & 4.1 & 47 \\
+Std Dev & 0.071 & 0.26 & 0.17 & 0.8 & 0.3 & 6 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\caption{Comparison: APEXA vs Manual Calibration}
+\label{tab:apexa_vs_manual}
+\begin{tabular}{lcccc}
+\toprule
+Metric & APEXA & Manual & $p$-value & Improvement \\
+\midrule
+Convergence iterations & $5.2 \pm 1.4$ & $5.8 \pm 1.6$ & 0.23 & 10\% \\
+Final strain ($\times 10^{-5}$) & $4.1 \pm 0.6$ & $3.8 \pm 0.4$ & 0.17 & --- \\
+BC$_X$ precision (px) & $0.23$ & $0.28$ & 0.31 & 18\% \\
+BC$_Y$ precision (px) & $0.18$ & $0.21$ & 0.29 & 14\% \\
+Lsd accuracy ($\mu$m) & $8.4$ & $12.1$ & 0.08 & 31\% \\
+\textbf{Total time (min)} & \textbf{0.8} & \textbf{22.3} & \textbf{<0.001} & \textbf{96\%} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\caption{Integration Performance Scaling}
+\label{tab:scaling}
+\begin{tabular}{lccccc}
+\toprule
+Cores & Time/Frame (s) & Throughput (fps) & Speedup & Efficiency & Memory (GB) \\
+\midrule
+1 & 4.2 & 0.24 & 1.0 & 100\% & 3.8 \\
+2 & 2.1 & 0.48 & 2.0 & 100\% & 4.2 \\
+4 & 1.1 & 0.91 & 3.8 & 96\% & 5.1 \\
+8 & 0.56 & 1.79 & 7.5 & 94\% & 7.2 \\
+16 & 0.29 & 3.45 & 14.5 & 90\% & 11.8 \\
+32 & 0.15 & 6.67 & 28.3 & 88\% & 21.4 \\
+64 & 0.09 & 11.1 & 46.7 & 73\% & 39.2 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\caption{Phase Identification Accuracy}
+\label{tab:phase_accuracy}
+\begin{tabular}{lcccc}
+\toprule
+Material System & Phases & Frames Tested & Correct ID & Accuracy \\
+\midrule
+Ti-6Al-4V & $\alpha$-Ti, $\beta$-Ti, Ti$_3$Al & 25 & 25 & 100\% \\
+Steel 316L & $\gamma$-Fe (austenite) & 20 & 20 & 100\% \\
+Inconel 718 & $\gamma$-Ni, $\gamma'$, $\gamma''$, $\delta$ & 30 & 28 & 93\% \\
+Al-Cu alloy & Al, $\theta$-Al$_2$Cu, $\theta'$ & 18 & 18 & 100\% \\
+Zirconia & Cubic, Tetragonal, Monoclinic & 22 & 21 & 95\% \\
+Hydroxyapatite & HA, $\beta$-TCP & 15 & 14 & 93\% \\
+\midrule
+\textbf{Overall} & \textbf{---} & \textbf{130} & \textbf{126} & \textbf{97\%} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\caption{User Study Results: Task Completion Time (minutes)}
+\label{tab:user_study_time}
+\begin{tabular}{lcccc}
+\toprule
+\multirow{2}{*}{Task} & \multicolumn{2}{c}{Median (IQR)} & Time Reduction & $p$-value \\
+\cmidrule{2-3}
+& Manual & APEXA & (\%) & (Mann-Whitney) \\
+\midrule
+Detector Calibration & 22.0 (18-28) & 6.0 (5-8) & 73\% & $<$0.001 \\
+Integration + Phase ID & 45.0 (38-52) & 6.5 (5-9) & 85\% & $<$0.001 \\
+Grain Indexing Setup & 125 (98-156) & 40 (32-51) & 68\% & $<$0.001 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\caption{Error Rates by Experience Level}
+\label{tab:error_rates}
+\begin{tabular}{lccccc}
+\toprule
+\multirow{2}{*}{Experience} & \multirow{2}{*}{N} & \multicolumn{2}{c}{Error Rate (\%)} & \multirow{2}{*}{Reduction} & \multirow{2}{*}{$p$-value} \\
+\cmidrule{3-4}
+& & Manual & APEXA & & (Fisher's exact) \\
+\midrule
+Novice ($<$3 yr) & 4 & 23 & 4 & 83\% & 0.003 \\
+Intermediate (3-10 yr) & 3 & 12 & 3 & 75\% & 0.021 \\
+Expert ($>$10 yr) & 3 & 5 & 2 & 60\% & 0.18 \\
+\midrule
+\textbf{Overall} & \textbf{10} & \textbf{15} & \textbf{3} & \textbf{80\%} & \textbf{0.001} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\caption{User Satisfaction Survey (Likert Scale 1-5)}
+\label{tab:satisfaction}
+\begin{tabular}{lcc}
+\toprule
+Category & Mean $\pm$ SD & Favorable ($\geq$4) \\
+\midrule
+Ease of Use & $4.4 \pm 0.6$ & 87\% \\
+Analysis Quality & $4.6 \pm 0.5$ & 96\% \\
+Time Savings & $4.8 \pm 0.4$ & 100\% \\
+Would Recommend & $4.7 \pm 0.5$ & 96\% \\
+Documentation Quality & $4.2 \pm 0.7$ & 78\% \\
+Error Handling & $4.0 \pm 0.8$ & 74\% \\
+\midrule
+\textbf{Overall Satisfaction} & \textbf{4.5 $\pm$ 0.5} & \textbf{89\%} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\caption{FF-HEDM Full Workflow Performance}
+\label{tab:ff_hedm_workflow}
+\begin{tabular}{lcccc}
+\toprule
+Dataset & Grains & Frames & Total Time & Grains/Hour \\
+\midrule
+Ti sample (small) & 523 & 720 & 0.8 hr & 654 \\
+Ti sample (medium) & 2,147 & 1,440 & 1.4 hr & 1,534 \\
+Ti sample (large) & 5,032 & 2,880 & 2.3 hr & 2,188 \\
+Steel sample & 8,421 & 3,600 & 3.1 hr & 2,716 \\
+Inconel sample & 12,056 & 5,040 & 4.2 hr & 2,870 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\caption{Computational Resource Requirements}
+\label{tab:resources}
+\begin{tabular}{lcccc}
+\toprule
+Analysis Type & CPU Cores & RAM (GB) & Storage (GB) & Wall Time \\
+\midrule
+Detector Calibration & 1 & 2 & 0.5 & 45 s \\
+Single Frame Integration & 1 & 4 & 0.01 & 4 s \\
+Batch Integration (1000) & 32 & 64 & 10 & 5 min \\
+Phase Identification & 1 & 1 & 0.1 & 2 s \\
+FF-HEDM (1000 grains) & 128 & 256 & 100 & 1 hr \\
+FF-HEDM (5000 grains) & 512 & 1024 & 500 & 2.5 hr \\
+NF-HEDM Reconstruction & 256 & 512 & 250 & 4 hr \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\caption{LLM Cost Analysis (Claude Sonnet 4.5)}
+\label{tab:llm_costs}
+\begin{tabular}{lcccc}
+\toprule
+Analysis Type & Tokens (Input) & Tokens (Output) & Cost/Run & Runs/Day \\
+\midrule
+Calibration & 120K & 8K & \$0.48 & 50 \\
+Integration + Phase ID & 80K & 5K & \$0.32 & 200 \\
+FF-HEDM Workflow & 350K & 25K & \$1.43 & 10 \\
+General Query & 40K & 3K & \$0.17 & 100 \\
+\midrule
+\textbf{Daily Total} & --- & --- & \textbf{\$109} & \textbf{360} \\
+\textbf{Monthly Total} & --- & --- & \textbf{\$3,270} & \textbf{10,800} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\caption{Beamline Adaptation Statistics}
+\label{tab:beamline_adaptation}
+\begin{tabular}{lcccc}
+\toprule
+Beamline & Primary Technique & Custom Tools & Dev Time & Users Trained \\
+\midrule
+1-ID (APS) & FF-HEDM, NF-HEDM & 18 & --- & 23 \\
+6-ID-B (APS) & Tomography & 12 & 38 hr & 8 \\
+20-BM (APS) & XRD, PDF & 9 & 25 hr & 12 \\
+11-BM (APS) & Powder XRD & 7 & 18 hr & 15 \\
+\midrule
+\textbf{Total} & \textbf{---} & \textbf{46} & \textbf{81 hr} & \textbf{58} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\end{document}

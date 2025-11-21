@@ -1,0 +1,5 @@
+Wavelength 0.2021
+SpaceGroup 225
+Lsd 1000000
+MaxRingRad 2000000
+LatticeConstant 5.411 0.0 0.0 0.0 0.0 0.0

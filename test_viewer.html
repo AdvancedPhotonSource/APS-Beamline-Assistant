@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Image Viewer Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 20px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+        }
+        .upload-area {
+            border: 2px dashed #ccc;
+            padding: 40px;
+            text-align: center;
+            border-radius: 8px;
+            margin: 20px 0;
+            cursor: pointer;
+        }
+        .upload-area:hover {
+            border-color: #667eea;
+            background: #f9f9ff;
+        }
+        #image-display {
+            max-width: 100%;
+            margin: 20px 0;
+            border: 1px solid #ddd;
+        }
+        .controls {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        label {
+            font-weight: bold;
+            color: #555;
+        }
+        input[type="range"] {
+            width: 100%;
+        }
+        select, input {
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        button {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        button:hover {
+            background: #5568d3;
+        }
+        .stats {
+            background: #f9f9f9;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 20px 0;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 10px;
+        }
+        .stat-item {
+            text-align: center;
+        }
+        .stat-label {
+            font-size: 12px;
+            color: #666;
+        }
+        .stat-value {
+            font-size: 18px;
+            font-weight: bold;
+            color: #333;
+        }
+        #plot {
+            width: 100%;
+            height: 400px;
+            margin: 20px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔬 Diffraction Image Viewer Test</h1>
+
+        <div class="upload-area" onclick="document.getElementById('file-input').click()">
+            <h3>Click to upload TIFF or GE image</h3>
+            <p>Supports: .tif, .tiff, .ge, .ge2, .ge3, .ge4, .ge5</p>
+            <input type="file" id="file-input" style="display: none;"
+                   accept=".tif,.tiff,.ge,.ge2,.ge3,.ge4,.ge5">
+        </div>
+
+        <div class="stats" id="stats" style="display: none;">
+            <h3>Image Statistics</h3>
+            <div class="stats-grid">
+                <div class="stat-item">
+                    <div class="stat-label">Min</div>
+                    <div class="stat-value" id="stat-min">-</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">Max</div>
+                    <div class="stat-value" id="stat-max">-</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">Mean</div>
+                    <div class="stat-value" id="stat-mean">-</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">Std Dev</div>
+                    <div class="stat-value" id="stat-std">-</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="controls" id="controls" style="display: none;">
+            <div class="control-group">
+                <label>Min Intensity (%): <span id="vmin-val">1</span></label>
+                <input type="range" id="vmin" min="0" max="100" value="1">
+            </div>
+            <div class="control-group">
+                <label>Max Intensity (%): <span id="vmax-val">99</span></label>
+                <input type="range" id="vmax" min="0" max="100" value="99">
+            </div>
+            <div class="control-group">
+                <label>Gamma: <span id="gamma-val">1.0</span></label>
+                <input type="range" id="gamma" min="0.1" max="3" step="0.1" value="1.0">
+            </div>
+            <div class="control-group">
+                <label>Colormap:</label>
+                <select id="colormap">
+                    <option value="gray">Grayscale</option>
+                    <option value="viridis">Viridis</option>
+                    <option value="plasma">Plasma</option>
+                    <option value="inferno">Inferno</option>
+                    <option value="jet">Jet</option>
+                    <option value="hot">Hot</option>
+                    <option value="cool">Cool</option>
+                    <option value="bone">Bone</option>
+                </select>
+            </div>
+        </div>
+
+        <img id="image-display" style="display: none;">
+
+        <div id="radial-controls" style="display: none; margin: 20px 0;">
+            <h3>Radial Profile</h3>
+            <div style="display: flex; gap: 10px; align-items: center;">
+                <label>Center X: <input type="number" id="center-x" value="0" style="width: 100px;"></label>
+                <label>Center Y: <input type="number" id="center-y" value="0" style="width: 100px;"></label>
+                <button onclick="calculateRadialProfile()">Calculate Profile</button>
+            </div>
+        </div>
+
+        <div id="plot"></div>
+    </div>
+
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <script>
+        const API_BASE = 'http://localhost:8001/api/viewer';
+        let currentFileId = null;
+        let imageStats = null;
+
+        document.getElementById('file-input').addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            try {
+                const response = await fetch(`${API_BASE}/load`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    currentFileId = result.file_id;
+                    imageStats = result.stats;
+
+                    // Display image
+                    document.getElementById('image-display').src = result.preview;
+                    document.getElementById('image-display').style.display = 'block';
+
+                    // Show stats
+                    document.getElementById('stat-min').textContent = result.stats.min.toFixed(0);
+                    document.getElementById('stat-max').textContent = result.stats.max.toFixed(0);
+                    document.getElementById('stat-mean').textContent = result.stats.mean.toFixed(0);
+                    document.getElementById('stat-std').textContent = result.stats.std.toFixed(0);
+                    document.getElementById('stats').style.display = 'block';
+
+                    // Show controls
+                    document.getElementById('controls').style.display = 'grid';
+                    document.getElementById('radial-controls').style.display = 'block';
+
+                    // Set default center
+                    document.getElementById('center-x').value = Math.floor(result.stats.shape[1] / 2);
+                    document.getElementById('center-y').value = Math.floor(result.stats.shape[0] / 2);
+
+                    alert('Image loaded successfully!');
+                } else {
+                    alert('Failed to load image');
+                }
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        });
+
+        // Update contrast when sliders change
+        ['vmin', 'vmax', 'gamma', 'colormap'].forEach(id => {
+            const elem = document.getElementById(id);
+            elem.addEventListener(id === 'colormap' ? 'change' : 'input', updateImage);
+            if (elem.type === 'range') {
+                elem.addEventListener('input', () => {
+                    document.getElementById(id + '-val').textContent = elem.value;
+                });
+            }
+        });
+
+        async function updateImage() {
+            if (!currentFileId) return;
+
+            const vmin = parseFloat(document.getElementById('vmin').value) / 100;
+            const vmax = parseFloat(document.getElementById('vmax').value) / 100;
+            const gamma = parseFloat(document.getElementById('gamma').value);
+            const colormap = document.getElementById('colormap').value;
+
+            const formData = new FormData();
+            formData.append('file_id', currentFileId);
+            formData.append('vmin', imageStats.min + (imageStats.max - imageStats.min) * vmin);
+            formData.append('vmax', imageStats.min + (imageStats.max - imageStats.min) * vmax);
+            formData.append('gamma', gamma);
+            formData.append('colormap', colormap);
+
+            try {
+                const response = await fetch(`${API_BASE}/adjust`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+                if (result.success) {
+                    document.getElementById('image-display').src = result.image;
+                }
+            } catch (error) {
+                console.error('Error updating image:', error);
+            }
+        }
+
+        async function calculateRadialProfile() {
+            if (!currentFileId) return;
+
+            const centerX = parseInt(document.getElementById('center-x').value);
+            const centerY = parseInt(document.getElementById('center-y').value);
+
+            const formData = new FormData();
+            formData.append('file_id', currentFileId);
+            formData.append('center_x', centerX);
+            formData.append('center_y', centerY);
+            formData.append('num_bins', 1000);
+
+            try {
+                const response = await fetch(`${API_BASE}/radial_profile`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+                if (result.success) {
+                    const trace = {
+                        x: result.radii,
+                        y: result.intensity,
+                        type: 'scatter',
+                        mode: 'lines',
+                        line: { color: '#667eea', width: 2 }
+                    };
+
+                    const layout = {
+                        title: 'Radial Intensity Profile',
+                        xaxis: { title: 'Radius (pixels)' },
+                        yaxis: { title: 'Intensity' }
+                    };
+
+                    Plotly.newPlot('plot', [trace], layout);
+                }
+            } catch (error) {
+                alert('Error calculating profile: ' + error.message);
+            }
+        }
+    </script>
+</body>
+</html>

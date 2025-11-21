@@ -55,11 +55,13 @@ esac
 echo ""
 echo "Step 3: MIDAS Installation"
 echo "-------------------------"
-echo "The system will automatically search for MIDAS at:"
-echo "  - ~/.MIDAS"
-echo "  - ~/MIDAS"
-echo "  - ~/opt/MIDAS"
-echo "  - /opt/MIDAS"
+echo "The system will automatically search for MIDAS in this order:"
+echo "  1. ~/Git/MIDAS"
+echo "  2. ~/opt/MIDAS"
+echo "  3. /home/beams/S*USER/opt/MIDAS (beamline systems)"
+echo "  4. ~/MIDAS"
+echo "  5. /opt/MIDAS"
+echo "  6. ~/.MIDAS"
 echo ""
 read -p "Do you want to specify a custom MIDAS path? (y/N): " -n 1 -r
 echo

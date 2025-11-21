@@ -712,20 +712,95 @@
                 <div id="tab-images" class="tab-content hidden">
                     <div class="visualization-container">
                         <div class="viz-header">
-                            <h3 class="viz-title">2D Diffraction Pattern</h3>
+                            <h3 class="viz-title">Diffraction Image Viewer</h3>
                             <div class="viz-controls">
-                                <div class="zoom-control">
-                                    <label>Zoom:</label>
-                                    <input type="range" min="50" max="200" value="100" id="zoom-slider">
-                                    <span id="zoom-value">100%</span>
+                                <input type="file" id="image-file-input" accept=".tif,.tiff,.ge,.ge2,.ge3,.ge4,.ge5" style="display: none;">
+                                <button class="btn btn-secondary" onclick="document.getElementById('image-file-input').click()">Upload Image</button>
+                            </div>
+                        </div>
+
+                        <!-- Image Statistics -->
+                        <div id="image-stats" style="display: none; padding: 15px; background: var(--surface-2); border-radius: 8px; margin-bottom: 15px;">
+                            <h4 style="margin-bottom: 10px;">Image Statistics</h4>
+                            <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px;">
+                                <div><strong>Min:</strong> <span id="img-stat-min">-</span></div>
+                                <div><strong>Max:</strong> <span id="img-stat-max">-</span></div>
+                                <div><strong>Mean:</strong> <span id="img-stat-mean">-</span></div>
+                                <div><strong>Std Dev:</strong> <span id="img-stat-std">-</span></div>
+                            </div>
+                        </div>
+
+                        <!-- Image Controls -->
+                        <div id="image-controls" style="display: none; padding: 15px; background: var(--surface-2); border-radius: 8px; margin-bottom: 15px;">
+                            <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px;">
+                                <div>
+                                    <label style="display: block; margin-bottom: 5px;"><strong>Min Intensity (%):</strong> <span id="vmin-display">1</span></label>
+                                    <input type="range" id="vmin-slider" min="0" max="100" value="1" style="width: 100%;">
+                                </div>
+                                <div>
+                                    <label style="display: block; margin-bottom: 5px;"><strong>Max Intensity (%):</strong> <span id="vmax-display">99</span></label>
+                                    <input type="range" id="vmax-slider" min="0" max="100" value="99" style="width: 100%;">
+                                </div>
+                                <div>
+                                    <label style="display: block; margin-bottom: 5px;"><strong>Gamma:</strong> <span id="gamma-display">1.0</span></label>
+                                    <input type="range" id="gamma-slider" min="0.1" max="3" step="0.1" value="1.0" style="width: 100%;">
+                                </div>
+                                <div>
+                                    <label style="display: block; margin-bottom: 5px;"><strong>Colormap:</strong></label>
+                                    <select id="colormap-selector" style="width: 100%; padding: 8px; border-radius: 4px; border: 1px solid var(--border);">
+                                        <option value="gray">Grayscale</option>
+                                        <option value="viridis">Viridis</option>
+                                        <option value="plasma">Plasma</option>
+                                        <option value="inferno">Inferno</option>
+                                        <option value="jet">Jet</option>
+                                        <option value="hot">Hot</option>
+                                        <option value="cool">Cool</option>
+                                        <option value="bone">Bone</option>
+                                    </select>
                                 </div>
                             </div>
                         </div>
+
+                        <!-- Image Display -->
                         <div class="image-viewer">
-                            <img class="image-display" id="diffraction-image" 
-                                 src="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAwIiBoZWlnaHQ9IjQwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KICA8ZGVmcz4KICAgIDxyYWRpYWxHcmFkaWVudCBpZD0iZGlmZnJhY3Rpb24iIGN4PSI1MCUiIGN5PSI1MCUiIHI9IjUwJSI+CiAgICAgIDxzdG9wIG9mZnNldD0iMCUiIHN0b3AtY29sb3I9IiNmZmZmZmYiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSIyMCUiIHN0b3AtY29sb3I9IiNmZmY3ZWQiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSI0MCUiIHN0b3AtY29sb3I9IiNmZWQ3YWEiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSI2MCUiIHN0b3AtY29sb3I9IiNmOTczMTYiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSI4MCUiIHN0b3AtY29sb3I9IiNlYTU4MGMiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSIxMDAlIiBzdG9wLWNvbG9yPSIjOWEzNDEyIi8+CiAgICA8L3JhZGlhbEdyYWRpZW50PgogIDwvZGVmcz4KICA8cmVjdCB3aWR0aD0iNDAwIiBoZWlnaHQ9IjQwMCIgZmlsbD0iIzFmMmkzNyIvPgogIDxjaXJjbGUgY3g9IjIwMCIgY3k9IjIwMCIgcj0iMTgwIiBmaWxsPSJ1cmwoI2RpZmZyYWN0aW9uKSIgb3BhY2l0eT0iMC44Ii8+CiAgPGNpcmNsZSBjeD0iMjAwIiBjeT0iMjAwIiByPSIxNDAiIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzM5OGFkYiIgc3Ryb2tlLXdpZHRoPSIyIiBvcGFjaXR5PSIwLjciLz4KICA8Y2lyY2xlIGN4PSIyMDAiIGN5PSIyMDAiIHI9IjEwMCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjMzk4YWRiIiBzdHJva2Utd2lkdGg9IjIiIG9wYWNpdHk9IjAuNyIvPgogIDxjaXJjbGUgY3g9IjIwMCIgY3k9IjIwMCIgcj0iNjAiIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzM5OGFkYiIgc3Ryb2tlLXdpZHRoPSIyIiBvcGFjaXR5PSIwLjciLz4KICA8dGV4dCB4PSIyMDAiIHk9IjM4MCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZmlsbD0iIzk0YTNiOCIgZm9udC1zaXplPSIxNCI+U2FtcGxlIERpZmZyYWN0aW9uIFBhdHRlcm48L3RleHQ+Cjwvc3ZnPg==" 
+                            <img class="image-display" id="diffraction-image"
+                                 src="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAwIiBoZWlnaHQ9IjQwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KICA8ZGVmcz4KICAgIDxyYWRpYWxHcmFkaWVudCBpZD0iZGlmZnJhY3Rpb24iIGN4PSI1MCUiIGN5PSI1MCUiIHI9IjUwJSI+CiAgICAgIDxzdG9wIG9mZnNldD0iMCUiIHN0b3AtY29sb3I9IiNmZmZmZmYiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSIyMCUiIHN0b3AtY29sb3I9IiNmZmY3ZWQiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSI0MCUiIHN0b3AtY29sb3I9IiNmZWQ3YWEiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSI2MCUiIHN0b3AtY29sb3I9IiNmOTczMTYiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSI4MCUiIHN0b3AtY29sb3I9IiNlYTU4MGMiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSIxMDAlIiBzdG9wLWNvbG9yPSIjOWEzNDEyIi8+CiAgICA8L3JhZGlhbEdyYWRpZW50PgogIDwvZGVmcz4KICA8cmVjdCB3aWR0aD0iNDAwIiBoZWlnaHQ9IjQwMCIgZmlsbD0iIzFmMmkzNyIvPgogIDxjaXJjbGUgY3g9IjIwMCIgY3k9IjIwMCIgcj0iMTgwIiBmaWxsPSJ1cmwoI2RpZmZyYWN0aW9uKSIgb3BhY2l0eT0iMC44Ii8+CiAgPGNpcmNsZSBjeD0iMjAwIiBjeT0iMjAwIiByPSIxNDAiIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzM5OGFkYiIgc3Ryb2tlLXdpZHRoPSIyIiBvcGFjaXR5PSIwLjciLz4KICA8Y2lyY2xlIGN4PSIyMDAiIGN5PSIyMDAiIHI9IjEwMCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjMzk4YWRiIiBzdHJva2Utd2lkdGg9IjIiIG9wYWNpdHk9IjAuNyIvPgogIDxjaXJjbGUgY3g9IjIwMCIgY3k9IjIwMCIgcj0iNjAiIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzM5OGFkYiIgc3Ryb2tlLXdpZHRoPSIyIiBvcGFjaXR5PSIwLjciLz4KICA8dGV4dCB4PSIyMDAiIHk9IjM4MCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZmlsbD0iIzk0YTNiOCIgZm9udC1zaXplPSIxNCI+U2FtcGxlIERpZmZyYWN0aW9uIFBhdHRlcm48L3RleHQ+Cjwvc3ZnPg=="
                                  alt="2D Diffraction Pattern">
                         </div>
+
+                        <!-- Calibration Overlay -->
+                        <div id="calibration-controls" style="display: none; padding: 15px; background: var(--surface-2); border-radius: 8px; margin-top: 15px;">
+                            <h4 style="margin-bottom: 10px;">MIDAS Calibration Overlay</h4>
+                            <div style="display: flex; gap: 15px; align-items: center;">
+                                <input type="file" id="calibration-file-input" accept=".txt" style="display: none;">
+                                <button class="btn btn-secondary" onclick="document.getElementById('calibration-file-input').click()">Load Calibration</button>
+                                <div id="calibration-status" style="color: var(--text-muted);"></div>
+                            </div>
+                        </div>
+
+                        <!-- Radial Profile -->
+                        <div id="radial-profile-controls" style="display: none; padding: 15px; background: var(--surface-2); border-radius: 8px; margin-top: 15px;">
+                            <h4 style="margin-bottom: 10px;">Radial Profile</h4>
+                            <div style="display: flex; gap: 15px; align-items: center;">
+                                <label>Center X: <input type="number" id="radial-center-x" value="0" style="width: 100px; padding: 6px; border-radius: 4px; border: 1px solid var(--border);"></label>
+                                <label>Center Y: <input type="number" id="radial-center-y" value="0" style="width: 100px; padding: 6px; border-radius: 4px; border: 1px solid var(--border);"></label>
+                                <button class="btn btn-primary" onclick="calculateRadialProfile()">Calculate Profile</button>
+                            </div>
+                        </div>
+                        <div id="radial-plot" style="margin-top: 15px;"></div>
+
+                        <!-- Azimuthal Profile -->
+                        <div id="azimuthal-profile-controls" style="display: none; padding: 15px; background: var(--surface-2); border-radius: 8px; margin-top: 15px;">
+                            <h4 style="margin-bottom: 10px;">Azimuthal Profile</h4>
+                            <div style="display: flex; gap: 15px; align-items: center; flex-wrap: wrap;">
+                                <label>Center X: <input type="number" id="azimuthal-center-x" value="0" style="width: 100px; padding: 6px; border-radius: 4px; border: 1px solid var(--border);"></label>
+                                <label>Center Y: <input type="number" id="azimuthal-center-y" value="0" style="width: 100px; padding: 6px; border-radius: 4px; border: 1px solid var(--border);"></label>
+                                <label>Radius: <input type="number" id="azimuthal-radius" value="100" style="width: 100px; padding: 6px; border-radius: 4px; border: 1px solid var(--border);"></label>
+                                <label>Width: <input type="number" id="azimuthal-width" value="5" style="width: 80px; padding: 6px; border-radius: 4px; border: 1px solid var(--border);"></label>
+                                <button class="btn btn-primary" onclick="calculateAzimuthalProfile()">Calculate Profile</button>
+                            </div>
+                        </div>
+                        <div id="azimuthal-plot" style="margin-top: 15px;"></div>
                     </div>
                 </div>
             </div>
@@ -1454,6 +1529,261 @@ Model Options:
             
             addMessage('assistant', helpText);
         }
+
+        // Image Viewer Functionality
+        const API_VIEWER = 'http://localhost:8001/api/viewer';
+        let currentImageFileId = null;
+        let currentImageStats = null;
+
+        // Setup image viewer event listeners
+        document.getElementById('image-file-input').addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            try {
+                const response = await fetch(`${API_VIEWER}/load`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    currentImageFileId = result.file_id;
+                    currentImageStats = result.stats;
+
+                    // Display image
+                    document.getElementById('diffraction-image').src = result.preview;
+
+                    // Show stats
+                    document.getElementById('img-stat-min').textContent = result.stats.min.toFixed(0);
+                    document.getElementById('img-stat-max').textContent = result.stats.max.toFixed(0);
+                    document.getElementById('img-stat-mean').textContent = result.stats.mean.toFixed(0);
+                    document.getElementById('img-stat-std').textContent = result.stats.std.toFixed(0);
+                    document.getElementById('image-stats').style.display = 'block';
+
+                    // Show controls
+                    document.getElementById('image-controls').style.display = 'block';
+                    document.getElementById('calibration-controls').style.display = 'block';
+                    document.getElementById('radial-profile-controls').style.display = 'block';
+                    document.getElementById('azimuthal-profile-controls').style.display = 'block';
+
+                    // Set default center for all tools
+                    const centerX = Math.floor(result.stats.shape[1] / 2);
+                    const centerY = Math.floor(result.stats.shape[0] / 2);
+                    document.getElementById('radial-center-x').value = centerX;
+                    document.getElementById('radial-center-y').value = centerY;
+                    document.getElementById('azimuthal-center-x').value = centerX;
+                    document.getElementById('azimuthal-center-y').value = centerY;
+
+                    addMessage('assistant', `Image loaded successfully! Size: ${result.stats.shape[1]}x${result.stats.shape[0]} pixels`);
+                } else {
+                    addMessage('assistant', 'Failed to load image: ' + (result.error || 'Unknown error'));
+                }
+            } catch (error) {
+                addMessage('assistant', 'Error loading image: ' + error.message);
+            }
+        });
+
+        // Update contrast when sliders change
+        ['vmin-slider', 'vmax-slider', 'gamma-slider', 'colormap-selector'].forEach(id => {
+            const elem = document.getElementById(id);
+            const isSlider = elem.type === 'range';
+            elem.addEventListener(isSlider ? 'input' : 'change', updateImageDisplay);
+            if (isSlider) {
+                elem.addEventListener('input', () => {
+                    const displayId = id.replace('-slider', '-display');
+                    document.getElementById(displayId).textContent = elem.value;
+                });
+            }
+        });
+
+        async function updateImageDisplay() {
+            if (!currentImageFileId) return;
+
+            const vmin = parseFloat(document.getElementById('vmin-slider').value) / 100;
+            const vmax = parseFloat(document.getElementById('vmax-slider').value) / 100;
+            const gamma = parseFloat(document.getElementById('gamma-slider').value);
+            const colormap = document.getElementById('colormap-selector').value;
+
+            const formData = new FormData();
+            formData.append('file_id', currentImageFileId);
+            formData.append('vmin', currentImageStats.min + (currentImageStats.max - currentImageStats.min) * vmin);
+            formData.append('vmax', currentImageStats.min + (currentImageStats.max - currentImageStats.min) * vmax);
+            formData.append('gamma', gamma);
+            formData.append('colormap', colormap);
+
+            try {
+                const response = await fetch(`${API_VIEWER}/adjust`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+                if (result.success) {
+                    document.getElementById('diffraction-image').src = result.image;
+                }
+            } catch (error) {
+                console.error('Error updating image:', error);
+            }
+        }
+
+        async function calculateRadialProfile() {
+            if (!currentImageFileId) {
+                addMessage('assistant', 'Please load an image first.');
+                return;
+            }
+
+            const centerX = parseInt(document.getElementById('radial-center-x').value);
+            const centerY = parseInt(document.getElementById('radial-center-y').value);
+
+            const formData = new FormData();
+            formData.append('file_id', currentImageFileId);
+            formData.append('center_x', centerX);
+            formData.append('center_y', centerY);
+            formData.append('num_bins', 1000);
+
+            try {
+                const response = await fetch(`${API_VIEWER}/radial_profile`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+                if (result.success) {
+                    const trace = {
+                        x: result.radii,
+                        y: result.intensity,
+                        type: 'scatter',
+                        mode: 'lines',
+                        line: { color: '#667eea', width: 2 }
+                    };
+
+                    const layout = {
+                        title: 'Radial Intensity Profile',
+                        xaxis: { title: 'Radius (pixels)' },
+                        yaxis: { title: 'Intensity' },
+                        paper_bgcolor: 'var(--surface)',
+                        plot_bgcolor: 'var(--surface-2)'
+                    };
+
+                    Plotly.newPlot('radial-plot', [trace], layout);
+                    addMessage('assistant', `Radial profile calculated from center (${centerX}, ${centerY})`);
+                }
+            } catch (error) {
+                addMessage('assistant', 'Error calculating profile: ' + error.message);
+            }
+        }
+
+        async function calculateAzimuthalProfile() {
+            if (!currentImageFileId) {
+                addMessage('assistant', 'Please load an image first.');
+                return;
+            }
+
+            const centerX = parseInt(document.getElementById('azimuthal-center-x').value);
+            const centerY = parseInt(document.getElementById('azimuthal-center-y').value);
+            const radius = parseFloat(document.getElementById('azimuthal-radius').value);
+            const width = parseFloat(document.getElementById('azimuthal-width').value);
+
+            const formData = new FormData();
+            formData.append('file_id', currentImageFileId);
+            formData.append('center_x', centerX);
+            formData.append('center_y', centerY);
+            formData.append('radius', radius);
+            formData.append('width', width);
+
+            try {
+                const response = await fetch(`${API_VIEWER}/azimuthal_profile`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+                if (result.success) {
+                    const trace = {
+                        x: result.angles,
+                        y: result.intensity,
+                        type: 'scatter',
+                        mode: 'lines',
+                        line: { color: '#f59e0b', width: 2 }
+                    };
+
+                    const layout = {
+                        title: `Azimuthal Profile (Radius: ${radius}px, Width: ${width}px)`,
+                        xaxis: { title: 'Angle (degrees)' },
+                        yaxis: { title: 'Intensity' },
+                        paper_bgcolor: 'var(--surface)',
+                        plot_bgcolor: 'var(--surface-2)'
+                    };
+
+                    Plotly.newPlot('azimuthal-plot', [trace], layout);
+                    addMessage('assistant', `Azimuthal profile calculated at radius ${radius}px around (${centerX}, ${centerY})`);
+                }
+            } catch (error) {
+                addMessage('assistant', 'Error calculating azimuthal profile: ' + error.message);
+            }
+        }
+
+        // Calibration file loading
+        let currentCalibration = null;
+        document.getElementById('calibration-file-input').addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            try {
+                const response = await fetch(`${API_VIEWER}/load_calibration`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    currentCalibration = result.calibration;
+                    document.getElementById('calibration-status').textContent =
+                        `Loaded: ${result.calibration.rings.length} rings, center: (${result.calibration.beam_center[0].toFixed(1)}, ${result.calibration.beam_center[1].toFixed(1)})`;
+                    addMessage('assistant', `MIDAS calibration loaded: ${result.calibration.rings.length} rings detected`);
+
+                    // Draw rings on image (simplified - would need canvas overlay for full implementation)
+                    if (currentImageFileId) {
+                        addMessage('assistant', 'Calibration rings: ' + result.calibration.rings.map(r => r.toFixed(1) + 'px').join(', '));
+                    }
+                } else {
+                    document.getElementById('calibration-status').textContent = 'Failed to load calibration';
+                    addMessage('assistant', 'Failed to load calibration file');
+                }
+            } catch (error) {
+                document.getElementById('calibration-status').textContent = 'Error loading file';
+                addMessage('assistant', 'Error loading calibration: ' + error.message);
+            }
+        });
+
+        // Add click-to-set beam center functionality
+        document.getElementById('diffraction-image').addEventListener('click', function(e) {
+            if (!currentImageFileId) return;
+
+            const rect = this.getBoundingClientRect();
+            const scaleX = currentImageStats.shape[1] / rect.width;
+            const scaleY = currentImageStats.shape[0] / rect.height;
+
+            const clickX = Math.floor((e.clientX - rect.left) * scaleX);
+            const clickY = Math.floor((e.clientY - rect.top) * scaleY);
+
+            // Update all center inputs
+            document.getElementById('radial-center-x').value = clickX;
+            document.getElementById('radial-center-y').value = clickY;
+            document.getElementById('azimuthal-center-x').value = clickX;
+            document.getElementById('azimuthal-center-y').value = clickY;
+
+            addMessage('assistant', `Beam center set to (${clickX}, ${clickY}). Click "Calculate Profile" to update.`);
+        });
 
         console.log('Full-featured APS Beamline Assistant loaded successfully');
     </script>

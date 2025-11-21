@@ -1096,7 +1096,13 @@ class APEXAClient:
             script_path = config["script_path"]
             
             try:
-                command = "python" if script_path.endswith('.py') else "node"
+                # Use venv Python if available, otherwise fall back to system python
+                if script_path.endswith('.py'):
+                    venv_python = Path(".venv/bin/python3")
+                    command = str(venv_python) if venv_python.exists() else "python3"
+                else:
+                    command = "node"
+
                 server_params = StdioServerParameters(
                     command=command,
                     args=[script_path],
@@ -1263,10 +1269,18 @@ class APEXAClient:
             try:
                 response = await session.list_tools()
                 for tool in response.tools:
+                    # Check if tool name already has server prefix (avoid midas_midas_auto_calibrate)
+                    if tool.name.startswith(f"{server_name}_"):
+                        # Tool already has prefix, use as-is
+                        full_tool_name = tool.name
+                    else:
+                        # Add server prefix
+                        full_tool_name = f"{server_name}_{tool.name}"
+                    
                     tool_info = {
                         "type": "function",
                         "function": {
-                            "name": f"{server_name}_{tool.name}",
+                            "name": full_tool_name,
                             "description": f"[{server_name.upper()}] {tool.description}",
                             "parameters": tool.inputSchema
                         },
@@ -1276,6 +1290,7 @@ class APEXAClient:
                     all_tools.append(tool_info)
             except Exception as e:
                 print(f"✗ Error getting tools from {server_name}: {e}")
+
         
         # Removed debug output for cleaner interface
         # print(f"\n🔧 DEBUG: Available tools: {len(all_tools)}")
@@ -1323,9 +1338,23 @@ class APEXAClient:
                 print(" (from cache)")
                 return cached_result
 
-        if "_" in tool_name:
-            server_name, original_tool_name = tool_name.split("_", 1)
-        else:
+        # Parse server_name and tool_name
+        # Tool names might already include the server prefix (e.g., "midas_auto_calibrate")
+        # We need to identify the correct server and pass the full tool name to it
+        server_name = None
+        original_tool_name = tool_name
+
+        # Try to match against known server names
+        for srv_name in self.sessions.keys():
+            if tool_name.startswith(f"{srv_name}_"):
+                server_name = srv_name
+                # Keep the full tool name as registered in the MCP server
+                # Don't strip the prefix because the tool is registered with it
+                original_tool_name = tool_name
+                break
+
+        if not server_name:
+            # Fallback: assume it's a midas tool
             server_name = "midas"
             original_tool_name = tool_name
 
@@ -1656,8 +1685,9 @@ ARGUMENTS: {"image_path": "/path/data.ge5", "calibration_file": "/path/calib.txt
                         print(f"  ⚠️  Could not extract tool name from: {tool_call}")
                         continue
                     
-                    print(f"\n  Calling: {tool_name}")
-                    print(f"  Arguments: {json.dumps(arguments, indent=4)}")
+                    # Cleaner output - just the tool call notification is enough
+                    # (execute_tool_call already shows "→ Tool Name")
+                    pass
                     
                     # Execute the tool
                     tool_result = await self.execute_tool_call(tool_name, arguments)
@@ -1711,8 +1741,8 @@ ARGUMENTS: {"image_path": "/path/data.ge5", "calibration_file": "/path/calib.txt
                         else:
                             arguments = {}
                         
-                        print(f"  Extracted tool: {tool_name}")
-                        print(f"  Arguments: {arguments}")
+                        # Cleaner output - removed verbose extraction messages
+                        pass
                         
                         # Execute the tool
                         tool_result = await self.execute_tool_call(tool_name, arguments)

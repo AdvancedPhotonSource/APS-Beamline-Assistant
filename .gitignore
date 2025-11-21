@@ -69,9 +69,8 @@ tmp/
 *.pyo
 
 # Documentation build
-docs/
-docs/api/
-docs/_build/
+site/
+.cache/
 
 # Development and internal documentation
 ADDING_NEW_SERVERS.md
@@ -102,6 +101,4 @@ startup.sh
 
 # Test data
 *.dat
-
-# ML deployment (separate feature)
-ML-deploy/
+# ML deployment (separate feature) - REMOVED: Now tracked for ML integration
