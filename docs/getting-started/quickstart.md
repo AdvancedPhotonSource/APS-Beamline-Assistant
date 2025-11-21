@@ -27,24 +27,21 @@ Beamline> Run FF-HEDM workflow on /data/experiment_042
 
 ## Requirements
 
+- **Python:** 3.10+ (with `uv` package manager)
 - **Network:** ANL network or VPN connection
-- **MIDAS:** Installed at one of these locations:
-  - `~/.MIDAS` (recommended)
-  - `~/MIDAS`
-  - `~/opt/MIDAS`
-  - `/opt/MIDAS`
-  - Custom path (set in `.env`)
-- **Python:** 3.10+ with `uv` package manager
+- **MIDAS:** Auto-detected from standard locations (see below)
 
 ## MIDAS Auto-Detection
 
-The system automatically finds MIDAS in this order:
-1. `$MIDAS_PATH` environment variable
-2. `~/.MIDAS`
-3. `~/MIDAS`
-4. `~/opt/MIDAS`
-5. `/opt/MIDAS`
-6. `./MIDAS`
+**MIDAS is auto-detected from these locations (in order):**
+
+1. `$MIDAS_PATH` environment variable (highest priority)
+2. `~/Git/MIDAS` (common for development)
+3. `~/opt/MIDAS` (beamline recommended)
+4. `/home/beams/S*USER/opt/MIDAS` (APS beamlines)
+5. `~/MIDAS`
+6. `/opt/MIDAS`
+7. `~/.MIDAS`
 
 **No configuration needed if MIDAS is in a standard location!**
 

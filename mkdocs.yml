@@ -1,0 +1,73 @@
+site_name: APEXA Documentation
+site_description: Advanced Photon EXperiment Assistant - AI-powered beamline scientist for HEDM data analysis
+site_author: Pawan Tripathi, Advanced Photon Source
+repo_url: https://github.com/AdvancedPhotonSource/APS-Beamline-Assistant
+repo_name: AdvancedPhotonSource/APS-Beamline-Assistant
+
+theme:
+  name: material
+  palette:
+    # Light mode
+    - scheme: default
+      primary: indigo
+      accent: blue
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    # Dark mode
+    - scheme: slate
+      primary: indigo
+      accent: blue
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.tracking
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+    - toc.follow
+
+plugins:
+  - search:
+      lang: en
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.tabbed:
+      alternate_style: true
+  - tables
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - Quick Start: getting-started/quickstart.md
+      - Quick Reference: getting-started/quick-reference.md
+  - User Guide:
+      - User Manual: user-guide/user-manual.md
+      - Web UI Guide: user-guide/web-ui-guide.md
+      - Smart Features: user-guide/smart-features.md
+  - Technical Reference:
+      - MIDAS Workflows: reference/midas-workflows.md
+  - Setup & Deployment:
+      - Beamline Setup: setup/beamline-setup.md
+      - Deployment Guide: setup/deployment.md
+      - Fix Calibration: setup/fix-calibration.md
+      - Install GitHub CLI: setup/install-gh-cli.md
+  - Development:
+      - Architecture: development/architecture.md
+      - Adding New Servers: development/adding-servers.md
+      - Migration Strategy: development/migration-strategy.md
+      - Check Attribution: development/check-attribution.md
