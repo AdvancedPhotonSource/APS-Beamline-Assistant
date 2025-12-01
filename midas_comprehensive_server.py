@@ -2104,7 +2104,7 @@ async def get_midas_workflow_status(
 # =============================================================================
 
 @mcp.tool()
-async def integrate_2d_to_1d(
+async def midas_integrate_2d_to_1d(
     image_path: str,
     calibration_file: str = None,
     wavelength: float = None,
@@ -2200,11 +2200,19 @@ async def integrate_2d_to_1d(
                 dark_path = Path(dark_file).expanduser().absolute()
                 if not dark_path.exists():
                     return format_result({
-                        "tool": "integrate_2d_to_1d",
+                        "tool": "midas_integrate_2d_to_1d",
                         "status": "error",
                         "error": f"Dark file not found: {dark_path}"
                     })
                 cmd.append(str(dark_path))
+
+            # ===== TRANSPARENCY: Show exact command being run =====
+            cmd_str = " ".join(cmd)
+            print("="*70, file=sys.stderr)
+            print("🔧 MIDAS INTEGRATION COMMAND:", file=sys.stderr)
+            print(f"   Working directory: {image_path.parent}", file=sys.stderr)
+            print(f"   Command: {cmd_str}", file=sys.stderr)
+            print("="*70, file=sys.stderr)
 
             # Run MIDAS Integrator with proper environment
             try:
@@ -2219,9 +2227,11 @@ async def integrate_2d_to_1d(
 
                 if result.returncode != 0:
                     return format_result({
-                        "tool": "integrate_2d_to_1d",
+                        "tool": "midas_integrate_2d_to_1d",
                         "status": "error",
                         "method": "MIDAS Integrator",
+                        "command": cmd_str,
+                        "working_directory": str(image_path.parent),
                         "error": f"Integration failed with code {result.returncode}",
                         "stderr": result.stderr,
                         "stdout": result.stdout
@@ -2240,20 +2250,23 @@ async def integrate_2d_to_1d(
                 dark_msg = f" with dark subtraction from {Path(dark_file).name}" if dark_file else ""
 
                 return format_result({
-                    "tool": "integrate_2d_to_1d",
+                    "tool": "midas_integrate_2d_to_1d",
                     "status": "success",
                     "method": "MIDAS Integrator",
+                    "command": cmd_str,
+                    "working_directory": str(image_path.parent),
                     "input_image": str(image_path),
                     "parameters_file": str(cal_path),
                     "dark_file": str(dark_file) if dark_file else None,
                     "output_file": str(output_1d) if output_1d else "Check working directory for output",
                     "stdout": result.stdout,
+                    "stderr": result.stderr if result.stderr else "(no errors)",
                     "message": f"Successfully integrated {image_path.name} using MIDAS Integrator{dark_msg}"
                 })
 
             except subprocess.TimeoutExpired:
                 return format_result({
-                    "tool": "integrate_2d_to_1d",
+                    "tool": "midas_integrate_2d_to_1d",
                     "status": "error",
                     "error": "Integration timed out (>5 minutes)"
                 })
@@ -2675,6 +2688,19 @@ async def midas_auto_calibrate(
         # Add beamline-standard bad pixel and gap intensity markers
         cmd.extend(["-BadPxIntensity", "-2"])
         cmd.extend(["-GapIntensity", "-1"])
+
+        # ===== TRANSPARENCY: Show exact command being run =====
+        cmd_str = " ".join(str(x) for x in cmd)
+        print("="*70, file=sys.stderr)
+        print("🔧 MIDAS AUTO-CALIBRATION COMMAND:", file=sys.stderr)
+        print(f"   Working directory: {image_path.parent}", file=sys.stderr)
+        print(f"   Python: {cmd[0]}", file=sys.stderr)
+        print(f"   Script: {cmd[1]}", file=sys.stderr)
+        print(f"   Parameters:", file=sys.stderr)
+        for i in range(2, len(cmd), 2):
+            if i+1 < len(cmd) and cmd[i].startswith("-"):
+                print(f"      {cmd[i]} {cmd[i+1]}", file=sys.stderr)
+        print("="*70, file=sys.stderr)
 
         # Run calibration with MIDAS environment
         result = subprocess.run(

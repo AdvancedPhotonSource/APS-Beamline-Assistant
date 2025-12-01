@@ -874,14 +874,117 @@ async def get_colormaps():
     })
 
 
+@app.post("/api/export_paraview")
+async def export_to_paraview(
+    results_path: str = Form(...),
+    data_type: str = Form("grains")
+):
+    """
+    Export MIDAS analysis results to VTK format for ParaView visualization
+    
+    Args:
+        results_path: Path to MIDAS output file (CSV or H5)
+        data_type: Type of data ("grains", "voxels", or "peaks")
+    
+    Returns:
+        VTK file for download
+    """
+    try:
+        from paraview_export import grains_to_vtk, nf_voxels_to_vtk, peaks_to_vtk
+        
+        # Resolve path
+        input_path = Path(results_path)
+        if not input_path.exists():
+            raise HTTPException(status_code=404, detail=f"File not found: {results_path}")
+        
+        # Create output path
+        output_path = upload_dir / f"{input_path.stem}.vtp"
+        if data_type == "voxels":
+            output_path = upload_dir / f"{input_path.stem}.vti"
+        
+        # Convert to VTK
+        if data_type == "grains":
+            vtk_file = grains_to_vtk(str(input_path), str(output_path))
+        elif data_type == "voxels":
+            vtk_file = nf_voxels_to_vtk(str(input_path), str(output_path))
+        elif data_type == "peaks":
+            vtk_file = peaks_to_vtk(str(input_path), str(output_path))
+        else:
+            raise HTTPException(status_code=400, detail=f"Unknown data type: {data_type}")
+        
+        # Return file for download
+        return FileResponse(
+            vtk_file,
+            media_type="application/octet-stream",
+            filename=Path(vtk_file).name,
+            headers={"Content-Disposition": f"attachment; filename={Path(vtk_file).name}"}
+        )
+        
+    except Exception as e:
+        print(f"ParaView export error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/calibrate")
+async def run_calibration(
+    file_id: str = Form(...),
+    calibrant: str = Form("CeO2"),
+    distance: float = Form(1000.0),
+    wavelength: float = Form(0.2066),
+    center_x: Optional[float] = Form(None),
+    center_y: Optional[float] = Form(None)
+):
+    """
+    Run MIDAS auto-calibration on uploaded diffraction image
+    
+    Args:
+        file_id: ID of uploaded image
+        calibrant: Calibrant material (CeO2, LaB6, Si, etc.)
+        distance: Initial detector distance (mm)
+        wavelength: X-ray wavelength (Angstroms)
+        center_x: Initial beam center X (pixels)
+        center_y: Initial beam center Y (pixels)
+    
+    Returns:
+        Refined calibration parameters
+    """
+    if not mcp_client:
+        raise HTTPException(status_code=503, detail="MCP client not connected")
+    
+    try:
+        # Get image path
+        if file_id not in image_paths:
+            raise HTTPException(status_code=404, detail=f"Image {file_id} not found")
+        
+        image_path = image_paths[file_id]
+        img_array = image_cache[file_id]
+        
+        # Set default center if not provided
+        if center_x is None:
+            center_x = img_array.shape[1] / 2
+        if center_y is None:
+            center_y = img_array.shape[0] / 2
+        
+        # Call MIDAS auto-calibration via MCP
+        # Note: Requires AutoCalibrateZarr tool to be available in midas_comprehensive_server
+        prompt = f"""Run detector calibration on {image_path} with:
+- Calibrant: {calibrant}
+- Distance: {distance} mm
+- Wavelength: {wavelength} Å
+- Beam center: ({center_x}, {center_y}) pixels
+
+Please use the AutoCalibrateZarr tool and return the refined parameters."""
+        
+        response = await mcp_client.send_message(prompt)
+        
+        return {"success": True, "calibration": response, "message": "Calibration completed"}
+        
+    except Exception as e:
+        print(f"Calibration error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 if __name__ == "__main__":
-    print("Starting Beamline Assistant Web Server...")
-    print("Make sure you have the following files in the current directory:")
-    print("- beamline_web_ui.html")
-    print("- argo_mcp_client.py") 
-    print("- fastmcp_midas_server.py")
-    print("- filesystem_server.py")
-    print("- command_executor_server.py")
     print("- .env file with ANL_USERNAME and ARGO_MODEL")
     print("")
     print("Dependencies should be installed with uv:")

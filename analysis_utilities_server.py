@@ -282,6 +282,265 @@ async def identify_phases_basic(
 
 
 # =============================================================================
+# CRYSTALLOGRAPHY MATH TOOLS (Reliable Calculations)
+# =============================================================================
+
+@mcp.tool()
+async def calculate_d_spacing(
+    two_theta_degrees: float,
+    wavelength_angstroms: float
+) -> str:
+    """Calculate d-spacing from 2θ angle using Bragg's Law.
+
+    ⚠️ USE THIS FOR MATH - LLMs are unreliable at crystallography calculations!
+
+    Formula: λ = 2d·sin(θ)  →  d = λ / (2·sin(θ))
+
+    Args:
+        two_theta_degrees: Diffraction angle 2θ in degrees
+        wavelength_angstroms: X-ray wavelength in Ångströms
+
+    Returns:
+        JSON with d-spacing and calculation details
+
+    Example:
+        two_theta_degrees=10.5, wavelength_angstroms=0.2066
+        → d = 1.127 Å
+    """
+    import math
+
+    theta_rad = math.radians(two_theta_degrees / 2.0)
+    sin_theta = math.sin(theta_rad)
+
+    if sin_theta == 0:
+        return format_result({
+            "status": "error",
+            "error": "Invalid angle: sin(θ) = 0"
+        })
+
+    d_spacing = wavelength_angstroms / (2.0 * sin_theta)
+
+    return format_result({
+        "status": "success",
+        "d_spacing_angstroms": round(d_spacing, 6),
+        "two_theta_degrees": two_theta_degrees,
+        "theta_degrees": two_theta_degrees / 2.0,
+        "wavelength_angstroms": wavelength_angstroms,
+        "formula": "d = λ / (2·sin(θ))",
+        "calculation": f"d = {wavelength_angstroms} / (2 × sin({two_theta_degrees/2.0}°)) = {d_spacing:.6f} Å"
+    })
+
+
+@mcp.tool()
+async def calculate_two_theta(
+    d_spacing_angstroms: float,
+    wavelength_angstroms: float
+) -> str:
+    """Calculate 2θ angle from d-spacing using Bragg's Law.
+
+    ⚠️ USE THIS FOR MATH - LLMs are unreliable at crystallography calculations!
+
+    Formula: λ = 2d·sin(θ)  →  θ = arcsin(λ/(2d))  →  2θ = 2·arcsin(λ/(2d))
+
+    Args:
+        d_spacing_angstroms: Lattice d-spacing in Ångströms
+        wavelength_angstroms: X-ray wavelength in Ångströms
+
+    Returns:
+        JSON with 2θ angle and calculation details
+
+    Example:
+        d_spacing_angstroms=3.12, wavelength_angstroms=0.2066
+        → 2θ = 3.79°
+    """
+    import math
+
+    sin_arg = wavelength_angstroms / (2.0 * d_spacing_angstroms)
+
+    if sin_arg > 1.0:
+        return format_result({
+            "status": "error",
+            "error": f"No diffraction possible: λ/(2d) = {sin_arg:.4f} > 1",
+            "note": "Wavelength too large for this d-spacing (sin cannot exceed 1)"
+        })
+
+    theta_rad = math.asin(sin_arg)
+    theta_deg = math.degrees(theta_rad)
+    two_theta_deg = 2.0 * theta_deg
+
+    return format_result({
+        "status": "success",
+        "two_theta_degrees": round(two_theta_deg, 6),
+        "theta_degrees": round(theta_deg, 6),
+        "d_spacing_angstroms": d_spacing_angstroms,
+        "wavelength_angstroms": wavelength_angstroms,
+        "formula": "2θ = 2·arcsin(λ/(2d))",
+        "calculation": f"2θ = 2 × arcsin({wavelength_angstroms}/(2×{d_spacing_angstroms})) = {two_theta_deg:.6f}°"
+    })
+
+
+@mcp.tool()
+async def convert_energy_wavelength(
+    energy_kev: float = None,
+    wavelength_angstroms: float = None
+) -> str:
+    """Convert between X-ray energy and wavelength.
+
+    ⚠️ USE THIS FOR MATH - LLMs are unreliable at unit conversions!
+
+    Formula: λ(Å) = 12.398 / E(keV)
+
+    Args:
+        energy_kev: X-ray energy in keV (provide this OR wavelength)
+        wavelength_angstroms: X-ray wavelength in Ångströms (provide this OR energy)
+
+    Returns:
+        JSON with both energy and wavelength
+
+    Example:
+        energy_kev=61.332  → wavelength = 0.2021 Å
+        wavelength_angstroms=0.1741  → energy = 71.2 keV
+    """
+    CONSTANT = 12.398  # keV·Å
+
+    if energy_kev is not None and wavelength_angstroms is not None:
+        return format_result({
+            "status": "error",
+            "error": "Provide either energy OR wavelength, not both"
+        })
+
+    if energy_kev is None and wavelength_angstroms is None:
+        return format_result({
+            "status": "error",
+            "error": "Must provide either energy_kev or wavelength_angstroms"
+        })
+
+    if energy_kev is not None:
+        wavelength = CONSTANT / energy_kev
+        return format_result({
+            "status": "success",
+            "energy_kev": energy_kev,
+            "wavelength_angstroms": round(wavelength, 6),
+            "formula": "λ = 12.398 / E",
+            "calculation": f"λ = 12.398 / {energy_kev} = {wavelength:.6f} Å"
+        })
+    else:
+        energy = CONSTANT / wavelength_angstroms
+        return format_result({
+            "status": "success",
+            "energy_kev": round(energy, 6),
+            "wavelength_angstroms": wavelength_angstroms,
+            "formula": "E = 12.398 / λ",
+            "calculation": f"E = 12.398 / {wavelength_angstroms} = {energy:.6f} keV"
+        })
+
+
+@mcp.tool()
+async def calculate_strain(
+    measured_d_angstroms: float,
+    reference_d_angstroms: float
+) -> str:
+    """Calculate lattice strain from d-spacing measurements.
+
+    ⚠️ USE THIS FOR MATH - LLMs are unreliable at strain calculations!
+
+    Formula: ε = (d_measured - d_reference) / d_reference
+
+    Args:
+        measured_d_angstroms: Measured d-spacing in Ångströms
+        reference_d_angstroms: Reference (stress-free) d-spacing in Ångströms
+
+    Returns:
+        JSON with strain (absolute and percentage)
+
+    Example:
+        measured=3.125, reference=3.120  → strain = +0.16% (tensile)
+        measured=3.115, reference=3.120  → strain = -0.16% (compressive)
+    """
+    strain = (measured_d_angstroms - reference_d_angstroms) / reference_d_angstroms
+    strain_percent = strain * 100
+
+    if strain > 0:
+        strain_type = "tensile (expansion)"
+    elif strain < 0:
+        strain_type = "compressive (contraction)"
+    else:
+        strain_type = "zero (stress-free)"
+
+    return format_result({
+        "status": "success",
+        "strain": round(strain, 8),
+        "strain_percent": round(strain_percent, 6),
+        "strain_type": strain_type,
+        "measured_d_angstroms": measured_d_angstroms,
+        "reference_d_angstroms": reference_d_angstroms,
+        "delta_d": round(measured_d_angstroms - reference_d_angstroms, 6),
+        "formula": "ε = (d_meas - d_ref) / d_ref",
+        "calculation": f"ε = ({measured_d_angstroms} - {reference_d_angstroms}) / {reference_d_angstroms} = {strain:.8f} = {strain_percent:.4f}%"
+    })
+
+
+@mcp.tool()
+async def calculate_detector_distance(
+    ring_radius_pixels: float,
+    d_spacing_angstroms: float,
+    wavelength_angstroms: float,
+    pixel_size_microns: float
+) -> str:
+    """Calculate sample-to-detector distance from a calibration ring.
+
+    ⚠️ USE THIS FOR MATH - LLMs are unreliable at geometric calculations!
+
+    Uses Bragg's law + geometry: L = r·d / (λ·sqrt(d² - (λ/2)²))
+
+    Args:
+        ring_radius_pixels: Ring radius in pixels
+        d_spacing_angstroms: d-spacing of the ring in Ångströms
+        wavelength_angstroms: X-ray wavelength in Ångströms
+        pixel_size_microns: Detector pixel size in microns
+
+    Returns:
+        JSON with detector distance in mm
+
+    Example:
+        ring_radius=512 px, d=3.12 Å, λ=0.2066 Å, pixel=200 µm
+        → Distance = 650.2 mm
+    """
+    import math
+
+    # Convert radius to mm
+    ring_radius_mm = ring_radius_pixels * pixel_size_microns / 1000.0
+
+    # Calculate 2θ from d-spacing
+    sin_arg = wavelength_angstroms / (2.0 * d_spacing_angstroms)
+    if sin_arg > 1.0:
+        return format_result({
+            "status": "error",
+            "error": "No diffraction possible for this d-spacing and wavelength"
+        })
+
+    two_theta_rad = 2.0 * math.asin(sin_arg)
+    tan_theta = math.tan(two_theta_rad / 2.0)
+
+    # Distance: L = r / tan(theta)
+    distance_mm = ring_radius_mm / tan_theta
+
+    return format_result({
+        "status": "success",
+        "detector_distance_mm": round(distance_mm, 3),
+        "detector_distance_microns": round(distance_mm * 1000, 1),
+        "ring_radius_pixels": ring_radius_pixels,
+        "ring_radius_mm": round(ring_radius_mm, 3),
+        "two_theta_degrees": round(math.degrees(two_theta_rad), 4),
+        "d_spacing_angstroms": d_spacing_angstroms,
+        "wavelength_angstroms": wavelength_angstroms,
+        "pixel_size_microns": pixel_size_microns,
+        "formula": "L = r / tan(θ), where 2θ = 2·arcsin(λ/(2d))",
+        "calculation": f"L = {ring_radius_mm:.3f} mm / tan({math.degrees(two_theta_rad/2):.4f}°) = {distance_mm:.3f} mm"
+    })
+
+
+# =============================================================================
 # MAIN
 # =============================================================================
 

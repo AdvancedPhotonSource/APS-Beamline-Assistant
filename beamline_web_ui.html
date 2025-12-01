@@ -1,9 +1,15 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>APS Beamline Assistant - AI Diffraction Analysis</title>
+    <title>APEXA - AI-Powered Diffraction Analysis</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap"
+        rel="stylesheet">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.26.0/plotly.min.js"></script>
     <style>
         * {
@@ -13,29 +19,69 @@
         }
 
         :root {
-            --primary: #1e40af;
-            --primary-light: #3b82f6;
-            --secondary: #0f172a;
+            /* Dark theme colors */
+            --bg-primary: #0f172a;
+            --bg-secondary: #1e293b;
+            --bg-tertiary: #334155;
+
+            /* Vibrant gradients */
+            --gradient-primary: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            --gradient-secondary: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            --gradient-cyan: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            --gradient-purple: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);
+
+            /* Solid colors */
+            --primary: #667eea;
+            --primary-light: #818cf8;
+            --secondary: #764ba2;
             --accent: #06b6d4;
             --success: #10b981;
             --warning: #f59e0b;
             --error: #ef4444;
-            --surface: #ffffff;
-            --surface-2: #f8fafc;
-            --surface-3: #e2e8f0;
-            --text: #0f172a;
-            --text-muted: #64748b;
-            --border: #e2e8f0;
-            --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-            --shadow-lg: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+
+            /* Glass effect */
+            --glass-bg: rgba(255, 255, 255, 0.05);
+            --glass-border: rgba(255, 255, 255, 0.1);
+            --glass-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+
+            /* Surface colors */
+            --surface: rgba(255, 255, 255, 0.08);
+            --surface-2: rgba(255, 255, 255, 0.05);
+            --surface-3: rgba(255, 255, 255, 0.03);
+
+            /* Text colors */
+            --text: #f8fafc;
+            --text-muted: #94a3b8;
+            --text-dim: #64748b;
+
+            /* Borders and shadows */
+            --border: rgba(255, 255, 255, 0.1);
+            --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+            --shadow-lg: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
+            --shadow-glow: 0 0 20px rgba(102, 126, 234, 0.3);
         }
 
         body {
             font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: var(--bg-primary);
+            background-image: var(--gradient-primary);
+            background-attachment: fixed;
             color: var(--text);
             min-height: 100vh;
             line-height: 1.6;
+            animation: gradientShift 15s ease infinite;
+        }
+
+        @keyframes gradientShift {
+
+            0%,
+            100% {
+                background-position: 0% 50%;
+            }
+
+            50% {
+                background-position: 100% 50%;
+            }
         }
 
         .app-container {
@@ -48,7 +94,9 @@
 
         .header {
             grid-column: 1 / -1;
-            background: var(--surface);
+            background: var(--glass-bg);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
             border-bottom: 1px solid var(--border);
             display: flex;
             align-items: center;
@@ -64,19 +112,37 @@
             gap: 12px;
             font-weight: 700;
             font-size: 20px;
-            color: var(--primary);
+            background: var(--gradient-cyan);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
         }
 
         .logo-icon {
             width: 32px;
             height: 32px;
-            background: linear-gradient(45deg, var(--primary), var(--accent));
+            background: var(--gradient-primary);
             border-radius: 8px;
             display: flex;
             align-items: center;
             justify-content: center;
             color: white;
             font-weight: bold;
+            animation: logoPulse 3s ease-in-out infinite;
+        }
+
+        @keyframes logoPulse {
+
+            0%,
+            100% {
+                transform: scale(1);
+                box-shadow: 0 0 0 rgba(102, 126, 234, 0);
+            }
+
+            50% {
+                transform: scale(1.05);
+                box-shadow: 0 0 20px rgba(102, 126, 234, 0.5);
+            }
         }
 
         .header-controls {
@@ -104,8 +170,15 @@
         }
 
         @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.5; }
+
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.5;
+            }
         }
 
         .model-selector {
@@ -118,7 +191,9 @@
         }
 
         .sidebar {
-            background: var(--surface);
+            background: var(--glass-bg);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
             border-right: 1px solid var(--border);
             display: flex;
             flex-direction: column;
@@ -206,15 +281,17 @@
         .btn {
             padding: 10px 16px;
             border: none;
-            border-radius: 6px;
+            border-radius: 8px;
             font-weight: 500;
             cursor: pointer;
-            transition: all 0.2s;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
             font-size: 14px;
             display: flex;
             align-items: center;
             justify-content: center;
             gap: 8px;
+            position: relative;
+            overflow: hidden;
         }
 
         .btn:disabled {
@@ -223,13 +300,18 @@
         }
 
         .btn-primary {
-            background: var(--primary);
+            background: var(--gradient-primary);
             color: white;
+            box-shadow: 0 4px 15px 0 rgba(102, 126, 234, 0.4);
         }
 
         .btn-primary:hover:not(:disabled) {
-            background: var(--primary-light);
-            transform: translateY(-1px);
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px 0 rgba(102, 126, 234, 0.6);
+        }
+
+        .btn-primary:active:not(:disabled) {
+            transform: translateY(0);
         }
 
         .btn-secondary {
@@ -282,10 +364,19 @@
 
         .visualization-container {
             background: var(--surface);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid var(--border);
             border-radius: 12px;
             padding: 20px;
-            box-shadow: var(--shadow);
+            box-shadow: var(--shadow-lg);
             margin-bottom: 20px;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .visualization-container:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-glow);
         }
 
         .viz-header {
@@ -366,11 +457,32 @@
         }
 
         .phase-card {
-            background: var(--surface-2);
+            background: var(--surface);
             padding: 16px;
             border-radius: 8px;
             margin: 8px 0;
-            border-left: 4px solid var(--primary);
+            border-left: 4px solid transparent;
+            border-image: var(--gradient-primary);
+            border-image-slice: 1;
+            animation: slideUp 0.3s ease-out;
+            transition: all 0.3s ease;
+        }
+
+        .phase-card:hover {
+            transform: translateX(4px);
+            box-shadow: var(--shadow-glow);
+        }
+
+        @keyframes slideUp {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
         }
 
         .phase-name {
@@ -403,7 +515,9 @@
         }
 
         .chat-panel {
-            background: var(--surface);
+            background: var(--glass-bg);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
             border-left: 1px solid var(--border);
             display: flex;
             flex-direction: column;
@@ -442,8 +556,15 @@
         }
 
         @keyframes slideIn {
-            from { opacity: 0; transform: translateY(10px); }
-            to { opacity: 1; transform: translateY(0); }
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
         }
 
         .message.user {
@@ -483,8 +604,9 @@
         }
 
         .message.user .message-content {
-            background: var(--primary);
+            background: var(--gradient-primary);
             color: white;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
         }
 
         .message-time {
@@ -529,7 +651,10 @@
             border-radius: 8px;
         }
 
-        .hidden { display: none; }
+        .hidden {
+            display: none;
+        }
+
         .loading {
             display: flex;
             align-items: center;
@@ -549,8 +674,13 @@
         }
 
         @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(360deg);
+            }
         }
 
         @media (max-width: 1200px) {
@@ -564,20 +694,102 @@
                 grid-template-columns: 1fr;
                 grid-template-rows: 70px auto 1fr;
             }
-            
+
             .sidebar {
                 grid-row: 2;
                 height: auto;
                 border-right: none;
                 border-bottom: 1px solid var(--border);
             }
-            
+
             .chat-panel {
                 display: none;
             }
         }
+
+        /* Interactive Image Viewer Styles */
+        .image-container {
+            position: relative;
+            width: 100%;
+            height: 600px;
+            overflow: hidden;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: #000;
+            cursor: grab;
+        }
+
+        .image-container.panning {
+            cursor: grabbing;
+        }
+
+        .zoomable-image {
+            position: absolute;
+            transform-origin: 0 0;
+            transition: none;
+            image-rendering: pixelated;
+            max-width: none;
+            max-height: none;
+        }
+
+        .pixel-info {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            pointer-events: none;
+            z-index: 10;
+        }
+
+        .zoom-controls {
+            position: absolute;
+            bottom: 10px;
+            right: 10px;
+            display: flex;
+            gap: 4px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 4px;
+            border-radius: 4px;
+            z-index: 10;
+        }
+
+        .zoom-btn {
+            background: rgba(255, 255, 255, 0.2);
+            border: none;
+            color: white;
+            width: 32px;
+            height: 32px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 18px;
+            font-weight: bold;
+            transition: background 0.2s;
+        }
+
+        .zoom-btn:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        .zoom-info {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 6px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            pointer-events: none;
+            z-index: 10;
+        }
     </style>
 </head>
+
 <body>
     <div class="app-container">
         <header class="header">
@@ -605,9 +817,10 @@
                     <div class="upload-icon">📁</div>
                     <div>Drop diffraction files here</div>
                     <div style="font-size: 12px; color: var(--text-muted);">TIFF, PNG, DAT, XY</div>
-                    <input type="file" id="file-input" multiple accept=".tif,.tiff,.png,.dat,.xy,.txt" style="display: none;">
+                    <input type="file" id="file-input" multiple accept=".tif,.tiff,.png,.dat,.xy,.txt"
+                        style="display: none;">
                 </div>
-                
+
                 <div class="analysis-controls">
                     <button class="btn btn-primary" id="analyze-btn">
                         <span>🔬</span> Start Analysis
@@ -714,13 +927,16 @@
                         <div class="viz-header">
                             <h3 class="viz-title">Diffraction Image Viewer</h3>
                             <div class="viz-controls">
-                                <input type="file" id="image-file-input" accept=".tif,.tiff,.ge,.ge2,.ge3,.ge4,.ge5" style="display: none;">
-                                <button class="btn btn-secondary" onclick="document.getElementById('image-file-input').click()">Upload Image</button>
+                                <input type="file" id="image-file-input" accept=".tif,.tiff,.ge,.ge2,.ge3,.ge4,.ge5"
+                                    style="display: none;">
+                                <button class="btn btn-secondary"
+                                    onclick="document.getElementById('image-file-input').click()">Upload Image</button>
                             </div>
                         </div>
 
                         <!-- Image Statistics -->
-                        <div id="image-stats" style="display: none; padding: 15px; background: var(--surface-2); border-radius: 8px; margin-bottom: 15px;">
+                        <div id="image-stats"
+                            style="display: none; padding: 15px; background: var(--surface-2); border-radius: 8px; margin-bottom: 15px;">
                             <h4 style="margin-bottom: 10px;">Image Statistics</h4>
                             <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px;">
                                 <div><strong>Min:</strong> <span id="img-stat-min">-</span></div>
@@ -731,23 +947,32 @@
                         </div>
 
                         <!-- Image Controls -->
-                        <div id="image-controls" style="display: none; padding: 15px; background: var(--surface-2); border-radius: 8px; margin-bottom: 15px;">
+                        <div id="image-controls"
+                            style="display: none; padding: 15px; background: var(--surface-2); border-radius: 8px; margin-bottom: 15px;">
                             <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px;">
                                 <div>
-                                    <label style="display: block; margin-bottom: 5px;"><strong>Min Intensity (%):</strong> <span id="vmin-display">1</span></label>
-                                    <input type="range" id="vmin-slider" min="0" max="100" value="1" style="width: 100%;">
+                                    <label style="display: block; margin-bottom: 5px;"><strong>Min Intensity
+                                            (%):</strong> <span id="vmin-display">1</span></label>
+                                    <input type="range" id="vmin-slider" min="0" max="100" value="1"
+                                        style="width: 100%;">
                                 </div>
                                 <div>
-                                    <label style="display: block; margin-bottom: 5px;"><strong>Max Intensity (%):</strong> <span id="vmax-display">99</span></label>
-                                    <input type="range" id="vmax-slider" min="0" max="100" value="99" style="width: 100%;">
+                                    <label style="display: block; margin-bottom: 5px;"><strong>Max Intensity
+                                            (%):</strong> <span id="vmax-display">99</span></label>
+                                    <input type="range" id="vmax-slider" min="0" max="100" value="99"
+                                        style="width: 100%;">
                                 </div>
                                 <div>
-                                    <label style="display: block; margin-bottom: 5px;"><strong>Gamma:</strong> <span id="gamma-display">1.0</span></label>
-                                    <input type="range" id="gamma-slider" min="0.1" max="3" step="0.1" value="1.0" style="width: 100%;">
+                                    <label style="display: block; margin-bottom: 5px;"><strong>Gamma:</strong> <span
+                                            id="gamma-display">1.0</span></label>
+                                    <input type="range" id="gamma-slider" min="0.1" max="3" step="0.1" value="1.0"
+                                        style="width: 100%;">
                                 </div>
                                 <div>
-                                    <label style="display: block; margin-bottom: 5px;"><strong>Colormap:</strong></label>
-                                    <select id="colormap-selector" style="width: 100%; padding: 8px; border-radius: 4px; border: 1px solid var(--border);">
+                                    <label
+                                        style="display: block; margin-bottom: 5px;"><strong>Colormap:</strong></label>
+                                    <select id="colormap-selector"
+                                        style="width: 100%; padding: 8px; border-radius: 4px; border: 1px solid var(--border);">
                                         <option value="gray">Grayscale</option>
                                         <option value="viridis">Viridis</option>
                                         <option value="plasma">Plasma</option>
@@ -762,42 +987,67 @@
                         </div>
 
                         <!-- Image Display -->
-                        <div class="image-viewer">
-                            <img class="image-display" id="diffraction-image"
-                                 src="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAwIiBoZWlnaHQ9IjQwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KICA8ZGVmcz4KICAgIDxyYWRpYWxHcmFkaWVudCBpZD0iZGlmZnJhY3Rpb24iIGN4PSI1MCUiIGN5PSI1MCUiIHI9IjUwJSI+CiAgICAgIDxzdG9wIG9mZnNldD0iMCUiIHN0b3AtY29sb3I9IiNmZmZmZmYiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSIyMCUiIHN0b3AtY29sb3I9IiNmZmY3ZWQiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSI0MCUiIHN0b3AtY29sb3I9IiNmZWQ3YWEiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSI2MCUiIHN0b3AtY29sb3I9IiNmOTczMTYiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSI4MCUiIHN0b3AtY29sb3I9IiNlYTU4MGMiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSIxMDAlIiBzdG9wLWNvbG9yPSIjOWEzNDEyIi8+CiAgICA8L3JhZGlhbEdyYWRpZW50PgogIDwvZGVmcz4KICA8cmVjdCB3aWR0aD0iNDAwIiBoZWlnaHQ9IjQwMCIgZmlsbD0iIzFmMmkzNyIvPgogIDxjaXJjbGUgY3g9IjIwMCIgY3k9IjIwMCIgcj0iMTgwIiBmaWxsPSJ1cmwoI2RpZmZyYWN0aW9uKSIgb3BhY2l0eT0iMC44Ii8+CiAgPGNpcmNsZSBjeD0iMjAwIiBjeT0iMjAwIiByPSIxNDAiIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzM5OGFkYiIgc3Ryb2tlLXdpZHRoPSIyIiBvcGFjaXR5PSIwLjciLz4KICA8Y2lyY2xlIGN4PSIyMDAiIGN5PSIyMDAiIHI9IjEwMCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjMzk4YWRiIiBzdHJva2Utd2lkdGg9IjIiIG9wYWNpdHk9IjAuNyIvPgogIDxjaXJjbGUgY3g9IjIwMCIgY3k9IjIwMCIgcj0iNjAiIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzM5OGFkYiIgc3Ryb2tlLXdpZHRoPSIyIiBvcGFjaXR5PSIwLjciLz4KICA8dGV4dCB4PSIyMDAiIHk9IjM4MCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZmlsbD0iIzk0YTNiOCIgZm9udC1zaXplPSIxNCI+U2FtcGxlIERpZmZyYWN0aW9uIFBhdHRlcm48L3RleHQ+Cjwvc3ZnPg=="
-                                 alt="2D Diffraction Pattern">
+                        <div class="image-container" id="image-container">
+                            <img class="zoomable-image" id="diffraction-image"
+                                src="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAwIiBoZWlnaHQ9IjQwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KICA8ZGVmcz4KICAgIDxyYWRpYWxHcmFkaWVudCBpZD0iZGlmZnJhY3Rpb24iIGN4PSI1MCUiIGN5PSI1MCUiIHI9IjUwJSI+CiAgICAgIDxzdG9wIG9mZnNldD0iMCUiIHN0b3AtY29sb3I9IiNmZmZmZmYiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSIyMCUiIHN0b3AtY29sb3I9IiNmZmY3ZWQiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSI0MCUiIHN0b3AtY29sb3I9IiNmZWQ3YWEiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSI2MCUiIHN0b3AtY29sb3I9IiNmOTczMTYiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSI4MCUiIHN0b3AtY29sb3I9IiNlYTU4MGMiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSIxMDAlIiBzdG9wLWNvbG9yPSIjOWEzNDEyIi8+CiAgICA8L3JhZGlhbEdyYWRpZW50PgogIDwvZGVmcz4KICA8cmVjdCB3aWR0aD0iNDAwIiBoZWlnaHQ9IjQwMCIgZmlsbD0iIzFmMmkzNyIvPgogIDxjaXJjbGUgY3g9IjIwMCIgY3k9IjIwMCIgcj0iMTgwIiBmaWxsPSJ1cmwoI2RpZmZyYWN0aW9uKSIgb3BhY2l0eT0iMC44Ii8+CiAgPGNpcmNsZSBjeD0iMjAwIiBjeT0iMjAwIiByPSIxNDAiIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzM5OGFkYiIgc3Ryb2tlLXdpZHRoPSIyIiBvcGFjaXR5PSIwLjciLz4KICA8Y2lyY2xlIGN4PSIyMDAiIGN5PSIyMDAiIHI9IjEwMCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjMzk4YWRiIiBzdHJva2Utd2lkdGg9IjIiIG9wYWNpdHk9IjAuNyIvPgogIDxjaXJjbGUgY3g9IjIwMCIgY3k9IjIwMCIgcj0iNjAiIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzM5OGFkYiIgc3Ryb2tlLXdpZHRoPSIyIiBvcGFjaXR5PSIwLjciLz4KICA8dGV4dCB4PSIyMDAiIHk9IjM4MCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZmlsbD0iIzk0YTNiOCIgZm9udC1zaXplPSIxNCI+U2FtcGxlIERpZmZyYWN0aW9uIFBhdHRlcm48L3RleHQ+Cjwvc3ZnPg=="
+                                alt="2D Diffraction Pattern">
+                            <div class="pixel-info" id="pixel-info" style="display: none;">
+                                X: <span id="pixel-x">0</span>, Y: <span id="pixel-y">0</span><br>
+                                Intensity: <span id="pixel-intensity">-</span>
+                            </div>
+                            <div class="zoom-info" id="zoom-info" style="display: none;">
+                                Zoom: <span id="zoom-level">100</span>%
+                            </div>
+                            <div class="zoom-controls">
+                                <button class="zoom-btn" onclick="zoomIn()" title="Zoom In">+</button>
+                                <button class="zoom-btn" onclick="zoomOut()" title="Zoom Out">−</button>
+                                <button class="zoom-btn" onclick="resetZoom()" title="Reset Zoom">⊙</button>
+                            </div>
                         </div>
 
                         <!-- Calibration Overlay -->
-                        <div id="calibration-controls" style="display: none; padding: 15px; background: var(--surface-2); border-radius: 8px; margin-top: 15px;">
+                        <div id="calibration-controls"
+                            style="display: none; padding: 15px; background: var(--surface-2); border-radius: 8px; margin-top: 15px;">
                             <h4 style="margin-bottom: 10px;">MIDAS Calibration Overlay</h4>
                             <div style="display: flex; gap: 15px; align-items: center;">
                                 <input type="file" id="calibration-file-input" accept=".txt" style="display: none;">
-                                <button class="btn btn-secondary" onclick="document.getElementById('calibration-file-input').click()">Load Calibration</button>
+                                <button class="btn btn-secondary"
+                                    onclick="document.getElementById('calibration-file-input').click()">Load
+                                    Calibration</button>
                                 <div id="calibration-status" style="color: var(--text-muted);"></div>
                             </div>
                         </div>
 
                         <!-- Radial Profile -->
-                        <div id="radial-profile-controls" style="display: none; padding: 15px; background: var(--surface-2); border-radius: 8px; margin-top: 15px;">
+                        <div id="radial-profile-controls"
+                            style="display: none; padding: 15px; background: var(--surface-2); border-radius: 8px; margin-top: 15px;">
                             <h4 style="margin-bottom: 10px;">Radial Profile</h4>
                             <div style="display: flex; gap: 15px; align-items: center;">
-                                <label>Center X: <input type="number" id="radial-center-x" value="0" style="width: 100px; padding: 6px; border-radius: 4px; border: 1px solid var(--border);"></label>
-                                <label>Center Y: <input type="number" id="radial-center-y" value="0" style="width: 100px; padding: 6px; border-radius: 4px; border: 1px solid var(--border);"></label>
-                                <button class="btn btn-primary" onclick="calculateRadialProfile()">Calculate Profile</button>
+                                <label>Center X: <input type="number" id="radial-center-x" value="0"
+                                        style="width: 100px; padding: 6px; border-radius: 4px; border: 1px solid var(--border);"></label>
+                                <label>Center Y: <input type="number" id="radial-center-y" value="0"
+                                        style="width: 100px; padding: 6px; border-radius: 4px; border: 1px solid var(--border);"></label>
+                                <button class="btn btn-primary" onclick="calculateRadialProfile()">Calculate
+                                    Profile</button>
                             </div>
                         </div>
                         <div id="radial-plot" style="margin-top: 15px;"></div>
 
                         <!-- Azimuthal Profile -->
-                        <div id="azimuthal-profile-controls" style="display: none; padding: 15px; background: var(--surface-2); border-radius: 8px; margin-top: 15px;">
+                        <div id="azimuthal-profile-controls"
+                            style="display: none; padding: 15px; background: var(--surface-2); border-radius: 8px; margin-top: 15px;">
                             <h4 style="margin-bottom: 10px;">Azimuthal Profile</h4>
                             <div style="display: flex; gap: 15px; align-items: center; flex-wrap: wrap;">
-                                <label>Center X: <input type="number" id="azimuthal-center-x" value="0" style="width: 100px; padding: 6px; border-radius: 4px; border: 1px solid var(--border);"></label>
-                                <label>Center Y: <input type="number" id="azimuthal-center-y" value="0" style="width: 100px; padding: 6px; border-radius: 4px; border: 1px solid var(--border);"></label>
-                                <label>Radius: <input type="number" id="azimuthal-radius" value="100" style="width: 100px; padding: 6px; border-radius: 4px; border: 1px solid var(--border);"></label>
-                                <label>Width: <input type="number" id="azimuthal-width" value="5" style="width: 80px; padding: 6px; border-radius: 4px; border: 1px solid var(--border);"></label>
-                                <button class="btn btn-primary" onclick="calculateAzimuthalProfile()">Calculate Profile</button>
+                                <label>Center X: <input type="number" id="azimuthal-center-x" value="0"
+                                        style="width: 100px; padding: 6px; border-radius: 4px; border: 1px solid var(--border);"></label>
+                                <label>Center Y: <input type="number" id="azimuthal-center-y" value="0"
+                                        style="width: 100px; padding: 6px; border-radius: 4px; border: 1px solid var(--border);"></label>
+                                <label>Radius: <input type="number" id="azimuthal-radius" value="100"
+                                        style="width: 100px; padding: 6px; border-radius: 4px; border: 1px solid var(--border);"></label>
+                                <label>Width: <input type="number" id="azimuthal-width" value="5"
+                                        style="width: 80px; padding: 6px; border-radius: 4px; border: 1px solid var(--border);"></label>
+                                <button class="btn btn-primary" onclick="calculateAzimuthalProfile()">Calculate
+                                    Profile</button>
                             </div>
                         </div>
                         <div id="azimuthal-plot" style="margin-top: 15px;"></div>
@@ -816,7 +1066,9 @@
                 <div class="message assistant">
                     <div class="message-avatar">BA</div>
                     <div>
-                        <div class="message-content">Hello! I'm your APS Beamline Assistant. I can help you analyze diffraction patterns, identify phases, and interpret results. Upload a file or ask me about your data!</div>
+                        <div class="message-content">Hello! I'm your APS Beamline Assistant. I can help you analyze
+                            diffraction patterns, identify phases, and interpret results. Upload a file or ask me about
+                            your data!</div>
                         <div class="message-time">Just now</div>
                     </div>
                 </div>
@@ -824,12 +1076,8 @@
 
             <div class="chat-input-container">
                 <div class="chat-input">
-                    <textarea 
-                        class="input-field" 
-                        id="chat-input" 
-                        placeholder="Ask about phases, peaks, or analysis..."
-                        rows="1"
-                    ></textarea>
+                    <textarea class="input-field" id="chat-input" placeholder="Ask about phases, peaks, or analysis..."
+                        rows="1"></textarea>
                     <button class="btn btn-primary send-btn" id="send-btn">
                         <span>➤</span>
                     </button>
@@ -840,7 +1088,7 @@
 
     <script>
         console.log('Full-featured Beamline Assistant loading...');
-        
+
         let currentFile = null;
         let uploadedFiles = [];
         let analysisResults = null;
@@ -848,7 +1096,7 @@
         let isAnalyzing = false;
 
         // Initialize when DOM loads
-        document.addEventListener('DOMContentLoaded', function() {
+        document.addEventListener('DOMContentLoaded', function () {
             console.log('DOM loaded, setting up full interface...');
             setupEventListeners();
             testBackendConnection();
@@ -866,7 +1114,7 @@
 
             // Chat functionality
             document.getElementById('send-btn').addEventListener('click', sendMessage);
-            document.getElementById('chat-input').addEventListener('keypress', function(e) {
+            document.getElementById('chat-input').addEventListener('keypress', function (e) {
                 if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault();
                     sendMessage();
@@ -875,7 +1123,7 @@
 
             // Tab switching
             document.querySelectorAll('.tab').forEach(tab => {
-                tab.addEventListener('click', function() {
+                tab.addEventListener('click', function () {
                     openTab(this.dataset.tab);
                 });
             });
@@ -891,13 +1139,13 @@
 
             // Recent files
             document.querySelectorAll('.file-item').forEach(item => {
-                item.addEventListener('click', function() {
+                item.addEventListener('click', function () {
                     selectFile(this.dataset.file);
                 });
             });
 
             // Model selector
-            document.getElementById('model-selector').addEventListener('change', function() {
+            document.getElementById('model-selector').addEventListener('change', function () {
                 console.log(`Model changed to: ${this.value}`);
             });
 
@@ -906,7 +1154,7 @@
             const zoomValue = document.getElementById('zoom-value');
             const diffractionImage = document.getElementById('diffraction-image');
 
-            zoomSlider.addEventListener('input', function() {
+            zoomSlider.addEventListener('input', function () {
                 const zoom = this.value;
                 zoomValue.textContent = zoom + '%';
                 diffractionImage.style.transform = `scale(${zoom / 100})`;
@@ -926,7 +1174,7 @@
             e.preventDefault();
             e.stopPropagation();
             e.currentTarget.classList.remove('dragover');
-            
+
             const files = Array.from(e.dataTransfer.files);
             handleFiles(files);
         }
@@ -940,13 +1188,13 @@
             files.forEach(file => {
                 console.log(`Processing file: ${file.name}`);
                 addToRecentFiles(file);
-                
+
                 if (file.type.startsWith('image/')) {
                     displayImage(file);
                 } else if (file.name.endsWith('.dat') || file.name.endsWith('.xy') || file.name.endsWith('.txt')) {
                     processDataFile(file);
                 }
-                
+
                 currentFile = file;
                 uploadedFiles.push(file);
             });
@@ -962,10 +1210,10 @@
                 <span>${file.name}</span>
             `;
             fileItem.addEventListener('click', () => selectFile(file));
-            
+
             // Add to top of list
             recentFiles.insertBefore(fileItem, recentFiles.firstChild);
-            
+
             // Keep only last 10 files
             while (recentFiles.children.length > 10) {
                 recentFiles.removeChild(recentFiles.lastChild);
@@ -974,25 +1222,25 @@
 
         function selectFile(file) {
             currentFile = file;
-            
+
             // Update UI to show selected file
             document.querySelectorAll('.file-item').forEach(item => {
                 item.classList.remove('selected');
             });
-            
+
             const fileName = typeof file === 'string' ? file : file.name;
             const selectedItem = document.querySelector(`[data-file="${fileName}"]`);
             if (selectedItem) {
                 selectedItem.classList.add('selected');
             }
-            
+
             console.log(`Selected file: ${fileName}`);
             addMessage('assistant', `Selected file: ${fileName}. You can now start analysis or ask questions about this file.`);
         }
 
         function displayImage(file) {
             const reader = new FileReader();
-            reader.onload = function(e) {
+            reader.onload = function (e) {
                 const img = document.getElementById('diffraction-image');
                 img.src = e.target.result;
                 openTab('images');
@@ -1003,7 +1251,7 @@
 
         function processDataFile(file) {
             const reader = new FileReader();
-            reader.onload = function(e) {
+            reader.onload = function (e) {
                 const data = parseDataFile(e.target.result);
                 if (data) {
                     plotDiffractionPattern(data);
@@ -1017,10 +1265,10 @@
         function parseDataFile(content) {
             const lines = content.trim().split('\n');
             const data = { x: [], y: [] };
-            
+
             for (let line of lines) {
                 if (line.startsWith('#') || line.trim() === '') continue;
-                
+
                 const parts = line.trim().split(/\s+/);
                 if (parts.length >= 2) {
                     const x = parseFloat(parts[0]);
@@ -1031,7 +1279,7 @@
                     }
                 }
             }
-            
+
             return data.x.length > 0 ? data : null;
         }
 
@@ -1049,39 +1297,39 @@
 
             isAnalyzing = true;
             document.getElementById('analyze-btn').disabled = true;
-            
+
             addMessage('user', `Start comprehensive analysis of ${currentFile.name}`);
             addMessage('assistant', 'Starting comprehensive diffraction analysis...');
-            
+
             showProgressBar();
             updateProgress('Uploading file...', 10);
-            
+
             // Upload file first
             const formData = new FormData();
             formData.append('file', currentFile);
-            
+
             fetch(`${backendUrl}/api/upload`, {
                 method: 'POST',
                 body: formData
             })
-            .then(response => response.json())
-            .then(uploadData => {
-                if (uploadData.success) {
-                    updateProgress('File uploaded successfully', 20);
-                    return runAnalysis(uploadData.file_id);
-                } else {
-                    throw new Error('File upload failed');
-                }
-            })
-            .catch(error => {
-                console.error('Analysis error:', error);
-                simulateAnalysis();
-            });
+                .then(response => response.json())
+                .then(uploadData => {
+                    if (uploadData.success) {
+                        updateProgress('File uploaded successfully', 20);
+                        return runAnalysis(uploadData.file_id);
+                    } else {
+                        throw new Error('File upload failed');
+                    }
+                })
+                .catch(error => {
+                    console.error('Analysis error:', error);
+                    simulateAnalysis();
+                });
         }
 
         function runAnalysis(fileId) {
             updateProgress('Starting analysis...', 30);
-            
+
             const analysisData = {
                 file_id: fileId,
                 analysis_type: 'comprehensive',
@@ -1092,7 +1340,7 @@
                     temperature: 25.0
                 }
             };
-            
+
             return fetch(`${backendUrl}/api/analyze`, {
                 method: 'POST',
                 headers: {
@@ -1100,27 +1348,27 @@
                 },
                 body: JSON.stringify(analysisData)
             })
-            .then(response => response.json())
-            .then(results => {
-                updateProgress('Analysis complete', 100);
-                displayAnalysisResults(results);
-                hideProgressBar();
-                isAnalyzing = false;
-                document.getElementById('analyze-btn').disabled = false;
-            })
-            .catch(error => {
-                console.error('Analysis failed:', error);
-                simulateAnalysis();
-            });
+                .then(response => response.json())
+                .then(results => {
+                    updateProgress('Analysis complete', 100);
+                    displayAnalysisResults(results);
+                    hideProgressBar();
+                    isAnalyzing = false;
+                    document.getElementById('analyze-btn').disabled = false;
+                })
+                .catch(error => {
+                    console.error('Analysis failed:', error);
+                    simulateAnalysis();
+                });
         }
 
         function quickPhaseAnalysis() {
             const message = 'Quick phase identification for peaks at [12.48, 18.16, 25.84, 31.39, 37.90] degrees';
             addMessage('user', message);
             addMessage('assistant', 'Running quick phase identification...');
-            
+
             const peaks = [12.48, 18.16, 25.84, 31.39, 37.90];
-            
+
             fetch(`${backendUrl}/api/quick_analysis`, {
                 method: 'POST',
                 headers: {
@@ -1132,15 +1380,15 @@
                     temperature: 25.0
                 })
             })
-            .then(response => response.json())
-            .then(data => {
-                const formatted = formatPhaseResults(data);
-                addMessage('assistant', formatted);
-                displayQuickResults(data);
-            })
-            .catch(error => {
-                console.error('Quick analysis failed:', error);
-                const demoResponse = `PHASE IDENTIFICATION RESULTS
+                .then(response => response.json())
+                .then(data => {
+                    const formatted = formatPhaseResults(data);
+                    addMessage('assistant', formatted);
+                    displayQuickResults(data);
+                })
+                .catch(error => {
+                    console.error('Quick analysis failed:', error);
+                    const demoResponse = `PHASE IDENTIFICATION RESULTS
 ================================
 
 Input peaks analyzed: 5
@@ -1165,29 +1413,29 @@ ANALYSIS SUMMARY:
 Total phases found: 2
 Peaks matched: 4/5
 Match quality: Excellent`;
-                
-                addMessage('assistant', demoResponse);
-            });
+
+                    addMessage('assistant', demoResponse);
+                });
         }
 
         function simulateAnalysis() {
             updateProgress('Loading image...', 20);
-            
+
             setTimeout(() => {
                 updateProgress('Detecting rings...', 40);
             }, 1000);
-            
+
             setTimeout(() => {
                 updateProgress('Integrating pattern...', 60);
             }, 2000);
-            
+
             setTimeout(() => {
                 updateProgress('Finding peaks...', 80);
             }, 3000);
-            
+
             setTimeout(() => {
                 updateProgress('Identifying phases...', 100);
-                
+
                 const mockResults = {
                     rings_detected: 6,
                     peaks_found: 12,
@@ -1201,7 +1449,7 @@ Match quality: Excellent`;
                             space_group: 'Fm-3m'
                         },
                         {
-                            name: 'Ferrite (α-Fe)', 
+                            name: 'Ferrite (α-Fe)',
                             formula: 'α-Fe',
                             fraction: 0.35,
                             confidence: 0.88,
@@ -1210,7 +1458,7 @@ Match quality: Excellent`;
                         }
                     ]
                 };
-                
+
                 displayAnalysisResults(mockResults);
                 hideProgressBar();
                 isAnalyzing = false;
@@ -1237,13 +1485,13 @@ Match quality: Excellent`;
         // Results display functions
         function displayAnalysisResults(results) {
             const resultsContainer = document.getElementById('results-content');
-            
+
             let html = `<h3>Comprehensive Analysis Complete</h3>`;
-            
+
             if (results.phases_identified && results.phases_identified.length > 0) {
                 html += `<div style="margin: 20px 0;">`;
                 html += `<h4>Identified Phases (${results.phases_identified.length})</h4>`;
-                
+
                 results.phases_identified.forEach((phase, index) => {
                     html += `
                         <div class="phase-card">
@@ -1260,18 +1508,18 @@ Match quality: Excellent`;
                 });
                 html += `</div>`;
             }
-            
+
             if (results.peaks_found) {
                 html += `<p><strong>Peaks Found:</strong> ${results.peaks_found}</p>`;
             }
-            
+
             if (results.rings_detected) {
                 html += `<p><strong>Rings Detected:</strong> ${results.rings_detected}</p>`;
             }
-            
+
             resultsContainer.innerHTML = html;
             openTab('results');
-            
+
             addMessage('assistant', `Analysis complete! Found ${results.phases_identified?.length || 0} phases. Check the Results tab for detailed information.`);
         }
 
@@ -1286,7 +1534,7 @@ Match quality: Excellent`;
 
         function formatPhaseResults(data) {
             if (!data.identified_phases) return 'No phases identified.';
-            
+
             let result = 'IDENTIFIED PHASES:\n';
             data.identified_phases.forEach((phase, i) => {
                 result += `${i + 1}. ${phase.phase_name} (${phase.chemical_formula})\n`;
@@ -1323,12 +1571,12 @@ Match quality: Excellent`;
         function sendMessage() {
             const input = document.getElementById('chat-input');
             const message = input.value.trim();
-            
+
             if (!message) return;
-            
+
             addMessage('user', message);
             input.value = '';
-            
+
             // Try backend API with selected model
             const formData = new FormData();
             formData.append('message', message);
@@ -1336,27 +1584,27 @@ Match quality: Excellent`;
             if (currentFile) {
                 formData.append('file_id', currentFile.name);
             }
-            
+
             fetch(`${backendUrl}/api/chat`, {
                 method: 'POST',
                 body: formData
             })
-            .then(response => response.json())
-            .then(data => {
-                addMessage('assistant', data.response);
-            })
-            .catch(error => {
-                console.log('Chat API failed, using demo response');
-                setTimeout(() => {
-                    const response = generateDemoResponse(message);
-                    addMessage('assistant', response);
-                }, 500);
-            });
+                .then(response => response.json())
+                .then(data => {
+                    addMessage('assistant', data.response);
+                })
+                .catch(error => {
+                    console.log('Chat API failed, using demo response');
+                    setTimeout(() => {
+                        const response = generateDemoResponse(message);
+                        addMessage('assistant', response);
+                    }, 500);
+                });
         }
 
         function generateDemoResponse(message) {
             const lowerMessage = message.toLowerCase();
-            
+
             if (lowerMessage.includes('peak') || lowerMessage.includes('phase')) {
                 return 'I can help identify phases from peak positions. The peaks you mentioned suggest a steel sample with austenite and ferrite phases.';
             } else if (lowerMessage.includes('temperature') || lowerMessage.includes('heat')) {
@@ -1372,10 +1620,10 @@ Match quality: Excellent`;
             const messagesContainer = document.getElementById('chat-messages');
             const messageDiv = document.createElement('div');
             messageDiv.className = `message ${sender}`;
-            
+
             const now = new Date();
             const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-            
+
             messageDiv.innerHTML = `
                 <div class="message-avatar">${sender === 'user' ? 'U' : 'BA'}</div>
                 <div>
@@ -1383,7 +1631,7 @@ Match quality: Excellent`;
                     <div class="message-time">${timeStr}</div>
                 </div>
             `;
-            
+
             messagesContainer.appendChild(messageDiv);
             messagesContainer.scrollTop = messagesContainer.scrollHeight;
         }
@@ -1391,31 +1639,31 @@ Match quality: Excellent`;
         // Plotting functions
         function generateSampleData() {
             console.log('Generating sample data...');
-            
+
             const x = [];
             const y = [];
-            
+
             for (let i = 10; i <= 80; i += 0.1) {
                 x.push(i);
                 let intensity = 100 + Math.random() * 20;
-                
+
                 // Add peaks at typical steel positions
                 const peaks = [
-                    {pos: 12.48, height: 8934, width: 0.15},
-                    {pos: 18.16, height: 12453, width: 0.12},
-                    {pos: 25.84, height: 6721, width: 0.18},
-                    {pos: 31.39, height: 4532, width: 0.20},
-                    {pos: 37.90, height: 3421, width: 0.16}
+                    { pos: 12.48, height: 8934, width: 0.15 },
+                    { pos: 18.16, height: 12453, width: 0.12 },
+                    { pos: 25.84, height: 6721, width: 0.18 },
+                    { pos: 31.39, height: 4532, width: 0.20 },
+                    { pos: 37.90, height: 3421, width: 0.16 }
                 ];
-                
+
                 peaks.forEach(peak => {
                     intensity += peak.height * Math.exp(-0.5 * Math.pow((i - peak.pos) / peak.width, 2));
                 });
-                
+
                 y.push(intensity);
             }
-            
-            plotDiffractionPattern({x, y});
+
+            plotDiffractionPattern({ x, y });
             plotPeakAnalysis();
             addMessage('assistant', 'Generated sample steel diffraction pattern with 5 characteristic peaks.');
         }
@@ -1429,7 +1677,7 @@ Match quality: Excellent`;
                 name: 'Intensity',
                 line: { color: '#3b82f6', width: 2 }
             };
-            
+
             const layout = {
                 title: '1D Diffraction Pattern',
                 xaxis: { title: '2θ (degrees)' },
@@ -1437,19 +1685,19 @@ Match quality: Excellent`;
                 showlegend: false,
                 margin: { l: 60, r: 30, t: 50, b: 60 }
             };
-            
-            Plotly.newPlot('main-plot', [trace], layout, {responsive: true});
+
+            Plotly.newPlot('main-plot', [trace], layout, { responsive: true });
         }
 
         function plotPeakAnalysis() {
             const peaks = [
-                {pos: 12.48, intensity: 8934, phase: 'Austenite (111)'},
-                {pos: 18.16, intensity: 12453, phase: 'Austenite (200)'},
-                {pos: 25.84, intensity: 6721, phase: 'Austenite (220)'},
-                {pos: 31.39, intensity: 4532, phase: 'Ferrite (110)'},
-                {pos: 37.90, intensity: 3421, phase: 'Austenite (222)'}
+                { pos: 12.48, intensity: 8934, phase: 'Austenite (111)' },
+                { pos: 18.16, intensity: 12453, phase: 'Austenite (200)' },
+                { pos: 25.84, intensity: 6721, phase: 'Austenite (220)' },
+                { pos: 31.39, intensity: 4532, phase: 'Ferrite (110)' },
+                { pos: 37.90, intensity: 3421, phase: 'Austenite (222)' }
             ];
-            
+
             const trace = {
                 x: peaks.map(p => p.pos),
                 y: peaks.map(p => p.intensity),
@@ -1458,7 +1706,7 @@ Match quality: Excellent`;
                 textposition: 'outside',
                 marker: { color: '#06b6d4' }
             };
-            
+
             const layout = {
                 title: 'Peak Identification',
                 xaxis: { title: '2θ (degrees)' },
@@ -1466,8 +1714,8 @@ Match quality: Excellent`;
                 showlegend: false,
                 margin: { l: 60, r: 30, t: 80, b: 60 }
             };
-            
-            Plotly.newPlot('peak-plot', [trace], layout, {responsive: true});
+
+            Plotly.newPlot('peak-plot', [trace], layout, { responsive: true });
         }
 
         // UI utility functions
@@ -1476,12 +1724,12 @@ Match quality: Excellent`;
             document.querySelectorAll('.tab-content').forEach(content => {
                 content.classList.add('hidden');
             });
-            
+
             // Remove active class from all tabs
             document.querySelectorAll('.tab').forEach(tab => {
                 tab.classList.remove('active');
             });
-            
+
             // Show selected tab
             document.getElementById(`tab-${tabName}`).classList.remove('hidden');
             document.querySelector(`[data-tab="${tabName}"]`).classList.add('active');
@@ -1526,7 +1774,7 @@ Model Options:
 - GPT-4o: Best for general analysis
 - Claude Sonnet 4: Excellent for detailed explanations
 - Gemini 2.5 Pro: Great for complex reasoning`;
-            
+
             addMessage('assistant', helpText);
         }
 
@@ -1766,7 +2014,7 @@ Model Options:
         });
 
         // Add click-to-set beam center functionality
-        document.getElementById('diffraction-image').addEventListener('click', function(e) {
+        document.getElementById('diffraction-image').addEventListener('click', function (e) {
             if (!currentImageFileId) return;
 
             const rect = this.getBoundingClientRect();
@@ -1785,7 +2033,298 @@ Model Options:
             addMessage('assistant', `Beam center set to (${clickX}, ${clickY}). Click "Calculate Profile" to update.`);
         });
 
+        // ==================== Interactive Image Viewer with Zoom/Pan ====================
+
+        let imageState = {
+            scale: 1.0,
+            translateX: 0,
+            translateY: 0,
+            isDragging: false,
+            lastX: 0,
+            lastY: 0
+        };
+
+        function initializeImageViewer() {
+            const container = document.getElementById('image-container');
+            const image = document.getElementById('diffraction-image');
+
+            if (!container || !image) {
+                console.log('Image viewer elements not found, skipping initialization');
+                return;
+            }
+
+            // Mouse wheel zoom (DIOPTAS-style: zoom at cursor position)
+            container.addEventListener('wheel', (e) => {
+                e.preventDefault();
+
+                const rect = container.getBoundingClientRect();
+                const mouseX = e.clientX - rect.left;
+                const mouseY = e.clientY - rect.top;
+
+                // Calculate mouse position in image coordinates before zoom
+                const imgX = (mouseX - imageState.translateX) / imageState.scale;
+                const imgY = (mouseY - imageState.translateY) / imageState.scale;
+
+                // Zoom
+                const zoomFactor = e.deltaY < 0 ? 1.1 : 0.9;
+                imageState.scale *= zoomFactor;
+                imageState.scale = Math.max(0.1, Math.min(20, imageState.scale));
+
+                // Adjust translation so zoom occurs at mouse position
+                imageState.translateX = mouseX - imgX * imageState.scale;
+                imageState.translateY = mouseY - imgY * imageState.scale;
+
+                updateImageTransform();
+            });
+
+            // Panning with left-click drag
+            container.addEventListener('mousedown', (e) => {
+                if (e.button === 0) {  // Left button
+                    imageState.isDragging = true;
+                    imageState.lastX = e.clientX;
+                    imageState.lastY = e.clientY;
+                    container.classList.add('panning');
+                    e.preventDefault();
+                }
+            });
+
+            container.addEventListener('mousemove', (e) => {
+                if (imageState.isDragging) {
+                    const dx = e.clientX - imageState.lastX;
+                    const dy = e.clientY - imageState.lastY;
+
+                    imageState.translateX += dx;
+                    imageState.translateY += dy;
+                    imageState.lastX = e.clientX;
+                    imageState.lastY = e.clientY;
+
+                    updateImageTransform();
+                }
+
+                // Show pixel coordinates
+                displayPixelInfo(e);
+            });
+
+            container.addEventListener('mouseup', () => {
+                imageState.isDragging = false;
+                container.classList.remove('panning');
+            });
+
+            container.addEventListener('mouseleave', () => {
+                imageState.isDragging = false;
+                container.classList.remove('panning');
+                document.getElementById('pixel-info').style.display = 'none';
+            });
+
+            container.addEventListener('mouseenter', () => {
+                if (currentImageFileId) {
+                    document.getElementById('pixel-info').style.display = 'block';
+                    document.getElementById('zoom-info').style.display = 'block';
+                }
+            });
+
+            // Right-click zoom out
+            container.addEventListener('contextmenu', (e) => {
+                e.preventDefault();
+                zoomOut();
+            });
+
+            console.log('Image viewer initialized with zoom/pan controls');
+        }
+
+        function updateImageTransform() {
+            const image = document.getElementById('diffraction-image');
+            const zoomLevel = document.getElementById('zoom-level');
+
+            image.style.transform = `translate(${imageState.translateX}px, ${imageState.translateY}px) scale(${imageState.scale})`;
+
+            if (zoomLevel) {
+                zoomLevel.textContent = Math.round(imageState.scale * 100);
+            }
+        }
+
+        function zoomIn() {
+            const container = document.getElementById('image-container');
+            const rect = container.getBoundingClientRect();
+            const centerX = rect.width / 2;
+            const centerY = rect.height / 2;
+
+            const imgX = (centerX - imageState.translateX) / imageState.scale;
+            const imgY = (centerY - imageState.translateY) / imageState.scale;
+
+            imageState.scale *= 1.5;
+            imageState.scale = Math.min(20, imageState.scale);
+
+            imageState.translateX = centerX - imgX * imageState.scale;
+            imageState.translateY = centerY - imgY * imageState.scale;
+
+            updateImageTransform();
+        }
+
+        function zoomOut() {
+            const container = document.getElementById('image-container');
+            const rect = container.getBoundingClientRect();
+            const centerX = rect.width / 2;
+            const centerY = rect.height / 2;
+
+            const imgX = (centerX - imageState.translateX) / imageState.scale;
+            const imgY = (centerY - imageState.translateY) / imageState.scale;
+
+            imageState.scale /= 1.5;
+            imageState.scale = Math.max(0.1, imageState.scale);
+
+            imageState.translateX = centerX - imgX * imageState.scale;
+            imageState.translateY = centerY - imgY * imageState.scale;
+
+            updateImageTransform();
+        }
+
+        function resetZoom() {
+            const container = document.getElementById('image-container');
+            const image = document.getElementById('diffraction-image');
+
+            // Reset to fit image in container
+            imageState.scale = 1.0;
+            imageState.translateX = 0;
+            imageState.translateY = 0;
+
+            updateImageTransform();
+        }
+
+        function displayPixelInfo(e) {
+            if (!currentImageFileId || !currentImageStats) return;
+
+            const container = document.getElementById('image-container');
+            const rect = container.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            const mouseY = e.clientY - rect.top;
+
+            // Convert to image pixel coordinates
+            const imgX = Math.floor((mouseX - imageState.translateX) / imageState.scale);
+            const imgY = Math.floor((mouseY - imageState.translateY) / imageState.scale);
+
+            // Check bounds
+            if (imgX >= 0 && imgX < currentImageStats.shape[1] &&
+                imgY >= 0 && imgY < currentImageStats.shape[0]) {
+                document.getElementById('pixel-x').textContent = imgX;
+                document.getElementById('pixel-y').textContent = imgY;
+                // Intensity would require fetching pixel data from backend
+                document.getElementById('pixel-intensity').textContent = '(click to measure)';
+            }
+        }
+
+        // ==================== WebSocket Chat with File Context ====================
+
+        let ws = null;
+        let wsReconnectAttempts = 0;
+
+        function connectWebSocket() {
+            try {
+                ws = new WebSocket('ws://localhost:8001/ws');
+
+                ws.onopen = () => {
+                    console.log('WebSocket connected');
+                    wsReconnectAttempts = 0;
+                    updateConnectionStatus(true);
+                };
+
+                ws.onmessage = (event) => {
+                    const data = JSON.parse(event.data);
+
+                    if (data.type === 'chat_response') {
+                        addMessage('assistant', data.message);
+                    } else if (data.type === 'error') {
+                        addMessage('assistant', '⚠️ Error: ' + data.message);
+                    } else if (data.type === 'analysis_progress') {
+                        updateProgress(data.step, data.progress);
+                    }
+                };
+
+                ws.onerror = (error) => {
+                    console.error('WebSocket error:', error);
+                };
+
+                ws.onclose = () => {
+                    console.log('WebSocket disconnected');
+                    updateConnectionStatus(false);
+
+                    // Attempt reconnect
+                    if (wsReconnectAttempts < 5) {
+                        wsReconnectAttempts++;
+                        setTimeout(connectWebSocket, 2000 * wsReconnectAttempts);
+                    }
+                };
+            } catch (error) {
+                console.error('Failed to connect WebSocket:', error);
+                updateConnectionStatus(false);
+            }
+        }
+
+        function updateConnectionStatus(connected) {
+            const statusEl = document.getElementById('connection-status');
+            const statusDot = document.querySelector('.status-dot');
+
+            if (connected) {
+                statusEl.textContent = 'Connected';
+                if (statusDot) statusDot.style.background = 'var(--success)';
+            } else {
+                statusEl.textContent = 'Demo Mode';
+                if (statusDot) statusDot.style.background = 'var(--warning)';
+            }
+        }
+
+        // Override sendMessage to use WebSocket
+        const originalSendMessage = sendMessage;
+        sendMessage = function () {
+            const input = document.getElementById('chat-input');
+            const message = input.value.trim();
+
+            if (!message) return;
+
+            addMessage('user', message);
+            input.value = '';
+
+            // Send via WebSocket if connected
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: 'chat',
+                    message: message,
+                    model: document.getElementById('model-selector').value
+                }));
+                // Backend automatically adds context about loaded images from image_cache
+            } else {
+                // Fallback to original HTTP implementation
+                const formData = new FormData();
+                formData.append('message', message);
+                formData.append('model', document.getElementById('model-selector').value);
+
+                fetch(`${backendUrl}/api/chat`, {
+                    method: 'POST',
+                    body: formData
+                })
+                    .then(response => response.json())
+                    .then(data => {
+                        addMessage('assistant', data.response);
+                    })
+                    .catch(error => {
+                        console.log('Chat API failed, using demo response');
+                        setTimeout(() => {
+                            const response = generateDemoResponse(message);
+                            addMessage('assistant', response);
+                        }, 500);
+                    });
+            }
+        };
+
+        // Initialize everything on page load
+        document.addEventListener('DOMContentLoaded', function () {
+            console.log('Initializing enhanced APEXA Web UI...');
+            connectWebSocket();
+            initializeImageViewer();
+        });
+
         console.log('Full-featured APS Beamline Assistant loaded successfully');
     </script>
 </body>
+
 </html>

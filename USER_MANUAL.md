@@ -131,6 +131,83 @@ APEXA> match the peaks in pattern.dat to known phases
 
 ---
 
+### 🧮 Crystallography Math Tools
+**⚠️ IMPORTANT: Use these tools for math - LLMs are unreliable at calculations!**
+
+APEXA includes verified crystallography calculators for accurate computations.
+
+#### Calculate d-spacing from 2θ
+```
+APEXA> calculate d-spacing for 2-theta 10.5 degrees with wavelength 0.2066 angstroms
+APEXA> what's the d-spacing at 3.79 degrees using lambda 0.2021?
+```
+
+**Formula:** d = λ / (2·sin(θ))
+
+**Returns:**
+- d-spacing in Ångströms
+- Formula used
+- Step-by-step calculation
+- Full transparency for verification
+
+---
+
+#### Calculate 2θ from d-spacing
+```
+APEXA> calculate 2-theta for d-spacing 3.124 angstroms with wavelength 0.2021
+APEXA> what angle does the (111) peak appear at? d=3.12 Å, λ=0.2021 Å
+```
+
+**Formula:** 2θ = 2·arcsin(λ/(2d))
+
+**Use Case:** Predicting peak positions for phase identification
+
+---
+
+#### Convert Energy ↔ Wavelength
+```
+APEXA> convert 61.332 keV to wavelength
+APEXA> what's the wavelength for 71.2 keV X-rays?
+APEXA> convert 0.2021 angstroms to energy
+```
+
+**Formula:** λ(Å) = 12.398 / E(keV)
+
+**Common Energies:**
+- APS 1-ID: 61.332 keV (λ = 0.2021 Å)
+- APS 1-ID: 71.676 keV (λ = 0.1729 Å)
+
+---
+
+#### Calculate Lattice Strain
+```
+APEXA> calculate strain for measured d=3.155 and reference d=3.124
+APEXA> what's the strain if d changed from 3.120 to 3.108?
+```
+
+**Formula:** ε = (d_measured - d_reference) / d_reference
+
+**Returns:**
+- Strain (absolute and percentage)
+- Strain type (tensile/compressive)
+- Full calculation shown
+
+**Use Case:** Residual stress analysis, thermal expansion studies
+
+---
+
+#### Calculate Detector Distance
+```
+APEXA> calculate detector distance from ring at 512 pixels,
+       d=3.124 angstroms, lambda=0.2021, pixel size 200 microns
+```
+
+**Formula:** L = r / tan(θ), where 2θ = 2·arcsin(λ/(2d))
+
+**Use Case:** Verifying calibration, detector setup validation
+
+---
+
 ### 📁 File Operations
 Navigate, read, and search your data directories.
 
