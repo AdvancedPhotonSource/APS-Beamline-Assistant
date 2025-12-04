@@ -787,6 +787,55 @@
             pointer-events: none;
             z-index: 10;
         }
+
+        /* Workflow Progress Styles */
+        .workflow-step {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 14px;
+            transition: all 0.3s ease;
+            background: var(--surface);
+        }
+
+        .workflow-step .step-icon {
+            font-size: 16px;
+            font-weight: bold;
+            width: 20px;
+            text-align: center;
+        }
+
+        .workflow-step[data-status="pending"] {
+            color: var(--text-muted);
+            opacity: 0.6;
+        }
+
+        .workflow-step[data-status="pending"] .step-icon {
+            color: var(--text-dim);
+        }
+
+        .workflow-step[data-status="active"] {
+            background: var(--primary);
+            color: white;
+            font-weight: 500;
+            box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3);
+        }
+
+        .workflow-step[data-status="active"] .step-icon {
+            content: "→";
+        }
+
+        .workflow-step[data-status="completed"] {
+            color: var(--success);
+            background: rgba(16, 185, 129, 0.1);
+        }
+
+        .workflow-step[data-status="completed"] .step-icon {
+            content: "✓";
+            color: var(--success);
+        }
     </style>
 </head>
 
@@ -873,17 +922,17 @@
 
         <main class="main-content">
             <div class="content-tabs">
-                <div class="tab active" data-tab="visualization">📈 Visualization</div>
-                <div class="tab" data-tab="results">📋 Results</div>
-                <div class="tab" data-tab="images">🖼️ Images</div>
+                <div class="tab active" data-tab="images">🖼️ Images</div>
                 <div class="tab" data-tab="calibration">⚙️ Calibration</div>
+                <div class="tab" data-tab="visualization">📈 Visualization</div>
                 <div class="tab" data-tab="analysis">🔬 Analysis</div>
+                <div class="tab" data-tab="results">📋 Results</div>
                 <div class="tab" data-tab="hedm">🔷 HEDM</div>
             </div>
 
             <div class="content-area">
                 <!-- Visualization Tab -->
-                <div id="tab-visualization" class="tab-content">
+                <div id="tab-visualization" class="tab-content hidden">
                     <div class="visualization-container">
                         <div class="viz-header">
                             <h3 class="viz-title">Diffraction Pattern Analysis</h3>
@@ -925,7 +974,7 @@
                 </div>
 
                 <!-- Images Tab -->
-                <div id="tab-images" class="tab-content hidden">
+                <div id="tab-images" class="tab-content">
                     <div class="visualization-container">
                         <div class="viz-header">
                             <h3 class="viz-title">Diffraction Image Viewer</h3>
@@ -1055,6 +1104,19 @@
                             </div>
                         </div>
                         <div id="azimuthal-plot" style="margin-top: 15px;"></div>
+
+                        <!-- 1D Integrated Pattern -->
+                        <div id="integrated-pattern-section" style="display: none; margin-top: 30px;">
+                            <div class="visualization-container">
+                                <div class="viz-header">
+                                    <h3 class="viz-title">Integrated 1D Pattern</h3>
+                                    <div class="viz-controls">
+                                        <button class="btn btn-secondary" onclick="exportPattern()">Export Data</button>
+                                    </div>
+                                </div>
+                                <div id="integrated-pattern-plot" style="height: 400px;"></div>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -1189,6 +1251,48 @@
                 <div class="chat-subtitle">Ask questions about your analysis</div>
             </div>
 
+            <!-- Workflow Progress Tracker -->
+            <div id="workflow-progress" style="padding: 15px; background: var(--surface-2); border-bottom: 1px solid var(--border);">
+                <div style="font-size: 12px; font-weight: 600; margin-bottom: 10px; color: var(--text-muted);">WORKFLOW</div>
+                <div style="display: flex; flex-direction: column; gap: 8px;">
+                    <div id="step-upload" class="workflow-step" data-status="pending">
+                        <span class="step-icon">○</span>
+                        <span class="step-label">Upload Image</span>
+                    </div>
+                    <div id="step-calibrate" class="workflow-step" data-status="pending">
+                        <span class="step-icon">○</span>
+                        <span class="step-label">Calibrate</span>
+                    </div>
+                    <div id="step-integrate" class="workflow-step" data-status="pending">
+                        <span class="step-icon">○</span>
+                        <span class="step-label">Integrate</span>
+                    </div>
+                    <div id="step-analyze" class="workflow-step" data-status="pending">
+                        <span class="step-icon">○</span>
+                        <span class="step-label">Phase ID</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Quick Actions -->
+            <div id="quick-actions" style="padding: 15px; background: var(--surface-2); border-bottom: 1px solid var(--border);">
+                <div style="font-size: 12px; font-weight: 600; margin-bottom: 10px; color: var(--text-muted);">QUICK ACTIONS</div>
+                <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px;">
+                    <button class="btn btn-secondary" onclick="quickUploadImage()" style="font-size: 12px; padding: 8px;">
+                        📁 Upload
+                    </button>
+                    <button class="btn btn-secondary" onclick="quickLoadCalibration()" style="font-size: 12px; padding: 8px;">
+                        ⚙️ Calibrate
+                    </button>
+                    <button class="btn btn-primary" onclick="quickIntegrate()" style="font-size: 12px; padding: 8px;">
+                        🔄 Integrate
+                    </button>
+                    <button class="btn btn-secondary" onclick="quickAnalyze()" style="font-size: 12px; padding: 8px;">
+                        🔬 Analyze
+                    </button>
+                </div>
+            </div>
+
             <div class="chat-messages" id="chat-messages">
                 <div class="message assistant">
                     <div class="message-avatar" style="font-size: 10px;">APEXA</div>
@@ -1221,6 +1325,30 @@
         let analysisResults = null;
         let backendUrl = 'http://localhost:8001';
         let isAnalyzing = false;
+
+        // Workflow state management
+        const workflowState = {
+            upload: false,
+            calibrate: false,
+            integrate: false,
+            analyze: false
+        };
+
+        function updateWorkflowStep(step, status) {
+            const stepElement = document.getElementById(`step-${step}`);
+            if (stepElement) {
+                stepElement.setAttribute('data-status', status);
+                const icon = stepElement.querySelector('.step-icon');
+                if (status === 'completed') {
+                    icon.textContent = '✓';
+                    workflowState[step] = true;
+                } else if (status === 'active') {
+                    icon.textContent = '→';
+                } else {
+                    icon.textContent = '○';
+                }
+            }
+        }
 
         // Initialize when DOM loads
         document.addEventListener('DOMContentLoaded', function () {
@@ -1276,16 +1404,20 @@
                 console.log(`Model changed to: ${this.value}`);
             });
 
+            // Note: Image viewer listeners are set up in initializeImageViewer()
+
             // Zoom control
             const zoomSlider = document.getElementById('zoom-slider');
             const zoomValue = document.getElementById('zoom-value');
             const diffractionImage = document.getElementById('diffraction-image');
 
-            zoomSlider.addEventListener('input', function () {
-                const zoom = this.value;
-                zoomValue.textContent = zoom + '%';
-                diffractionImage.style.transform = `scale(${zoom / 100})`;
-            });
+            if (zoomSlider) {
+                zoomSlider.addEventListener('input', function () {
+                    const zoom = this.value;
+                    zoomValue.textContent = zoom + '%';
+                    diffractionImage.style.transform = `scale(${zoom / 100})`;
+                });
+            }
 
             console.log('All event listeners set up');
         }
@@ -2109,16 +2241,31 @@ Model Options:
                     currentImageFileId = result.file_id;
                     currentImageStats = result.stats;
 
-                    // Display image
+                    // Display image with proper load/error handling
                     const img = document.getElementById('diffraction-image');
-                    img.src = result.preview;
 
-                    // Redraw calibration rings when image loads
+                    // Add error handler to detect broken images
+                    img.onerror = () => {
+                        console.error('Image failed to load');
+                        addMessage('assistant', '⚠️ Image failed to render. Trying to reload...');
+                        // Try to reload the image once
+                        setTimeout(() => {
+                            img.src = result.preview;
+                        }, 100);
+                    };
+
+                    // Redraw calibration rings when image loads successfully
                     img.onload = () => {
+                        console.log('Image loaded successfully');
                         if (currentCalibration) {
                             setTimeout(() => drawCalibrationRings(), 100);
                         }
+                        // Show zoom info when image is ready
+                        document.getElementById('zoom-info').style.display = 'block';
                     };
+
+                    // Set the image source (this triggers load)
+                    img.src = result.preview;
 
                     // Show stats
                     document.getElementById('img-stat-min').textContent = result.stats.min.toFixed(0);
@@ -2141,12 +2288,20 @@ Model Options:
                     document.getElementById('azimuthal-center-x').value = centerX;
                     document.getElementById('azimuthal-center-y').value = centerY;
 
-                    addMessage('assistant', `Image loaded successfully! Size: ${result.stats.shape[1]}x${result.stats.shape[0]} pixels`);
+                    addMessage('assistant', `Image uploaded! Size: ${result.stats.shape[1]}x${result.stats.shape[0]} pixels. Loading preview...`);
+
+                    // Update workflow
+                    updateWorkflowStep('upload', 'completed');
+                    updateWorkflowStep('calibrate', 'active');
+
+                    // Switch to Images tab
+                    openTab('images');
                 } else {
                     addMessage('assistant', 'Failed to load image: ' + (result.error || 'Unknown error'));
                 }
             } catch (error) {
-                addMessage('assistant', 'Error loading image: ' + error.message);
+                console.error('Upload error:', error);
+                addMessage('assistant', 'Error uploading image: ' + error.message);
             }
         });
 
@@ -2325,6 +2480,11 @@ Model Options:
                         drawCalibrationRings();
                         addMessage('assistant', '✓ Calibration rings overlaid on image');
                     }
+
+                    // Update workflow
+                    updateWorkflowStep('calibrate', 'completed');
+                    updateWorkflowStep('integrate', 'active');
+                    addMessage('assistant', '🔄 Ready to integrate! Click "Integrate" or type "integrate this image"');
                 } else {
                     document.getElementById('calibration-status').textContent = 'Failed to load calibration';
                     addMessage('assistant', 'Failed to load calibration file');
@@ -2363,7 +2523,8 @@ Model Options:
             translateY: 0,
             isDragging: false,
             lastX: 0,
-            lastY: 0
+            lastY: 0,
+            dragDistance: 0  // Track drag distance to prevent click after drag
         };
 
         function initializeImageViewer() {
@@ -2405,6 +2566,7 @@ Model Options:
                     imageState.isDragging = true;
                     imageState.lastX = e.clientX;
                     imageState.lastY = e.clientY;
+                    imageState.dragDistance = 0;  // Reset drag distance
                     container.classList.add('panning');
                     e.preventDefault();
                 }
@@ -2420,6 +2582,9 @@ Model Options:
                     imageState.lastX = e.clientX;
                     imageState.lastY = e.clientY;
 
+                    // Track total drag distance
+                    imageState.dragDistance += Math.abs(dx) + Math.abs(dy);
+
                     updateImageTransform();
                 }
 
@@ -2430,6 +2595,15 @@ Model Options:
             container.addEventListener('mouseup', () => {
                 imageState.isDragging = false;
                 container.classList.remove('panning');
+            });
+
+            // Click to measure intensity (only if not dragged)
+            container.addEventListener('click', (e) => {
+                // If drag distance is small (< 5 pixels), treat as click
+                if (imageState.dragDistance < 5) {
+                    measurePixelIntensity(e);
+                }
+                imageState.dragDistance = 0;  // Reset
             });
 
             container.addEventListener('mouseleave', () => {
@@ -2607,8 +2781,40 @@ Model Options:
                 imgY >= 0 && imgY < currentImageStats.shape[0]) {
                 document.getElementById('pixel-x').textContent = imgX;
                 document.getElementById('pixel-y').textContent = imgY;
-                // Intensity would require fetching pixel data from backend
                 document.getElementById('pixel-intensity').textContent = '(click to measure)';
+
+                // Show pixel info overlay
+                document.getElementById('pixel-info').style.display = 'block';
+            } else {
+                document.getElementById('pixel-info').style.display = 'none';
+            }
+        }
+
+        async function measurePixelIntensity(e) {
+            if (!currentImageFileId || !currentImageStats) return;
+
+            const container = document.getElementById('image-container');
+            const rect = container.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            const mouseY = e.clientY - rect.top;
+
+            // Convert to image pixel coordinates
+            const imgX = Math.floor((mouseX - imageState.translateX) / imageState.scale);
+            const imgY = Math.floor((mouseY - imageState.translateY) / imageState.scale);
+
+            // Check bounds
+            if (imgX >= 0 && imgX < currentImageStats.shape[1] &&
+                imgY >= 0 && imgY < currentImageStats.shape[0]) {
+                try {
+                    const response = await fetch(`${API_VIEWER}/pixel_value?file_id=${currentImageFileId}&x=${imgX}&y=${imgY}`);
+                    const result = await response.json();
+
+                    if (result.success) {
+                        document.getElementById('pixel-intensity').textContent = result.value.toFixed(2);
+                    }
+                } catch (error) {
+                    console.error('Error fetching pixel value:', error);
+                }
             }
         }
 
@@ -2721,6 +2927,51 @@ Model Options:
             connectWebSocket();
             initializeImageViewer();
         });
+
+        // ==================== Quick Action Functions ====================
+
+        function quickUploadImage() {
+            document.getElementById('image-file-input').click();
+            updateWorkflowStep('upload', 'active');
+            addMessage('assistant', '📁 Click to select a diffraction image file (.tif, .ge)');
+        }
+
+        function quickLoadCalibration() {
+            if (!currentImageFileId) {
+                addMessage('assistant', '⚠️ Please upload an image first');
+                return;
+            }
+            document.getElementById('calibration-file-input').click();
+            updateWorkflowStep('calibrate', 'active');
+            addMessage('assistant', '⚙️ Select a calibration file (refined_MIDAS_params.txt or similar)');
+        }
+
+        async function quickIntegrate() {
+            if (!currentImageFileId) {
+                addMessage('assistant', '⚠️ Please upload an image first');
+                return;
+            }
+            if (!currentCalibration) {
+                addMessage('assistant', '⚠️ Please load calibration first. I can auto-detect if refined_MIDAS_params.txt exists in the same folder.');
+                return;
+            }
+
+            updateWorkflowStep('integrate', 'active');
+            addMessage('assistant', '🔄 Starting integration... This may take a moment.');
+
+            // This will be implemented with backend integration
+            addMessage('assistant', '⚠️ Integration via quick action not yet implemented. Please use the chat: "integrate this image"');
+        }
+
+        function quickAnalyze() {
+            if (!currentImageFileId) {
+                addMessage('assistant', '⚠️ Please complete the previous steps first (Upload → Calibrate → Integrate)');
+                return;
+            }
+
+            updateWorkflowStep('analyze', 'active');
+            addMessage('assistant', '🔬 What would you like to analyze? Try: "identify phases" or "find peaks"');
+        }
 
         console.log('Full-featured APS Beamline Assistant loaded successfully');
     </script>
