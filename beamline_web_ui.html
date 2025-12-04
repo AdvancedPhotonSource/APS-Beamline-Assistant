@@ -788,53 +788,73 @@
             z-index: 10;
         }
 
-        /* Workflow Progress Styles */
-        .workflow-step {
+        /* Modern Compact Workflow Stepper */
+        .workflow-step-compact {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
             display: flex;
             align-items: center;
-            gap: 10px;
-            padding: 8px 12px;
-            border-radius: 6px;
-            font-size: 14px;
-            transition: all 0.3s ease;
+            justify-content: center;
             background: var(--surface);
+            border: 2px solid var(--border);
+            transition: all 0.3s ease;
+            cursor: pointer;
+            position: relative;
         }
 
-        .workflow-step .step-icon {
+        .workflow-step-compact .step-icon-emoji {
             font-size: 16px;
-            font-weight: bold;
-            width: 20px;
-            text-align: center;
+            opacity: 0.5;
+            transition: opacity 0.3s ease;
         }
 
-        .workflow-step[data-status="pending"] {
-            color: var(--text-muted);
-            opacity: 0.6;
+        .workflow-step-compact[data-status="pending"] {
+            background: var(--surface);
+            border-color: var(--border);
         }
 
-        .workflow-step[data-status="pending"] .step-icon {
-            color: var(--text-dim);
-        }
-
-        .workflow-step[data-status="active"] {
+        .workflow-step-compact[data-status="active"] {
             background: var(--primary);
-            color: white;
-            font-weight: 500;
-            box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3);
+            border-color: var(--primary);
+            box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.2);
+            transform: scale(1.1);
         }
 
-        .workflow-step[data-status="active"] .step-icon {
-            content: "→";
+        .workflow-step-compact[data-status="active"] .step-icon-emoji {
+            opacity: 1;
         }
 
-        .workflow-step[data-status="completed"] {
-            color: var(--success);
-            background: rgba(16, 185, 129, 0.1);
+        .workflow-step-compact[data-status="completed"] {
+            background: var(--success);
+            border-color: var(--success);
         }
 
-        .workflow-step[data-status="completed"] .step-icon {
+        .workflow-step-compact[data-status="completed"] .step-icon-emoji {
+            display: none;
+        }
+
+        .workflow-step-compact[data-status="completed"]::after {
             content: "✓";
-            color: var(--success);
+            position: absolute;
+            font-size: 16px;
+            color: white;
+            font-weight: bold;
+        }
+
+        .step-connector {
+            flex: 1;
+            height: 2px;
+            background: var(--border);
+            transition: background 0.3s ease;
+        }
+
+        .workflow-step-compact[data-status="completed"] + .step-connector {
+            background: var(--success);
+        }
+
+        .workflow-step-compact:hover {
+            transform: scale(1.05);
         }
     </style>
 </head>
@@ -904,14 +924,14 @@
             <div class="sidebar-section">
                 <h3 class="sidebar-title">Quick Actions</h3>
                 <div style="display: flex; flex-direction: column; gap: 8px;">
-                    <button class="btn btn-secondary" onclick="openTab('visualization')">
-                        📈 Visualizations
+                    <button class="btn btn-secondary" onclick="openTab('data')">
+                        📊 Data
                     </button>
-                    <button class="btn btn-secondary" onclick="openTab('results')">
-                        📋 Results
+                    <button class="btn btn-secondary" onclick="openTab('calibration')">
+                        ⚙️ Calibration
                     </button>
-                    <button class="btn btn-secondary" onclick="openTab('images')">
-                        🖼️ Images
+                    <button class="btn btn-secondary" onclick="openTab('analysis')">
+                        🔬 Analysis
                     </button>
                     <button class="btn btn-secondary" onclick="showHelp()">
                         ❓ Help
@@ -922,59 +942,14 @@
 
         <main class="main-content">
             <div class="content-tabs">
-                <div class="tab active" data-tab="images">🖼️ Images</div>
+                <div class="tab active" data-tab="data">📊 Diffraction Data</div>
                 <div class="tab" data-tab="calibration">⚙️ Calibration</div>
-                <div class="tab" data-tab="visualization">📈 Visualization</div>
-                <div class="tab" data-tab="analysis">🔬 Analysis</div>
-                <div class="tab" data-tab="results">📋 Results</div>
-                <div class="tab" data-tab="hedm">🔷 HEDM</div>
+                <div class="tab" data-tab="analysis">🔬 Analysis & Results</div>
             </div>
 
             <div class="content-area">
-                <!-- Visualization Tab -->
-                <div id="tab-visualization" class="tab-content hidden">
-                    <div class="visualization-container">
-                        <div class="viz-header">
-                            <h3 class="viz-title">Diffraction Pattern Analysis</h3>
-                            <div class="viz-controls">
-                                <button class="btn btn-secondary" onclick="generateSampleData()">Sample Data</button>
-                                <button class="btn btn-secondary" onclick="exportPlot()">Export</button>
-                            </div>
-                        </div>
-                        <div class="plot-container" id="main-plot"></div>
-                    </div>
-
-                    <div class="visualization-container">
-                        <div class="viz-header">
-                            <h3 class="viz-title">Peak Analysis</h3>
-                        </div>
-                        <div class="plot-container" id="peak-plot"></div>
-                    </div>
-                </div>
-
-                <!-- Results Tab -->
-                <div id="tab-results" class="tab-content hidden">
-                    <div id="analysis-results">
-                        <div class="analysis-result">
-                            <div class="result-header">
-                                <div class="result-icon">📊</div>
-                                <div class="result-title">Analysis Results</div>
-                            </div>
-                            <div id="progress-container" class="hidden">
-                                <div id="progress-text">Initializing analysis...</div>
-                                <div class="progress-bar">
-                                    <div class="progress-fill" id="progress-fill" style="width: 0%"></div>
-                                </div>
-                            </div>
-                            <div id="results-content">
-                                <p>Upload a file and start analysis to see results here.</p>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Images Tab -->
-                <div id="tab-images" class="tab-content">
+                <!-- Diffraction Data Tab (Main workflow: Upload → View → Integrate) -->
+                <div id="tab-data" class="tab-content">
                     <div class="visualization-container">
                         <div class="viz-header">
                             <h3 class="viz-title">Diffraction Image Viewer</h3>
@@ -1170,15 +1145,16 @@
                     </div>
                 </div>
 
-                <!-- Analysis Tab -->
+                <!-- Analysis & Results Tab (Peak fitting, Phase ID, HEDM) -->
                 <div id="tab-analysis" class="tab-content hidden">
+                    <!-- Peak Analysis -->
                     <div class="visualization-container">
                         <div class="viz-header">
-                            <h3 class="viz-title">Peak Analysis & Fitting</h3>
+                            <h3 class="viz-title">1D Pattern Analysis & Peak Fitting</h3>
                         </div>
                         <div class="plot-container" id="peak-analysis-plot"
                             style="height: 300px; border: 1px dashed var(--border); display: flex; align-items: center; justify-content: center;">
-                            <span style="color: var(--text-muted);">Select a region to analyze peaks</span>
+                            <span style="color: var(--text-muted);">Integrated 1D pattern will appear here after integration</span>
                         </div>
                         <div style="margin-top: 15px; display: flex; gap: 10px;">
                             <select id="profile-type" class="input-field" style="width: auto;">
@@ -1193,6 +1169,7 @@
                         </div>
                     </div>
 
+                    <!-- Phase Identification -->
                     <div class="visualization-container">
                         <div class="viz-header">
                             <h3 class="viz-title">Phase Identification</h3>
@@ -1206,10 +1183,8 @@
                             <!-- Results will appear here -->
                         </div>
                     </div>
-                </div>
 
-                <!-- HEDM Tab -->
-                <div id="tab-hedm" class="tab-content hidden">
+                    <!-- HEDM Workflows -->
                     <div class="visualization-container">
                         <div class="viz-header">
                             <h3 class="viz-title">HEDM Workflow Launcher</h3>
@@ -1232,6 +1207,27 @@
                         </div>
                     </div>
 
+                    <!-- ParaView Export -->
+                    <div class="visualization-container">
+                        <div class="viz-header">
+                            <h3 class="viz-title">ParaView Export (3D Visualization)</h3>
+                        </div>
+                        <div style="padding: 15px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2);">
+                            <p style="font-size: 14px; color: var(--text-muted); margin-bottom: 15px;">
+                                Convert NF-HEDM results (Grains.mic) to DREAM.3D/ParaView format for 3D visualization
+                            </p>
+                            <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+                                <input type="text" id="nf-mic-file" placeholder="Path to Grains.mic file"
+                                    class="input-field" style="flex: 1; min-width: 250px;">
+                                <button class="btn btn-primary" onclick="exportToParaView()">Export to ParaView</button>
+                            </div>
+                            <div style="margin-top: 10px; font-size: 12px; color: var(--text-muted);">
+                                💡 Or ask AI: "export grains to ParaView" or "convert NF results to DREAM.3D"
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Job Monitor -->
                     <div class="visualization-container">
                         <div class="viz-header">
                             <h3 class="viz-title">Job Monitor</h3>
@@ -1251,45 +1247,24 @@
                 <div class="chat-subtitle">Ask questions about your analysis</div>
             </div>
 
-            <!-- Workflow Progress Tracker -->
-            <div id="workflow-progress" style="padding: 15px; background: var(--surface-2); border-bottom: 1px solid var(--border);">
-                <div style="font-size: 12px; font-weight: 600; margin-bottom: 10px; color: var(--text-muted);">WORKFLOW</div>
-                <div style="display: flex; flex-direction: column; gap: 8px;">
-                    <div id="step-upload" class="workflow-step" data-status="pending">
-                        <span class="step-icon">○</span>
-                        <span class="step-label">Upload Image</span>
+            <!-- Compact Workflow Progress (Modern Single-Line Stepper) -->
+            <div id="workflow-progress" style="padding: 16px 20px; background: var(--surface-2); border-bottom: 1px solid var(--border);">
+                <div style="display: flex; align-items: center; justify-content: space-between;">
+                    <div id="step-upload" class="workflow-step-compact" data-status="pending" title="Upload Image">
+                        <span class="step-icon-emoji">📁</span>
                     </div>
-                    <div id="step-calibrate" class="workflow-step" data-status="pending">
-                        <span class="step-icon">○</span>
-                        <span class="step-label">Calibrate</span>
+                    <div class="step-connector"></div>
+                    <div id="step-calibrate" class="workflow-step-compact" data-status="pending" title="Calibrate">
+                        <span class="step-icon-emoji">⚙️</span>
                     </div>
-                    <div id="step-integrate" class="workflow-step" data-status="pending">
-                        <span class="step-icon">○</span>
-                        <span class="step-label">Integrate</span>
+                    <div class="step-connector"></div>
+                    <div id="step-integrate" class="workflow-step-compact" data-status="pending" title="Integrate">
+                        <span class="step-icon-emoji">🔄</span>
                     </div>
-                    <div id="step-analyze" class="workflow-step" data-status="pending">
-                        <span class="step-icon">○</span>
-                        <span class="step-label">Phase ID</span>
+                    <div class="step-connector"></div>
+                    <div id="step-analyze" class="workflow-step-compact" data-status="pending" title="Analyze">
+                        <span class="step-icon-emoji">🔬</span>
                     </div>
-                </div>
-            </div>
-
-            <!-- Quick Actions -->
-            <div id="quick-actions" style="padding: 15px; background: var(--surface-2); border-bottom: 1px solid var(--border);">
-                <div style="font-size: 12px; font-weight: 600; margin-bottom: 10px; color: var(--text-muted);">QUICK ACTIONS</div>
-                <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px;">
-                    <button class="btn btn-secondary" onclick="quickUploadImage()" style="font-size: 12px; padding: 8px;">
-                        📁 Upload
-                    </button>
-                    <button class="btn btn-secondary" onclick="quickLoadCalibration()" style="font-size: 12px; padding: 8px;">
-                        ⚙️ Calibrate
-                    </button>
-                    <button class="btn btn-primary" onclick="quickIntegrate()" style="font-size: 12px; padding: 8px;">
-                        🔄 Integrate
-                    </button>
-                    <button class="btn btn-secondary" onclick="quickAnalyze()" style="font-size: 12px; padding: 8px;">
-                        🔬 Analyze
-                    </button>
                 </div>
             </div>
 
@@ -1338,14 +1313,8 @@
             const stepElement = document.getElementById(`step-${step}`);
             if (stepElement) {
                 stepElement.setAttribute('data-status', status);
-                const icon = stepElement.querySelector('.step-icon');
                 if (status === 'completed') {
-                    icon.textContent = '✓';
                     workflowState[step] = true;
-                } else if (status === 'active') {
-                    icon.textContent = '→';
-                } else {
-                    icon.textContent = '○';
                 }
             }
         }
@@ -1502,7 +1471,7 @@
             reader.onload = function (e) {
                 const img = document.getElementById('diffraction-image');
                 img.src = e.target.result;
-                openTab('images');
+                openTab('data');
                 addMessage('assistant', `Loaded 2D diffraction image: ${file.name}. You can zoom in/out and start analysis.`);
             };
             reader.readAsDataURL(file);
@@ -1728,7 +1697,7 @@ Match quality: Excellent`;
         // Progress bar functions
         function showProgressBar() {
             document.getElementById('progress-container').classList.remove('hidden');
-            openTab('results');
+            openTab('analysis');
         }
 
         function updateProgress(text, percentage) {
@@ -1777,7 +1746,7 @@ Match quality: Excellent`;
             }
 
             resultsContainer.innerHTML = html;
-            openTab('results');
+            openTab('analysis');
 
             addMessage('assistant', `Analysis complete! Found ${results.phases_identified?.length || 0} phases. Check the Results tab for detailed information.`);
         }
@@ -1788,7 +1757,7 @@ Match quality: Excellent`;
                 <h3>Quick Phase Identification Complete</h3>
                 <p>Results from rapid analysis are shown in the chat. Use "Start Analysis" for comprehensive results.</p>
             `;
-            openTab('results');
+            openTab('analysis');
         }
 
         function formatPhaseResults(data) {
@@ -2295,7 +2264,7 @@ Model Options:
                     updateWorkflowStep('calibrate', 'active');
 
                     // Switch to Images tab
-                    openTab('images');
+                    openTab('data');
                 } else {
                     addMessage('assistant', 'Failed to load image: ' + (result.error || 'Unknown error'));
                 }
@@ -2764,7 +2733,12 @@ Model Options:
             updateImageTransform();
         }
 
-        function displayPixelInfo(e) {
+        // Throttle intensity fetching to avoid too many API calls
+        let lastIntensityFetch = 0;
+        let lastPixelX = -1;
+        let lastPixelY = -1;
+
+        async function displayPixelInfo(e) {
             if (!currentImageFileId || !currentImageStats) return;
 
             const container = document.getElementById('image-container');
@@ -2781,7 +2755,25 @@ Model Options:
                 imgY >= 0 && imgY < currentImageStats.shape[0]) {
                 document.getElementById('pixel-x').textContent = imgX;
                 document.getElementById('pixel-y').textContent = imgY;
-                document.getElementById('pixel-intensity').textContent = '(click to measure)';
+
+                // Fetch intensity if pixel changed and not fetching too frequently
+                const now = Date.now();
+                if ((imgX !== lastPixelX || imgY !== lastPixelY) && (now - lastIntensityFetch > 100)) {
+                    lastPixelX = imgX;
+                    lastPixelY = imgY;
+                    lastIntensityFetch = now;
+
+                    try {
+                        const response = await fetch(`${API_VIEWER}/pixel_value?file_id=${currentImageFileId}&x=${imgX}&y=${imgY}`);
+                        const result = await response.json();
+
+                        if (result.intensity !== undefined) {
+                            document.getElementById('pixel-intensity').textContent = result.intensity.toFixed(0);
+                        }
+                    } catch (error) {
+                        console.error('Error fetching pixel value:', error);
+                    }
+                }
 
                 // Show pixel info overlay
                 document.getElementById('pixel-info').style.display = 'block';
@@ -2809,11 +2801,14 @@ Model Options:
                     const response = await fetch(`${API_VIEWER}/pixel_value?file_id=${currentImageFileId}&x=${imgX}&y=${imgY}`);
                     const result = await response.json();
 
-                    if (result.success) {
-                        document.getElementById('pixel-intensity').textContent = result.value.toFixed(2);
+                    if (result.intensity !== undefined) {
+                        document.getElementById('pixel-intensity').textContent = result.intensity.toFixed(2);
+                    } else if (result.error) {
+                        document.getElementById('pixel-intensity').textContent = 'N/A';
                     }
                 } catch (error) {
                     console.error('Error fetching pixel value:', error);
+                    document.getElementById('pixel-intensity').textContent = 'Error';
                 }
             }
         }
@@ -2927,6 +2922,28 @@ Model Options:
             connectWebSocket();
             initializeImageViewer();
         });
+
+        // ==================== ParaView Export ====================
+
+        async function exportToParaView() {
+            const micFile = document.getElementById('nf-mic-file').value.trim();
+            if (!micFile) {
+                addMessage('assistant', '⚠️ Please specify the path to Grains.mic file');
+                return;
+            }
+
+            addMessage('assistant', `🔄 Exporting ${micFile} to ParaView/DREAM.3D format...`);
+
+            // Send request via WebSocket to AI
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: 'user_message',
+                    message: `convert ${micFile} to dream3d format for paraview visualization`
+                }));
+            } else {
+                addMessage('assistant', '⚠️ AI connection not available. Please use the chat: "convert to paraview"');
+            }
+        }
 
         // ==================== Quick Action Functions ====================
 
