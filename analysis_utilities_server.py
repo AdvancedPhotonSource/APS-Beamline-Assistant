@@ -384,11 +384,11 @@ async def convert_energy_wavelength(
     energy_kev: float = None,
     wavelength_angstroms: float = None
 ) -> str:
-    """Convert between X-ray energy and wavelength.
+    """Convert between X-ray energy and wavelength using xrayutilities.
 
     ⚠️ USE THIS FOR MATH - LLMs are unreliable at unit conversions!
 
-    Formula: λ(Å) = 12.398 / E(keV)
+    Uses xrayutilities.en2lam() and xrayutilities.lam2en()
 
     Args:
         energy_kev: X-ray energy in keV (provide this OR wavelength)
@@ -398,10 +398,16 @@ async def convert_energy_wavelength(
         JSON with both energy and wavelength
 
     Example:
-        energy_kev=61.332  → wavelength = 0.2021 Å
+        energy_kev=61.332  → wavelength = 0.2022 Å
         wavelength_angstroms=0.1741  → energy = 71.2 keV
     """
-    CONSTANT = 12.398  # keV·Å
+    try:
+        import xrayutilities as xu
+    except ImportError:
+        return format_result({
+            "status": "error",
+            "error": "xrayutilities not installed. Install with: pip install xrayutilities"
+        })
 
     if energy_kev is not None and wavelength_angstroms is not None:
         return format_result({
@@ -416,22 +422,25 @@ async def convert_energy_wavelength(
         })
 
     if energy_kev is not None:
-        wavelength = CONSTANT / energy_kev
+        # xu.en2lam expects energy in eV
+        wavelength = xu.en2lam(energy_kev * 1000)
         return format_result({
             "status": "success",
             "energy_kev": energy_kev,
             "wavelength_angstroms": round(wavelength, 6),
-            "formula": "λ = 12.398 / E",
-            "calculation": f"λ = 12.398 / {energy_kev} = {wavelength:.6f} Å"
+            "method": "xrayutilities.en2lam()",
+            "calculation": f"xu.en2lam({energy_kev} keV) = {wavelength:.6f} Å"
         })
     else:
-        energy = CONSTANT / wavelength_angstroms
+        # xu.lam2en returns energy in eV
+        energy_ev = xu.lam2en(wavelength_angstroms)
+        energy = energy_ev / 1000
         return format_result({
             "status": "success",
             "energy_kev": round(energy, 6),
             "wavelength_angstroms": wavelength_angstroms,
-            "formula": "E = 12.398 / λ",
-            "calculation": f"E = 12.398 / {wavelength_angstroms} = {energy:.6f} keV"
+            "method": "xrayutilities.lam2en()",
+            "calculation": f"xu.lam2en({wavelength_angstroms} Å) = {energy:.6f} keV"
         })
 
 
@@ -537,6 +546,247 @@ async def calculate_detector_distance(
         "pixel_size_microns": pixel_size_microns,
         "formula": "L = r / tan(θ), where 2θ = 2·arcsin(λ/(2d))",
         "calculation": f"L = {ring_radius_mm:.3f} mm / tan({math.degrees(two_theta_rad/2):.4f}°) = {distance_mm:.3f} mm"
+    })
+
+
+# =============================================================================
+# XRAYUTILITIES MATERIAL DATABASE TOOLS
+# =============================================================================
+
+@mcp.tool()
+async def get_material_d_spacing(
+    material: str,
+    h: int,
+    k: int,
+    l: int
+) -> str:
+    """Get d-spacing for a crystallographic plane using xrayutilities material database.
+
+    ⚠️ USE THIS FOR MATERIAL PROPERTIES - Uses verified crystallographic database!
+
+    Args:
+        material: Material name (Si, Al, Cu, Fe, Ni, CeO2, LaB6, Al2O3, etc.)
+        h, k, l: Miller indices of the plane
+
+    Returns:
+        JSON with d-spacing, lattice parameters, and crystal structure
+
+    Example:
+        material="Si", h=1, k=1, l=1  → d = 3.1356 Å
+        material="LaB6", h=1, k=0, l=0  → d = 4.1569 Å
+    """
+    try:
+        import xrayutilities as xu
+    except ImportError:
+        return format_result({
+            "status": "error",
+            "error": "xrayutilities not installed"
+        })
+
+    # Get material from database
+    try:
+        mat = getattr(xu.materials, material)
+    except AttributeError:
+        # Try common aliases
+        aliases = {
+            'lab6': 'LaB6',
+            'al2o3': 'Al2O3',
+            'sapphire': 'Al2O3',
+            'alumina': 'Al2O3'
+        }
+        material_name = aliases.get(material.lower(), material)
+        try:
+            mat = getattr(xu.materials, material_name)
+        except AttributeError:
+            available = [m for m in dir(xu.materials) if m[0].isupper() and not m.startswith('_')]
+            return format_result({
+                "status": "error",
+                "error": f"Material '{material}' not found in xrayutilities database",
+                "available_materials": available[:30]
+            })
+
+    # Calculate d-spacing
+    hkl = (h, k, l)
+    d_spacing = mat.planeDistance(hkl)
+
+    # Get lattice parameters
+    lattice_info = {
+        "a": round(mat.lattice.a, 5),
+    }
+    if hasattr(mat.lattice, 'b'):
+        lattice_info["b"] = round(mat.lattice.b, 5)
+    if hasattr(mat.lattice, 'c'):
+        lattice_info["c"] = round(mat.lattice.c, 5)
+
+    return format_result({
+        "status": "success",
+        "material": material,
+        "hkl": list(hkl),
+        "d_spacing_angstroms": round(d_spacing, 6),
+        "lattice_parameters": lattice_info,
+        "method": "xrayutilities.materials.planeDistance()",
+        "note": "Verified from crystallographic database"
+    })
+
+
+@mcp.tool()
+async def calculate_bragg_angle_material(
+    material: str,
+    h: int,
+    k: int,
+    l: int,
+    energy_kev: float = None,
+    wavelength_angstroms: float = None
+) -> str:
+    """Calculate Bragg angle for a material reflection using xrayutilities.
+
+    ⚠️ USE THIS FOR HEDM CALCULATIONS - Combines material database + Bragg's law!
+
+    Args:
+        material: Material name (Si, Fe, Cu, Ti, LaB6, Al2O3, etc.)
+        h, k, l: Miller indices
+        energy_kev: X-ray energy in keV (provide this OR wavelength)
+        wavelength_angstroms: X-ray wavelength (provide this OR energy)
+
+    Returns:
+        JSON with 2θ angle, d-spacing, and Q-vector
+
+    Example:
+        material="Si", hkl=(1,1,1), energy_kev=61.332  → 2θ = 3.69°
+        material="Fe", hkl=(1,1,0), wavelength_angstroms=0.2022  → 2θ = 5.07°
+    """
+    try:
+        import xrayutilities as xu
+        import numpy as np
+    except ImportError:
+        return format_result({
+            "status": "error",
+            "error": "xrayutilities or numpy not installed"
+        })
+
+    # Validate inputs
+    if energy_kev is None and wavelength_angstroms is None:
+        return format_result({
+            "status": "error",
+            "error": "Must provide either energy_kev or wavelength_angstroms"
+        })
+
+    if energy_kev is not None and wavelength_angstroms is not None:
+        return format_result({
+            "status": "error",
+            "error": "Provide either energy OR wavelength, not both"
+        })
+
+    # Get wavelength
+    if energy_kev is not None:
+        wavelength = xu.en2lam(energy_kev * 1000)  # eV
+    else:
+        wavelength = wavelength_angstroms
+
+    # Get material
+    try:
+        mat = getattr(xu.materials, material)
+    except AttributeError:
+        aliases = {'lab6': 'LaB6', 'al2o3': 'Al2O3', 'sapphire': 'Al2O3', 'alumina': 'Al2O3'}
+        material_name = aliases.get(material.lower(), material)
+        try:
+            mat = getattr(xu.materials, material_name)
+        except AttributeError:
+            return format_result({
+                "status": "error",
+                "error": f"Material '{material}' not found"
+            })
+
+    # Calculate d-spacing and Q-vector
+    hkl = (h, k, l)
+    d_spacing = mat.planeDistance(hkl)
+    q_vec = mat.Q(h, k, l)
+    q_magnitude = np.linalg.norm(q_vec)
+
+    # Calculate Bragg angle
+    sin_arg = wavelength / (2.0 * d_spacing)
+    if sin_arg > 1.0:
+        return format_result({
+            "status": "error",
+            "error": f"No diffraction possible: λ/(2d) = {sin_arg:.4f} > 1",
+            "note": "Wavelength too large for this reflection"
+        })
+
+    theta_rad = np.arcsin(sin_arg)
+    theta_deg = np.degrees(theta_rad)
+    two_theta_deg = 2.0 * theta_deg
+
+    return format_result({
+        "status": "success",
+        "material": material,
+        "hkl": list(hkl),
+        "d_spacing_angstroms": round(d_spacing, 6),
+        "wavelength_angstroms": round(wavelength, 6),
+        "energy_kev": round(xu.lam2en(wavelength) / 1000, 6) if energy_kev is None else energy_kev,
+        "two_theta_degrees": round(two_theta_deg, 6),
+        "theta_degrees": round(theta_deg, 6),
+        "q_magnitude_invA": round(q_magnitude, 6),
+        "q_vector": [round(q, 6) for q in q_vec],
+        "method": "xrayutilities material database + Bragg's law",
+        "calculation": f"2θ = 2·arcsin(λ/(2d)) = 2·arcsin({wavelength:.4f}/(2×{d_spacing:.4f})) = {two_theta_deg:.4f}°"
+    })
+
+
+@mcp.tool()
+async def list_common_materials() -> str:
+    """List commonly used materials in HEDM available in xrayutilities database.
+
+    Returns calibrants, structural materials, and semiconductors with lattice parameters.
+    """
+    try:
+        import xrayutilities as xu
+    except ImportError:
+        return format_result({
+            "status": "error",
+            "error": "xrayutilities not installed"
+        })
+
+    # Categorized materials
+    materials_info = {}
+
+    # Common calibrants (only those in xrayutilities)
+    calibrants = ['Si', 'LaB6', 'Al2O3', 'CaF2', 'BaF2']
+    materials_info["Calibrants"] = {}
+    for name in calibrants:
+        try:
+            mat = getattr(xu.materials, name, None)
+            if mat:
+                materials_info["Calibrants"][name] = {
+                    "lattice_a": round(mat.lattice.a, 4),
+                    "crystal_system": str(type(mat.lattice).__name__)
+                }
+        except:
+            pass
+
+    # Structural metals (only those in xrayutilities)
+    metals = ['Fe', 'Al', 'Cu', 'Ti', 'Co', 'Cr', 'Ag', 'Au']
+    materials_info["Metals"] = {}
+    for name in metals:
+        try:
+            mat = getattr(xu.materials, name, None)
+            if mat:
+                materials_info["Metals"][name] = {
+                    "lattice_a": round(mat.lattice.a, 4),
+                    "crystal_system": str(type(mat.lattice).__name__)
+                }
+        except:
+            pass
+
+    # Get all available
+    all_materials = [m for m in dir(xu.materials) if m[0].isupper() and not m.startswith('_')]
+
+    return format_result({
+        "status": "success",
+        "materials_database": materials_info,
+        "all_available": all_materials,
+        "total_count": len(all_materials),
+        "usage": "Use get_material_d_spacing(material, h, k, l) to get d-spacings",
+        "note": "xrayutilities provides verified crystallographic data"
     })
 
 

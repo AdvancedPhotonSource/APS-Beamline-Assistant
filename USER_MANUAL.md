@@ -174,7 +174,7 @@ APEXA> match the peaks in pattern.dat to known phases
 ### 🧮 Crystallography Math Tools
 **⚠️ IMPORTANT: Use these tools for math - LLMs are unreliable at calculations!**
 
-APEXA includes verified crystallography calculators for accurate computations.
+APEXA uses **xrayutilities** (industry-standard crystallography library) and verified algorithms for accurate computations.
 
 #### Calculate d-spacing from 2θ
 ```
@@ -211,11 +211,11 @@ APEXA> what's the wavelength for 71.2 keV X-rays?
 APEXA> convert 0.2021 angstroms to energy
 ```
 
-**Formula:** λ(Å) = 12.398 / E(keV)
+**Method:** xrayutilities.en2lam() / xrayutilities.lam2en()
 
 **Common Energies:**
-- APS 1-ID: 61.332 keV (λ = 0.2021 Å)
-- APS 1-ID: 71.676 keV (λ = 0.1729 Å)
+- APS 1-ID: 61.332 keV (λ = 0.2022 Å)
+- APS 1-ID: 71.676 keV (λ = 0.1730 Å)
 
 ---
 
@@ -245,6 +245,44 @@ APEXA> calculate detector distance from ring at 512 pixels,
 **Formula:** L = r / tan(θ), where 2θ = 2·arcsin(λ/(2d))
 
 **Use Case:** Verifying calibration, detector setup validation
+
+---
+
+#### Material Database Calculations (xrayutilities)
+
+APEXA includes the xrayutilities material database with verified crystallographic data for common materials.
+
+**Get d-spacing from Material + HKL:**
+```
+APEXA> get d-spacing for Si (111)
+APEXA> what's the d-spacing of Fe (110)?
+APEXA> show me d-spacings for LaB6 (100), (110), (111)
+```
+
+**Returns:**
+- Verified d-spacing from crystallographic database
+- Lattice parameters
+- Crystal structure information
+
+**Calculate Bragg Angle from Material:**
+```
+APEXA> calculate Bragg angle for Si (111) at 61.332 keV
+APEXA> what's the diffraction angle for Fe (110) with wavelength 0.2022 angstroms?
+APEXA> where does Al (111) appear at 71.676 keV?
+```
+
+**Returns:**
+- 2θ angle (degrees)
+- d-spacing from database
+- Q-vector magnitude
+- Full calculation transparency
+
+**Available Materials:**
+- **Calibrants**: Si, LaB6, Al2O3 (sapphire), CaF2, BaF2
+- **Metals**: Fe, Al, Cu, Ti, Co, Cr, Ag, Au
+- **Semiconductors**: Si, Ge, GaAs, InP, and many more
+
+**Use:** `list_common_materials` to see full database
 
 ---
 
