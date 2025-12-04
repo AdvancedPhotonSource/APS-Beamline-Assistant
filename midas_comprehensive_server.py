@@ -2120,6 +2120,8 @@ async def midas_integrate_2d_to_1d(
     This tool REQUIRES calibrated detector parameters from midas_auto_calibrate.
     Always run midas_auto_calibrate FIRST to generate refined_MIDAS_params.txt
 
+    ✨ AUTOMATED: Runs DetectorMapper if Map.bin missing (one-time setup per directory)
+
     MIDAS Component: Integrator (C++ executable)
     Location: MIDAS/FF_HEDM/bin/Integrator
     Manual Reference: FF_Analysis.md (azimuthal integration step)
@@ -2128,6 +2130,12 @@ async def midas_integrate_2d_to_1d(
     Converts a 2D detector image into a 1D azimuthally-integrated intensity vs. 2θ pattern.
     Uses MIDAS's native Integrator executable (not pyFAI) for consistency with MIDAS workflows.
     Supports dark image subtraction and various detector formats (TIFF, GE2/GE5, ED5, EDF).
+
+    AUTOMATED WORKFLOW:
+    1. Check for Map.bin and nMap.bin in working directory
+    2. If missing: Auto-run DetectorMapper to create geometry maps
+    3. Run MIDAS Integrator for azimuthal integration
+    4. Return 1D pattern (.dat file)
 
     FF-HEDM WORKFLOW POSITION:
     Step 2 - INTEGRATION (after calibration, before phase ID)
@@ -2205,6 +2213,61 @@ async def midas_integrate_2d_to_1d(
                         "error": f"Dark file not found: {dark_path}"
                     })
                 cmd.append(str(dark_path))
+
+            # ===== AUTO-RUN DetectorMapper if Map.bin missing =====
+            map_bin = image_path.parent / "Map.bin"
+            nmap_bin = image_path.parent / "nMap.bin"
+
+            if not map_bin.exists() or not nmap_bin.exists():
+                print("\n" + "="*70, file=sys.stderr)
+                print("🗺️  Map.bin not found - Running DetectorMapper first", file=sys.stderr)
+                print("="*70, file=sys.stderr)
+
+                detector_mapper = None
+                if MIDAS_ROOT:
+                    dm_path = Path(MIDAS_ROOT) / "FF_HEDM" / "bin" / "DetectorMapper"
+                    if dm_path.exists():
+                        detector_mapper = dm_path
+
+                if not detector_mapper:
+                    return format_result({
+                        "tool": "midas_integrate_2d_to_1d",
+                        "status": "error",
+                        "error": "DetectorMapper not found in MIDAS installation"
+                    })
+
+                # Run DetectorMapper
+                dm_cmd = [str(detector_mapper), str(cal_path)]
+                print(f"   Running: {' '.join(dm_cmd)}", file=sys.stderr)
+
+                try:
+                    dm_result = subprocess.run(
+                        dm_cmd,
+                        cwd=str(image_path.parent),
+                        capture_output=True,
+                        text=True,
+                        timeout=120,
+                        env=get_midas_env()
+                    )
+
+                    if dm_result.returncode != 0:
+                        return format_result({
+                            "tool": "midas_integrate_2d_to_1d",
+                            "status": "error",
+                            "error": "DetectorMapper failed",
+                            "stderr": dm_result.stderr,
+                            "stdout": dm_result.stdout
+                        })
+
+                    print(f"✓ DetectorMapper completed - Map.bin created", file=sys.stderr)
+                    print("="*70 + "\n", file=sys.stderr)
+
+                except subprocess.TimeoutExpired:
+                    return format_result({
+                        "tool": "midas_integrate_2d_to_1d",
+                        "status": "error",
+                        "error": "DetectorMapper timed out (>2 minutes)"
+                    })
 
             # ===== TRANSPARENCY: Show exact command being run =====
             cmd_str = " ".join(cmd)
@@ -2933,6 +2996,8 @@ async def midas_batch_integrate(
     - Batch frame processing
     - Parallel CPU processing
     - HDF5 input/output
+
+    ✨ AUTOMATED: Runs DetectorMapper if Map.bin missing (handled by integrator.py)
 
     Based on cake_ge_v2.sh workflow from 1-ID beamline.
 
