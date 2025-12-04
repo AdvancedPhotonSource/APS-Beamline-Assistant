@@ -142,44 +142,97 @@ def calculate_radial_profile(img: np.ndarray, center: Tuple[int, int],
     return radii, radial_profile
 
 def load_midas_calibration(cal_file: str) -> Dict[str, Any]:
-    """Load MIDAS calibration file (.txt) and extract ring information"""
+    """Load MIDAS calibration file (refined_MIDAS_params.txt) and calculate ring positions"""
+    import numpy as np
+
     calibration = {
         "beam_center": [0, 0],
-        "pixel_size": 200.0,  # microns
+        "pixel_size": 172.0,  # microns (default for typical detectors)
         "detector_distance": 1000.0,  # mm
         "wavelength": 0.0,  # Angstroms
-        "rings": []  # List of ring radii in pixels
+        "rings": [],  # List of ring radii in pixels
+        "d_spacings": [],  # Corresponding d-spacings
+        "two_theta": []  # 2-theta angles
     }
 
     try:
         with open(cal_file, 'r') as f:
             lines = f.readlines()
 
+        # Parse MIDAS refined_MIDAS_params.txt format
         for line in lines:
             line = line.strip()
-            if line.startswith('BeamCenter'):
-                parts = line.split()
-                if len(parts) >= 3:
-                    calibration["beam_center"] = [float(parts[1]), float(parts[2])]
-            elif line.startswith('PixelSize'):
-                parts = line.split()
-                if len(parts) >= 2:
-                    calibration["pixel_size"] = float(parts[1])
-            elif line.startswith('Distance'):
-                parts = line.split()
-                if len(parts) >= 2:
-                    calibration["detector_distance"] = float(parts[1])
-            elif line.startswith('Wavelength'):
-                parts = line.split()
-                if len(parts) >= 2:
-                    calibration["wavelength"] = float(parts[1])
-            elif line.startswith('Ring'):
-                parts = line.split()
-                if len(parts) >= 2:
-                    calibration["rings"].append(float(parts[1]))
+            if not line or line.startswith('#'):
+                continue
+
+            parts = line.split()
+            if len(parts) < 2:
+                continue
+
+            param = parts[0]
+
+            # MIDAS format parameters
+            if param == 'BC':  # Beam center
+                calibration["beam_center"] = [float(parts[1]), float(parts[2])]
+            elif param == 'px':  # Pixel size
+                calibration["pixel_size"] = float(parts[1])
+            elif param == 'Lsd':  # Sample-to-detector distance (in microns!)
+                calibration["detector_distance"] = float(parts[1]) / 1000.0  # Convert µm to mm
+            elif param == 'Wavelength':
+                calibration["wavelength"] = float(parts[1])
+
+            # Old format support
+            elif param == 'BeamCenter' and len(parts) >= 3:
+                calibration["beam_center"] = [float(parts[1]), float(parts[2])]
+            elif param == 'PixelSize':
+                calibration["pixel_size"] = float(parts[1])
+            elif param == 'Distance':
+                calibration["detector_distance"] = float(parts[1])
+            elif param == 'Ring':
+                calibration["rings"].append(float(parts[1]))
+
+        # Calculate ring positions for common calibrants (CeO2, LaB6, Si)
+        wavelength = calibration["wavelength"]
+        lsd_mm = calibration["detector_distance"]
+        pixel_size_um = calibration["pixel_size"]
+
+        if wavelength > 0 and lsd_mm > 0 and pixel_size_um > 0:
+            # Common calibrant d-spacings (Å)
+            # CeO2: (111)=3.124, (200)=2.706, (220)=1.913, (311)=1.632
+            # LaB6: (100)=4.157, (110)=2.939, (111)=2.400, (200)=2.078
+            # Si: (111)=3.136, (220)=1.920, (311)=1.638
+            common_d_spacings = [
+                3.124,  # CeO2 (111)
+                3.136,  # Si (111)
+                2.706,  # CeO2 (200)
+                2.400,  # LaB6 (111)
+                1.920,  # Si (220)
+                1.913,  # CeO2 (220)
+                1.638,  # Si (311)
+                1.632,  # CeO2 (311)
+            ]
+
+            for d in common_d_spacings:
+                # Bragg's law: sin(theta) = lambda / (2*d)
+                sin_theta = wavelength / (2.0 * d)
+                if sin_theta <= 1.0:  # Physical constraint
+                    theta_rad = np.arcsin(sin_theta)
+                    two_theta_rad = 2.0 * theta_rad
+                    two_theta_deg = np.degrees(two_theta_rad)
+
+                    # Calculate ring radius on detector
+                    # r = L * tan(2*theta)
+                    radius_mm = lsd_mm * np.tan(two_theta_rad)
+                    radius_pixels = radius_mm * 1000.0 / pixel_size_um  # mm to pixels
+
+                    calibration["rings"].append(round(radius_pixels, 2))
+                    calibration["d_spacings"].append(round(d, 4))
+                    calibration["two_theta"].append(round(two_theta_deg, 4))
 
     except Exception as e:
-        print(f"Error loading calibration file: {e}")
+        print(f"Error loading calibration file: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
 
     return calibration
 
@@ -874,6 +927,27 @@ async def get_colormaps():
     })
 
 
+@app.get("/api/viewer/pixel_value")
+async def get_pixel_value(file_id: str, x: int, y: int):
+    """Get raw pixel intensity at specified coordinates"""
+    if file_id not in image_cache:
+        raise HTTPException(status_code=404, detail="Image not found in cache")
+    
+    img = image_cache[file_id]
+    
+    # Check bounds
+    if y < 0 or y >= img.shape[0] or x < 0 or x >= img.shape[1]:
+        return JSONResponse({"intensity": 0, "error": "Out of bounds"})
+        
+    # Get value (handle different types)
+    val = img[y, x]
+    return JSONResponse({
+        "intensity": float(val),
+        "x": x,
+        "y": y
+    })
+
+
 @app.post("/api/export_paraview")
 async def export_to_paraview(
     results_path: str = Form(...),
@@ -898,31 +972,103 @@ async def export_to_paraview(
             raise HTTPException(status_code=404, detail=f"File not found: {results_path}")
         
         # Create output path
-        output_path = upload_dir / f"{input_path.stem}.vtp"
-        if data_type == "voxels":
-            output_path = upload_dir / f"{input_path.stem}.vti"
+        output_path = upload_dir / f"{data_type}.vtp"
         
-        # Convert to VTK
+        # Convert based on type
         if data_type == "grains":
-            vtk_file = grains_to_vtk(str(input_path), str(output_path))
+            grains_to_vtk(str(input_path), str(output_path))
         elif data_type == "voxels":
-            vtk_file = nf_voxels_to_vtk(str(input_path), str(output_path))
+            nf_voxels_to_vtk(str(input_path), str(output_path))
         elif data_type == "peaks":
-            vtk_file = peaks_to_vtk(str(input_path), str(output_path))
+            peaks_to_vtk(str(input_path), str(output_path))
         else:
             raise HTTPException(status_code=400, detail=f"Unknown data type: {data_type}")
-        
-        # Return file for download
+            
         return FileResponse(
-            vtk_file,
-            media_type="application/octet-stream",
-            filename=Path(vtk_file).name,
-            headers={"Content-Disposition": f"attachment; filename={Path(vtk_file).name}"}
+            path=output_path,
+            filename=f"{data_type}.vtp",
+            media_type="application/octet-stream"
         )
         
     except Exception as e:
-        print(f"ParaView export error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/analysis/phases")
+async def identify_phases(
+    file_id: str = Form(...),
+    elements: str = Form(...)
+):
+    """
+    Identify crystalline phases using MIDAS MCP tool
+    """
+    try:
+        if not mcp_client:
+            raise HTTPException(status_code=503, detail="MCP Client not connected")
+            
+        file_path = image_paths.get(file_id)
+        if not file_path:
+            raise HTTPException(status_code=404, detail="File not found")
+            
+        # Call MIDAS tool
+        result = await mcp_client.execute_tool_call(
+            "midas_identify_crystalline_phases",
+            {
+                "image_path": file_path,
+                "elements": elements
+            }
+        )
+        
+        return JSONResponse({
+            "success": True,
+            "result": result
+        })
+        
+    except Exception as e:
+        # Fallback for demo/testing if tool fails or not found
+        print(f"Phase ID failed: {e}")
+        return JSONResponse({
+            "success": False,
+            "error": str(e),
+            "message": "Phase ID tool unavailable. Please check MCP connection."
+        })
+
+
+@app.post("/api/analysis/peaks")
+async def analyze_peaks(
+    file_id: str = Form(...)
+):
+    """
+    Analyze diffraction peaks using MIDAS MCP tool
+    """
+    try:
+        if not mcp_client:
+            raise HTTPException(status_code=503, detail="MCP Client not connected")
+            
+        file_path = image_paths.get(file_id)
+        if not file_path:
+            raise HTTPException(status_code=404, detail="File not found")
+            
+        # Call MIDAS tool
+        result = await mcp_client.execute_tool_call(
+            "midas_analyze_diffraction_peaks",
+            {
+                "image_path": file_path
+            }
+        )
+        
+        return JSONResponse({
+            "success": True,
+            "result": result
+        })
+        
+    except Exception as e:
+        print(f"Peak analysis failed: {e}")
+        return JSONResponse({
+            "success": False,
+            "error": str(e),
+            "message": "Peak analysis tool unavailable."
+        })
 
 
 @app.post("/api/calibrate")

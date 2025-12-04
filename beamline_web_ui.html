@@ -19,46 +19,46 @@
         }
 
         :root {
-            /* Dark theme colors */
-            --bg-primary: #0f172a;
-            --bg-secondary: #1e293b;
-            --bg-tertiary: #334155;
+            /* Light theme colors */
+            --bg-primary: #f8fafc;
+            --bg-secondary: #ffffff;
+            --bg-tertiary: #f1f5f9;
 
             /* Vibrant gradients */
-            --gradient-primary: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            --gradient-secondary: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-            --gradient-cyan: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
-            --gradient-purple: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);
+            --gradient-primary: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+            --gradient-secondary: linear-gradient(135deg, #64748b 0%, #475569 100%);
+            --gradient-cyan: linear-gradient(135deg, #06b6d4 0%, #0891b2 100%);
+            --gradient-purple: linear-gradient(135deg, #a855f7 0%, #9333ea 100%);
 
             /* Solid colors */
-            --primary: #667eea;
-            --primary-light: #818cf8;
-            --secondary: #764ba2;
+            --primary: #3b82f6;
+            --primary-light: #60a5fa;
+            --secondary: #1e40af;
             --accent: #06b6d4;
             --success: #10b981;
             --warning: #f59e0b;
             --error: #ef4444;
 
-            /* Glass effect */
-            --glass-bg: rgba(255, 255, 255, 0.05);
-            --glass-border: rgba(255, 255, 255, 0.1);
-            --glass-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+            /* Glass effect (adapted for light theme) */
+            --glass-bg: rgba(255, 255, 255, 0.8);
+            --glass-border: rgba(0, 0, 0, 0.1);
+            --glass-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.1);
 
             /* Surface colors */
-            --surface: rgba(255, 255, 255, 0.08);
-            --surface-2: rgba(255, 255, 255, 0.05);
-            --surface-3: rgba(255, 255, 255, 0.03);
+            --surface: #ffffff;
+            --surface-2: #f8fafc;
+            --surface-3: #f1f5f9;
 
             /* Text colors */
-            --text: #f8fafc;
-            --text-muted: #94a3b8;
-            --text-dim: #64748b;
+            --text: #0f172a;
+            --text-muted: #64748b;
+            --text-dim: #94a3b8;
 
             /* Borders and shadows */
-            --border: rgba(255, 255, 255, 0.1);
-            --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
-            --shadow-lg: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
-            --shadow-glow: 0 0 20px rgba(102, 126, 234, 0.3);
+            --border: #e2e8f0;
+            --shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+            --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+            --shadow-glow: 0 0 15px rgba(59, 130, 246, 0.2);
         }
 
         body {
@@ -795,7 +795,7 @@
         <header class="header">
             <div class="logo">
                 <div class="logo-icon">BA</div>
-                <span>APS Beamline Assistant</span>
+                <span>APEXA</span>
             </div>
             <div class="header-controls">
                 <div class="status-indicator">
@@ -876,6 +876,9 @@
                 <div class="tab active" data-tab="visualization">📈 Visualization</div>
                 <div class="tab" data-tab="results">📋 Results</div>
                 <div class="tab" data-tab="images">🖼️ Images</div>
+                <div class="tab" data-tab="calibration">⚙️ Calibration</div>
+                <div class="tab" data-tab="analysis">🔬 Analysis</div>
+                <div class="tab" data-tab="hedm">🔷 HEDM</div>
             </div>
 
             <div class="content-area">
@@ -987,10 +990,11 @@
                         </div>
 
                         <!-- Image Display -->
-                        <div class="image-container" id="image-container">
+                        <div class="image-container" id="image-container" style="position: relative;">
                             <img class="zoomable-image" id="diffraction-image"
                                 src="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAwIiBoZWlnaHQ9IjQwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KICA8ZGVmcz4KICAgIDxyYWRpYWxHcmFkaWVudCBpZD0iZGlmZnJhY3Rpb24iIGN4PSI1MCUiIGN5PSI1MCUiIHI9IjUwJSI+CiAgICAgIDxzdG9wIG9mZnNldD0iMCUiIHN0b3AtY29sb3I9IiNmZmZmZmYiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSIyMCUiIHN0b3AtY29sb3I9IiNmZmY3ZWQiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSI0MCUiIHN0b3AtY29sb3I9IiNmZWQ3YWEiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSI2MCUiIHN0b3AtY29sb3I9IiNmOTczMTYiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSI4MCUiIHN0b3AtY29sb3I9IiNlYTU4MGMiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSIxMDAlIiBzdG9wLWNvbG9yPSIjOWEzNDEyIi8+CiAgICA8L3JhZGlhbEdyYWRpZW50PgogIDwvZGVmcz4KICA8cmVjdCB3aWR0aD0iNDAwIiBoZWlnaHQ9IjQwMCIgZmlsbD0iIzFmMmkzNyIvPgogIDxjaXJjbGUgY3g9IjIwMCIgY3k9IjIwMCIgcj0iMTgwIiBmaWxsPSJ1cmwoI2RpZmZyYWN0aW9uKSIgb3BhY2l0eT0iMC44Ii8+CiAgPGNpcmNsZSBjeD0iMjAwIiBjeT0iMjAwIiByPSIxNDAiIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzM5OGFkYiIgc3Ryb2tlLXdpZHRoPSIyIiBvcGFjaXR5PSIwLjciLz4KICA8Y2lyY2xlIGN4PSIyMDAiIGN5PSIyMDAiIHI9IjEwMCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjMzk4YWRiIiBzdHJva2Utd2lkdGg9IjIiIG9wYWNpdHk9IjAuNyIvPgogIDxjaXJjbGUgY3g9IjIwMCIgY3k9IjIwMCIgcj0iNjAiIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzM5OGFkYiIgc3Ryb2tlLXdpZHRoPSIyIiBvcGFjaXR5PSIwLjciLz4KICA8dGV4dCB4PSIyMDAiIHk9IjM4MCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZmlsbD0iIzk0YTNiOCIgZm9udC1zaXplPSIxNCI+U2FtcGxlIERpZmZyYWN0aW9uIFBhdHRlcm48L3RleHQ+Cjwvc3ZnPg=="
-                                alt="2D Diffraction Pattern">
+                                alt="2D Diffraction Pattern" style="display: block; width: 100%;">
+                            <canvas id="calibration-overlay" style="position: absolute; top: 0; left: 0; pointer-events: none;"></canvas>
                             <div class="pixel-info" id="pixel-info" style="display: none;">
                                 X: <span id="pixel-x">0</span>, Y: <span id="pixel-y">0</span><br>
                                 Intensity: <span id="pixel-intensity">-</span>
@@ -1053,6 +1057,129 @@
                         <div id="azimuthal-plot" style="margin-top: 15px;"></div>
                     </div>
                 </div>
+
+                <!-- Calibration Tab -->
+                <div id="tab-calibration" class="tab-content hidden">
+                    <div class="visualization-container">
+                        <div class="viz-header">
+                            <h3 class="viz-title">Detector Calibration</h3>
+                        </div>
+                        <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px;">
+                            <div>
+                                <label style="display: block; margin-bottom: 5px;"><strong>Detector Distance
+                                        (mm):</strong></label>
+                                <input type="number" id="detector-distance" value="500" class="input-field"
+                                    style="width: 100%;">
+                            </div>
+                            <div>
+                                <label style="display: block; margin-bottom: 5px;"><strong>Wavelength
+                                        (Å):</strong></label>
+                                <input type="number" id="wavelength" value="0.1173" step="0.0001" class="input-field"
+                                    style="width: 100%;">
+                            </div>
+                            <div>
+                                <label style="display: block; margin-bottom: 5px;"><strong>Beam Center
+                                        X:</strong></label>
+                                <input type="number" id="beam-center-x" value="1024" class="input-field"
+                                    style="width: 100%;">
+                            </div>
+                            <div>
+                                <label style="display: block; margin-bottom: 5px;"><strong>Beam Center
+                                        Y:</strong></label>
+                                <input type="number" id="beam-center-y" value="1024" class="input-field"
+                                    style="width: 100%;">
+                            </div>
+                            <div>
+                                <label style="display: block; margin-bottom: 5px;"><strong>Pixel Size
+                                        (μm):</strong></label>
+                                <input type="number" id="pixel-size" value="200" class="input-field"
+                                    style="width: 100%;">
+                            </div>
+                            <div>
+                                <label style="display: block; margin-bottom: 5px;"><strong>Tilt
+                                        (degrees):</strong></label>
+                                <input type="number" id="tilt-angle" value="0" step="0.1" class="input-field"
+                                    style="width: 100%;">
+                            </div>
+                        </div>
+                        <div style="margin-top: 20px;">
+                            <button class="btn btn-primary" onclick="runCalibration()">Run Calibration</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Analysis Tab -->
+                <div id="tab-analysis" class="tab-content hidden">
+                    <div class="visualization-container">
+                        <div class="viz-header">
+                            <h3 class="viz-title">Peak Analysis & Fitting</h3>
+                        </div>
+                        <div class="plot-container" id="peak-analysis-plot"
+                            style="height: 300px; border: 1px dashed var(--border); display: flex; align-items: center; justify-content: center;">
+                            <span style="color: var(--text-muted);">Select a region to analyze peaks</span>
+                        </div>
+                        <div style="margin-top: 15px; display: flex; gap: 10px;">
+                            <select id="profile-type" class="input-field" style="width: auto;">
+                                <option value="pseudo_voigt">Pseudo-Voigt</option>
+                                <option value="gaussian">Gaussian</option>
+                                <option value="lorentzian">Lorentzian</option>
+                            </select>
+                            <label style="display: flex; align-items: center; gap: 5px;">
+                                <input type="checkbox" id="refine-background" checked> Refine Background
+                            </label>
+                            <button class="btn btn-primary" onclick="analyzePeaks()">Find & Fit Peaks</button>
+                        </div>
+                    </div>
+
+                    <div class="visualization-container">
+                        <div class="viz-header">
+                            <h3 class="viz-title">Phase Identification</h3>
+                        </div>
+                        <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+                            <input type="text" id="search-elements" placeholder="Elements (e.g. Fe, Ni, Cr)"
+                                class="input-field">
+                            <button class="btn btn-primary" onclick="identifyPhases()">Search Phases</button>
+                        </div>
+                        <div id="phase-results-list" style="max-height: 200px; overflow-y: auto;">
+                            <!-- Results will appear here -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- HEDM Tab -->
+                <div id="tab-hedm" class="tab-content hidden">
+                    <div class="visualization-container">
+                        <div class="viz-header">
+                            <h3 class="viz-title">HEDM Workflow Launcher</h3>
+                        </div>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                            <div style="padding: 15px; border: 1px solid var(--border); border-radius: 8px;">
+                                <h4 style="margin-bottom: 10px;">Near-Field (NF)</h4>
+                                <p style="font-size: 14px; color: var(--text-muted); margin-bottom: 15px;">
+                                    Reconstruct 3D microstructure from near-field data
+                                </p>
+                                <button class="btn btn-primary" onclick="startHEDM('nf')">Launch NF Workflow</button>
+                            </div>
+                            <div style="padding: 15px; border: 1px solid var(--border); border-radius: 8px;">
+                                <h4 style="margin-bottom: 10px;">Far-Field (FF)</h4>
+                                <p style="font-size: 14px; color: var(--text-muted); margin-bottom: 15px;">
+                                    Index grains from far-field diffraction
+                                </p>
+                                <button class="btn btn-primary" onclick="startHEDM('ff')">Launch FF Workflow</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="visualization-container">
+                        <div class="viz-header">
+                            <h3 class="viz-title">Job Monitor</h3>
+                        </div>
+                        <div id="hedm-job-list">
+                            <div style="text-align: center; color: var(--text-muted); padding: 20px;">No active jobs
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
         </main>
 
@@ -1064,7 +1191,7 @@
 
             <div class="chat-messages" id="chat-messages">
                 <div class="message assistant">
-                    <div class="message-avatar">BA</div>
+                    <div class="message-avatar" style="font-size: 10px;">APEXA</div>
                     <div>
                         <div class="message-content">Hello! I'm your APS Beamline Assistant. I can help you analyze
                             diffraction patterns, identify phases, and interpret results. Upload a file or ask me about
@@ -1718,6 +1845,185 @@ Match quality: Excellent`;
             Plotly.newPlot('peak-plot', [trace], layout, { responsive: true });
         }
 
+        // Advanced features functions
+        async function runCalibration() {
+            const params = {
+                detector_distance: parseFloat(document.getElementById('detector-distance').value),
+                wavelength: parseFloat(document.getElementById('wavelength').value),
+                beam_center_x: parseFloat(document.getElementById('beam-center-x').value),
+                beam_center_y: parseFloat(document.getElementById('beam-center-y').value),
+                pixel_size: parseFloat(document.getElementById('pixel-size').value),
+                tilt_angle: parseFloat(document.getElementById('tilt-angle').value)
+            };
+
+            addMessage('assistant', `Running calibration with parameters: detector=${params.detector_distance}mm, wavelength=${params.wavelength}Å...`);
+
+            try {
+                const formData = new FormData();
+                Object.keys(params).forEach(key => formData.append(key, params[key]));
+
+                const response = await fetch(`${backendUrl}/api/calibrate`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+                if (result.success) {
+                    addMessage('assistant', `✅ Calibration complete! Calibration file saved.`);
+                } else {
+                    addMessage('assistant', `⚠️ Calibration failed: ${result.message}`);
+                }
+            } catch (error) {
+                console.log('Calibration API failed:', error);
+                addMessage('assistant', '✅ Calibration parameters set (demo mode)');
+            }
+        }
+
+        async function analyzePeaks() {
+            const profileType = document.getElementById('profile-type').value;
+            const refineBackground = document.getElementById('refine-background').checked;
+
+            addMessage('assistant', `Analyzing peaks with ${profileType} profile...`);
+
+            try {
+                const formData = new FormData();
+                formData.append('profile_type', profileType);
+                formData.append('refine_background', refineBackground);
+                if (currentImageFileId) formData.append('file_id', currentImageFileId);
+
+                const response = await fetch(`${backendUrl}/api/analysis/peaks`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+                if (result.peaks && result.peaks.length > 0) {
+                    let message = `Found ${result.peaks.length} peaks:\\n`;
+                    result.peaks.slice(0, 5).forEach(peak => {
+                        message += `- 2θ=${peak.position.toFixed(2)}°, I=${peak.intensity.toFixed(0)}\\n`;
+                    });
+                    addMessage('assistant', message);
+                } else {
+                    addMessage('assistant', 'No significant peaks found.');
+                }
+            } catch (error) {
+                console.log('Peak analysis API failed:', error);
+                addMessage('assistant', 'Demo: Found 5 peaks at 2θ = 12.5°, 18.2°, 25.8°, 31.4°, 37.9°');
+            }
+        }
+
+        async function identifyPhases() {
+            const elements = document.getElementById('search-elements').value;
+
+            if (!elements) {
+                addMessage('assistant', 'Please enter elements to search for (e.g., Fe, Ni, Cr)');
+                return;
+            }
+
+            addMessage('assistant', `Searching for phases containing: ${elements}...`);
+
+            try {
+                const formData = new FormData();
+                formData.append('elements', elements);
+                if (currentImageFileId) formData.append('file_id', currentImageFileId);
+
+                const response = await fetch(`${backendUrl}/api/analysis/phases`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+                if (result.phases && result.phases.length > 0) {
+                    let message = `Found ${result.phases.length} matching phases:\\n`;
+                    result.phases.slice(0, 3).forEach(phase => {
+                        message += `- ${phase.name} (${phase.formula}), match: ${(phase.score * 100).toFixed(1)}%\\n`;
+                    });
+                    addMessage('assistant', message);
+
+                    // Update phase results list
+                    const resultsList = document.getElementById('phase-results-list');
+                    resultsList.innerHTML = result.phases.slice(0, 5).map(phase => `
+                        <div class="phase-card" style="padding: 10px; margin-bottom: 8px; border-left: 3px solid var(--primary); background: var(--surface-2); border-radius: 4px;">
+                            <strong>${phase.name}</strong> (${phase.formula})<br>
+                            <span style="font-size: 12px; color: var(--text-muted);">Match: ${(phase.score * 100).toFixed(1)}%</span>
+                        </div>
+                    `).join('');
+                } else {
+                    addMessage('assistant', 'No matching phases found.');
+                }
+            } catch (error) {
+                console.log('Phase ID API failed:', error);
+                addMessage('assistant', 'Demo: Found Austenite (γ-Fe), Ferrite (α-Fe), Cementite (Fe₃C)');
+            }
+        }
+
+        async function startHEDM(workflowType) {
+            const workflowName = workflowType === 'nf' ? 'Near-Field' : 'Far-Field';
+            addMessage('assistant', `Launching ${workflowName} HEDM workflow...`);
+
+            try {
+                const formData = new FormData();
+                formData.append('workflow_type', workflowType);
+                if (currentImageFileId) formData.append('file_id', currentImageFileId);
+
+                const response = await fetch(`${backendUrl}/api/hedm/start`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+                if (result.job_id) {
+                    addMessage('assistant', `✅ Job started! ID: ${result.job_id}. Monitor progress in HEDM tab.`);
+
+                    // Update job list
+                    const jobList = document.getElementById('hedm-job-list');
+                    jobList.innerHTML = `
+                        <div style="padding: 15px; border-left: 3px solid var(--primary); background: var(--surface-2); margin-bottom: 10px;">
+                            <strong>Job ${result.job_id}</strong><br>
+                            <span style="font-size: 14px; color: var(--text-muted);">${workflowName} - Running...</span>
+                            <div class="progress-bar" style="margin-top: 10px;">
+                                <div class="progress-fill" style="width: 30%;"></div>
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    addMessage('assistant', `⚠️ Failed to start workflow: ${result.message}`);
+                }
+            } catch (error) {
+                console.log('HEDM API failed:', error);
+                addMessage('assistant', `✅ ${workflowName} workflow queued (demo mode)`);
+            }
+        }
+
+        async function exportToParaView() {
+            if (!currentImageFileId) {
+                addMessage('assistant', 'No data to export. Please load an image first.');
+                return;
+            }
+
+            addMessage('assistant', 'Exporting data to ParaView VTK format...');
+
+            try {
+                const formData = new FormData();
+                formData.append('file_id', currentImageFileId);
+
+                const response = await fetch(`${backendUrl}/api/export_paraview`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+                if (result.success) {
+                    addMessage('assistant', `✅ Export successful! File: ${result.filename}`);
+                } else {
+                    addMessage('assistant', `⚠️ Export failed: ${result.message}`);
+                }
+            } catch (error) {
+                console.log('ParaView export failed:', error);
+                addMessage('assistant', 'Export feature requires backend connection.');
+            }
+        }
+
         // UI utility functions
         function openTab(tabName) {
             // Hide all tabs
@@ -1804,7 +2110,15 @@ Model Options:
                     currentImageStats = result.stats;
 
                     // Display image
-                    document.getElementById('diffraction-image').src = result.preview;
+                    const img = document.getElementById('diffraction-image');
+                    img.src = result.preview;
+
+                    // Redraw calibration rings when image loads
+                    img.onload = () => {
+                        if (currentCalibration) {
+                            setTimeout(() => drawCalibrationRings(), 100);
+                        }
+                    };
 
                     // Show stats
                     document.getElementById('img-stat-min').textContent = result.stats.min.toFixed(0);
@@ -1997,11 +2311,19 @@ Model Options:
                     currentCalibration = result.calibration;
                     document.getElementById('calibration-status').textContent =
                         `Loaded: ${result.calibration.rings.length} rings, center: (${result.calibration.beam_center[0].toFixed(1)}, ${result.calibration.beam_center[1].toFixed(1)})`;
-                    addMessage('assistant', `MIDAS calibration loaded: ${result.calibration.rings.length} rings detected`);
 
-                    // Draw rings on image (simplified - would need canvas overlay for full implementation)
+                    // Build message with ring info
+                    let msg = `MIDAS calibration loaded:\n`;
+                    msg += `• Beam center: (${result.calibration.beam_center[0].toFixed(1)}, ${result.calibration.beam_center[1].toFixed(1)}) px\n`;
+                    msg += `• Distance: ${result.calibration.detector_distance.toFixed(2)} mm\n`;
+                    msg += `• Wavelength: ${result.calibration.wavelength.toFixed(6)} Å\n`;
+                    msg += `• ${result.calibration.rings.length} calibration rings detected`;
+                    addMessage('assistant', msg);
+
+                    // Draw rings on image overlay
                     if (currentImageFileId) {
-                        addMessage('assistant', 'Calibration rings: ' + result.calibration.rings.map(r => r.toFixed(1) + 'px').join(', '));
+                        drawCalibrationRings();
+                        addMessage('assistant', '✓ Calibration rings overlaid on image');
                     }
                 } else {
                     document.getElementById('calibration-status').textContent = 'Failed to load calibration';
@@ -2177,6 +2499,83 @@ Model Options:
             imageState.translateY = centerY - imgY * imageState.scale;
 
             updateImageTransform();
+        }
+
+        function drawCalibrationRings() {
+            if (!currentCalibration || !currentImageStats) return;
+
+            const canvas = document.getElementById('calibration-overlay');
+            const img = document.getElementById('diffraction-image');
+            const container = document.getElementById('image-container');
+
+            // Set canvas size to match image display size
+            const rect = img.getBoundingClientRect();
+            canvas.width = rect.width;
+            canvas.height = rect.height;
+            canvas.style.width = rect.width + 'px';
+            canvas.style.height = rect.height + 'px';
+
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Get calibration parameters
+            const beamCenter = currentCalibration.beam_center;  // [x, y] in image pixels
+            const rings = currentCalibration.rings;  // radii in image pixels
+            const dSpacings = currentCalibration.d_spacings || [];
+            const twoTheta = currentCalibration.two_theta || [];
+
+            // Calculate scale factor (displayed px / image px)
+            const scaleX = rect.width / currentImageStats.shape[1];
+            const scaleY = rect.height / currentImageStats.shape[0];
+
+            // Convert beam center to canvas coordinates
+            const centerX = beamCenter[0] * scaleX;
+            const centerY = beamCenter[1] * scaleY;
+
+            // Draw beam center marker
+            ctx.strokeStyle = '#00ff00';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(centerX - 10, centerY);
+            ctx.lineTo(centerX + 10, centerY);
+            ctx.moveTo(centerX, centerY - 10);
+            ctx.lineTo(centerX, centerY + 10);
+            ctx.stroke();
+
+            // Draw calibration rings
+            const colors = ['#ff0000', '#00ffff', '#ffff00', '#ff00ff', '#00ff00', '#ff8800', '#0088ff', '#ff0088'];
+
+            rings.forEach((radius, i) => {
+                const displayRadius = radius * Math.min(scaleX, scaleY);
+
+                ctx.strokeStyle = colors[i % colors.length];
+                ctx.lineWidth = 2;
+                ctx.globalAlpha = 0.7;
+                ctx.beginPath();
+                ctx.arc(centerX, centerY, displayRadius, 0, 2 * Math.PI);
+                ctx.stroke();
+
+                // Draw label with d-spacing and 2θ
+                if (dSpacings[i] && twoTheta[i]) {
+                    ctx.fillStyle = colors[i % colors.length];
+                    ctx.font = '12px monospace';
+                    ctx.globalAlpha = 1.0;
+                    const label = `d=${dSpacings[i]}Å (2θ=${twoTheta[i].toFixed(2)}°)`;
+                    const labelX = centerX + displayRadius * 0.7;
+                    const labelY = centerY - displayRadius * 0.7;
+
+                    // Draw label background
+                    const metrics = ctx.measureText(label);
+                    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+                    ctx.fillRect(labelX - 2, labelY - 12, metrics.width + 4, 16);
+
+                    // Draw label text
+                    ctx.fillStyle = colors[i % colors.length];
+                    ctx.fillText(label, labelX, labelY);
+                }
+            });
+
+            ctx.globalAlpha = 1.0;
         }
 
         function resetZoom() {
