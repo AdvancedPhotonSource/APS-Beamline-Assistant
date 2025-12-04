@@ -44,24 +44,64 @@ APEXA> run calibration on ceria file with mask and initial parameters
 ### 📊 2D → 1D Integration
 Integrate diffraction images to 1D patterns for phase analysis.
 
+#### Simple Single-Frame Integration
+
 **Example Prompts:**
 ```
 APEXA> integrate the .tif file to 1D
 APEXA> integrate data.ge5 using Parameters.txt
 APEXA> integrate with dark file subtraction using dark.ge5
-APEXA> batch integrate all .tif files in /data/experiment
 ```
 
 **What It Does:**
-- Azimuthal integration using pyFAI or MIDAS Integrator
+- Azimuthal integration using MIDAS Integrator
 - Optional dark file subtraction for background correction
 - Outputs: `.dat` file with Q vs Intensity
 
 **Use Cases:**
+- Quick analysis of single frames
 - Phase identification (peak matching)
-- Strain analysis
 - Texture analysis
-- Rietveld refinement preparation
+
+#### Multi-Panel Batch Integration (Production Workflow)
+
+**For beamlines with multi-panel detectors like Hydra (4 panels)**
+
+**Example Prompts:**
+```
+APEXA> batch integrate frames 3083 to 3085 from CeO2_003083.ge1.h5 using dark_003084.ge1.h5 and refined_MIDAS_params_ge1.txt
+APEXA> integrate all panels of Hydra detector with detector mapping enabled
+APEXA> run batch integration with 80 CPUs on frames 100-500
+```
+
+**What It Does:**
+- Uses MIDAS `integrator.py` (Python) instead of simple binary
+- **Detector mapping** for multi-panel detectors (critical for Hydra!)
+- Batch processing of frame ranges
+- Parallel processing (up to 80+ CPUs)
+- HDF5 input/output with `/exchange/data` location
+- Dark file correction with masks
+- Outputs: `.zarr.zip` files (convert to `.mat` if needed)
+
+**Key Parameters:**
+- `map_detector=True` - **REQUIRED** for multi-panel detectors
+- `num_cpus=80` - Parallel processing (adjust to system)
+- `start_frame` / `end_frame` - Frame range to process
+- `data_location="/exchange/data"` - HDF5 internal path
+- `dark_location="/exchange/data"` - Dark file HDF5 path
+
+**Multi-Panel Workflow:**
+1. Calibrate each panel separately (ge1, ge2, ge3, ge4)
+2. Run batch integration for each panel with `map_detector=True`
+3. Optional: Convert `.zarr.zip` to `.mat` using `zarr_tomat.py`
+4. Proceed to FF-HEDM grain indexing with `ff_MIDAS.py`
+
+**Outputs:**
+- `*.zarr.zip` - Integrated 1D patterns (ZARR format)
+- `*.hdf` - Intermediate HDF5 files
+- `*.mat` - MATLAB format (if `write_mat=True`)
+
+**Time:** ~5-30 minutes depending on frame count and CPU cores
 
 ---
 

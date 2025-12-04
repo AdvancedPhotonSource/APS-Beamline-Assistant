@@ -2904,6 +2904,269 @@ async def midas_auto_calibrate(
         })
 
 # =============================================================================
+# BATCH INTEGRATION (MULTI-PANEL DETECTOR SUPPORT)
+# =============================================================================
+
+@mcp.tool()
+async def midas_batch_integrate(
+    data_file: str,
+    dark_file: str,
+    parameter_file: str,
+    start_frame: int,
+    end_frame: int,
+    result_folder: str = "./integration_results",
+    map_detector: bool = True,
+    num_cpus: int = 10,
+    num_frame_chunks: int = 10,
+    convert_files: bool = True,
+    write_mat: bool = False,
+    data_location: str = "/exchange/data",
+    dark_location: str = "/exchange/data"
+) -> str:
+    """
+    Batch integrate 2D diffraction images using MIDAS Python integrator.
+
+    This is the PRODUCTION workflow used at beamlines for multi-panel detectors
+    like Hydra (4 panels). Uses integrator.py which supports:
+    - Multi-panel detector mapping
+    - Dark file correction
+    - Batch frame processing
+    - Parallel CPU processing
+    - HDF5 input/output
+
+    Based on cake_ge_v2.sh workflow from 1-ID beamline.
+
+    Args:
+        data_file: Path to HDF5 data file (e.g., sample_003083.ge1.h5)
+        dark_file: Path to HDF5 dark file for background subtraction
+        parameter_file: MIDAS parameter file (refined_MIDAS_params.txt)
+        start_frame: First frame number to process
+        end_frame: Last frame number to process
+        result_folder: Output directory for results (default: ./integration_results)
+        map_detector: Enable detector mapping for multi-panel detectors (default: True)
+        num_cpus: Number of CPU cores for parallel processing (default: 10)
+        num_frame_chunks: Number of chunks to divide frames into (default: 10)
+        convert_files: Convert files to MIDAS analysis format (default: True)
+        write_mat: Write MATLAB .mat files (default: False, saves disk space)
+        data_location: Location within data HDF5 file (default: /exchange/data)
+        dark_location: Location within dark HDF5 file (default: /exchange/data)
+
+    Returns:
+        JSON with integration status, output files (.zarr.zip), and processing details
+
+    Example:
+        midas_batch_integrate(
+            data_file="/path/to/CeO2_003083.ge1.h5",
+            dark_file="/path/to/dark_003084.ge1.h5",
+            parameter_file="refined_MIDAS_params_ge1_Tx_cake_partial.txt",
+            start_frame=3083,
+            end_frame=3085,
+            map_detector=True,
+            num_cpus=80
+        )
+    """
+    try:
+        # Validate inputs
+        data_path = Path(data_file).resolve()
+        dark_path = Path(dark_file).resolve()
+        param_path = Path(parameter_file).resolve()
+
+        if not data_path.exists():
+            return format_result({
+                "tool": "midas_batch_integrate",
+                "status": "error",
+                "error": f"Data file not found: {data_path}"
+            })
+
+        if not dark_path.exists():
+            return format_result({
+                "tool": "midas_batch_integrate",
+                "status": "error",
+                "error": f"Dark file not found: {dark_path}"
+            })
+
+        if not param_path.exists():
+            return format_result({
+                "tool": "midas_batch_integrate",
+                "status": "error",
+                "error": f"Parameter file not found: {param_path}"
+            })
+
+        # Find MIDAS integrator.py
+        midas_integrator = None
+        if MIDAS_ROOT:
+            integrator_path = Path(MIDAS_ROOT) / "utils" / "integrator.py"
+            if integrator_path.exists():
+                midas_integrator = integrator_path
+
+        # Also check common locations
+        common_paths = [
+            Path.home() / "opt" / "MIDAS" / "utils" / "integrator.py",
+            Path("/home/beams/S1IDUSER/opt/MIDAS/utils/integrator.py"),
+            Path("/clhome/TOMO1/opt/MIDAS/utils/integrator.py")
+        ]
+
+        if not midas_integrator:
+            for p in common_paths:
+                if p.exists():
+                    midas_integrator = p
+                    break
+
+        if not midas_integrator:
+            return format_result({
+                "tool": "midas_batch_integrate",
+                "status": "error",
+                "error": "MIDAS integrator.py not found. Expected locations: ~/opt/MIDAS/utils/integrator.py or MIDAS_ROOT/utils/integrator.py"
+            })
+
+        # Create result folder
+        result_path = Path(result_folder).resolve()
+        result_path.mkdir(parents=True, exist_ok=True)
+
+        # Build integrator command
+        # Based on: python ~/opt/MIDAS/utils/integrator.py -resultFolder ./ge1_cake -paramFN params.txt -dataFN data.h5 -dataLoc /exchange/data -darkFN dark.h5 -darkLoc /exchange/data -startFileNr 3083 -endFileNr 3085 -convertFiles 1 -mapDetector 1 -nCPUs 80 -writeMat 0 -numFrameChunks 10
+
+        cmd = [
+            "python3",
+            str(midas_integrator),
+            "-resultFolder", str(result_path),
+            "-paramFN", str(param_path),
+            "-dataFN", str(data_path),
+            "-dataLoc", data_location,
+            "-darkFN", str(dark_path),
+            "-darkLoc", dark_location,
+            "-startFileNr", str(start_frame),
+            "-endFileNr", str(end_frame),
+            "-convertFiles", "1" if convert_files else "0",
+            "-mapDetector", "1" if map_detector else "0",
+            "-nCPUs", str(num_cpus),
+            "-writeMat", "1" if write_mat else "0",
+            "-numFrameChunks", str(num_frame_chunks)
+        ]
+
+        # ===== TRANSPARENCY: Show exact command being run =====
+        cmd_str = " ".join(cmd)
+        print("="*70, file=sys.stderr)
+        print("🔧 MIDAS BATCH INTEGRATION COMMAND:", file=sys.stderr)
+        print(f"   Script: {midas_integrator}", file=sys.stderr)
+        print(f"   Data file: {data_path.name}", file=sys.stderr)
+        print(f"   Dark file: {dark_path.name}", file=sys.stderr)
+        print(f"   Parameters: {param_path.name}", file=sys.stderr)
+        print(f"   Frame range: {start_frame} to {end_frame}", file=sys.stderr)
+        print(f"   Detector mapping: {'ENABLED' if map_detector else 'DISABLED'}", file=sys.stderr)
+        print(f"   CPUs: {num_cpus} | Chunks: {num_frame_chunks}", file=sys.stderr)
+        print(f"   Output: {result_path}", file=sys.stderr)
+        print(f"\n   Full command:", file=sys.stderr)
+        print(f"   {cmd_str}", file=sys.stderr)
+        print("="*70, file=sys.stderr)
+
+        # Run integration
+        print(f"\n🚀 Starting batch integration (this may take several minutes)...\n", file=sys.stderr)
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=1800  # 30 minute timeout for batch processing
+        )
+
+        # ===== TRANSPARENCY: Show command output =====
+        print("\n" + "="*70, file=sys.stderr)
+        print("📊 INTEGRATION OUTPUT:", file=sys.stderr)
+        print("="*70, file=sys.stderr)
+        if result.stdout:
+            print(result.stdout, file=sys.stderr)
+        if result.stderr:
+            print("\nSTDERR:", file=sys.stderr)
+            print(result.stderr, file=sys.stderr)
+        print("="*70 + "\n", file=sys.stderr)
+
+        if result.returncode != 0:
+            return format_result({
+                "tool": "midas_batch_integrate",
+                "status": "error",
+                "command": cmd_str,
+                "exit_code": result.returncode,
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+                "error": f"Integration failed with exit code {result.returncode}"
+            })
+
+        # Find output files
+        zarr_files = list(result_path.glob("*.zarr.zip"))
+        hdf_files = list(result_path.glob("*.hdf"))
+        mat_files = list(result_path.glob("*.mat"))
+
+        # Count processed frames
+        num_frames = end_frame - start_frame + 1
+
+        # Build success message
+        message = f"✓ Batch integration completed successfully!\n\n"
+        message += f"Processing Details:\n"
+        message += f"  Frames processed: {num_frames} ({start_frame} to {end_frame})\n"
+        message += f"  Data file: {data_path.name}\n"
+        message += f"  Dark file: {dark_path.name}\n"
+        message += f"  Parameters: {param_path.name}\n"
+        message += f"  Detector mapping: {'ENABLED' if map_detector else 'DISABLED'}\n"
+        message += f"  CPUs used: {num_cpus}\n"
+
+        message += f"\nOutput Files ({result_path}):\n"
+        if zarr_files:
+            message += f"  • {len(zarr_files)} ZARR files (.zarr.zip)\n"
+            for zf in zarr_files[:3]:  # Show first 3
+                message += f"    - {zf.name}\n"
+            if len(zarr_files) > 3:
+                message += f"    ... and {len(zarr_files) - 3} more\n"
+
+        if hdf_files:
+            message += f"  • {len(hdf_files)} HDF5 files\n"
+
+        if mat_files:
+            message += f"  • {len(mat_files)} MATLAB files\n"
+
+        message += f"\nNext Steps:\n"
+        message += f"  1. ZARR files contain integrated 1D patterns\n"
+        message += f"  2. For multi-panel detectors, repeat for all panels (ge1, ge2, ge3, ge4)\n"
+        message += f"  3. Convert ZARR to MAT if needed using zarr_tomat.py\n"
+        message += f"  4. Use ff_MIDAS.py for grain indexing with refined parameters\n"
+
+        return format_result({
+            "tool": "midas_batch_integrate",
+            "status": "success",
+            "method": "MIDAS integrator.py",
+            "command": cmd_str,
+            "data_file": str(data_path),
+            "dark_file": str(dark_path),
+            "parameter_file": str(param_path),
+            "result_folder": str(result_path),
+            "frame_range": {"start": start_frame, "end": end_frame, "count": num_frames},
+            "detector_mapping": map_detector,
+            "cpus": num_cpus,
+            "output_files": {
+                "zarr": [str(f) for f in zarr_files],
+                "hdf": [str(f) for f in hdf_files],
+                "mat": [str(f) for f in mat_files]
+            },
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "message": message
+        })
+
+    except subprocess.TimeoutExpired:
+        return format_result({
+            "tool": "midas_batch_integrate",
+            "status": "error",
+            "error": "Integration timed out (>30 minutes). Try reducing frame count or increase timeout."
+        })
+    except Exception as e:
+        return format_result({
+            "tool": "midas_batch_integrate",
+            "status": "error",
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        })
+
+# =============================================================================
 # SERVER MAIN
 # =============================================================================
 
@@ -2935,7 +3198,8 @@ if __name__ == "__main__":
     print("  - get_midas_workflow_status", file=sys.stderr)
     print("\nFF-HEDM Calibration & Integration (MIDAS Official):", file=sys.stderr)
     print("  - midas_auto_calibrate (AutoCalibrateZarr.py)", file=sys.stderr)
-    print("  - integrate_2d_to_1d (MIDAS Integrator)", file=sys.stderr)
+    print("  - midas_integrate_2d_to_1d (MIDAS Integrator - single frame)", file=sys.stderr)
+    print("  - midas_batch_integrate (MIDAS integrator.py - multi-panel batch)", file=sys.stderr)
     print("\n⚠️  NON-MIDAS tools removed from this server:", file=sys.stderr)
     print("  - detect_diffraction_rings → analysis_utilities_server.py (detect_rings_quick)", file=sys.stderr)
     print("  - identify_crystalline_phases → analysis_utilities_server.py (identify_phases_basic)", file=sys.stderr)
