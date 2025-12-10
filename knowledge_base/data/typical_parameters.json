@@ -1,0 +1,105 @@
+{
+  "_metadata": {
+    "description": "Typical parameter ranges for HEDM experiments at APS",
+    "beamline": "6-ID-B (and similar high-energy beamlines)",
+    "notes": "These are guidelines - actual values depend on experimental setup"
+  },
+
+  "beam_energies": {
+    "low_energy": {"value_kev": 30, "wavelength_angstrom": 0.413, "use_case": "Near-field HEDM, small grains"},
+    "medium_energy": {"value_kev": 61.3, "wavelength_angstrom": 0.202, "use_case": "General FF-HEDM"},
+    "high_energy": {"value_kev": 90, "wavelength_angstrom": 0.138, "use_case": "Bulk samples, high penetration"},
+    "very_high_energy": {"value_kev": 120, "wavelength_angstrom": 0.103, "use_case": "Thick samples, phase mapping"}
+  },
+
+  "detector_geometries": {
+    "ff_hedm": {
+      "lsd_range_mm": [500, 2000],
+      "typical_lsd_mm": 650,
+      "pixel_size_um": 200,
+      "detector_size_px": [2048, 2048],
+      "resolution_um": [1, 10],
+      "use_case": "Far-field: orientation, strain, grain positions"
+    },
+    "nf_hedm": {
+      "lsd_range_mm": [5, 20],
+      "typical_lsd_mm": 7.5,
+      "pixel_size_um": 1.5,
+      "detector_size_px": [2048, 2048],
+      "resolution_um": [0.5, 2],
+      "use_case": "Near-field: 3D grain maps, grain boundaries"
+    }
+  },
+
+  "calibration_quality": {
+    "excellent": {"mean_strain": "<0.0005", "std_strain": "<0.002"},
+    "good": {"mean_strain": "<0.001", "std_strain": "<0.005"},
+    "acceptable": {"mean_strain": "<0.002", "std_strain": "<0.01"},
+    "poor": {"mean_strain": ">0.002", "std_strain": ">0.01"}
+  },
+
+  "integration_parameters": {
+    "eta_coverage": {
+      "full": "±180°",
+      "typical": "±15° to ±45°",
+      "textured_sample": "±25° (accounts for preferred orientation)"
+    },
+    "radial_bins": {
+      "rmin": 10,
+      "rmax": 1000,
+      "bin_size": 1
+    },
+    "eta_bins": {
+      "fine": 1,
+      "typical": 5,
+      "coarse": 10
+    }
+  },
+
+  "processing_recommendations": {
+    "single_frame": {
+      "n_cpus": 1,
+      "estimated_time_seconds": 30
+    },
+    "batch_100_frames": {
+      "n_cpus": 4,
+      "frame_chunks": 10,
+      "estimated_time_minutes": 15
+    },
+    "batch_1000_frames": {
+      "n_cpus": 80,
+      "frame_chunks": 20,
+      "estimated_time_minutes": 45
+    }
+  },
+
+  "sample_rotation": {
+    "omega_step_degrees": {
+      "fine": 0.25,
+      "typical": 0.5,
+      "coarse": 1.0
+    },
+    "omega_range_degrees": {
+      "ff_hedm": [0, 180],
+      "nf_hedm": [0, 360]
+    }
+  },
+
+  "data_quality_thresholds": {
+    "signal_to_noise": {
+      "excellent": ">20:1",
+      "good": ">10:1",
+      "minimum": ">5:1"
+    },
+    "ring_coverage": {
+      "excellent": ">90%",
+      "good": ">80%",
+      "minimum": ">60%"
+    },
+    "peak_sharpness_fwhm_degrees": {
+      "sharp": "<0.5",
+      "typical": "0.5-2.0",
+      "broad": ">2.0"
+    }
+  }
+}

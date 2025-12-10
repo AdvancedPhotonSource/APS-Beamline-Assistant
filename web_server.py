@@ -795,6 +795,9 @@ async def load_viewer_image(file: UploadFile = File(...)):
             "std": float(img.std())
         }
 
+        # Debug: Log what we're caching
+        print(f"[DEBUG] Loaded image: file_id={file_id}, dtype={img.dtype}, shape={img.shape}, min={img.min()}, max={img.max()}")
+
         img_preview = apply_contrast(img)
         preview_base64 = image_to_base64(img_preview)
 
@@ -932,20 +935,284 @@ async def get_pixel_value(file_id: str, x: int, y: int):
     """Get raw pixel intensity at specified coordinates"""
     if file_id not in image_cache:
         raise HTTPException(status_code=404, detail="Image not found in cache")
-    
+
     img = image_cache[file_id]
-    
+
     # Check bounds
     if y < 0 or y >= img.shape[0] or x < 0 or x >= img.shape[1]:
         return JSONResponse({"intensity": 0, "error": "Out of bounds"})
-        
+
     # Get value (handle different types)
     val = img[y, x]
+
+    # Debug: Log what we're returning
+    print(f"[DEBUG] Pixel ({x}, {y}): value={val}, dtype={img.dtype}, shape={img.shape}, max={img.max()}, min={img.min()}")
+
     return JSONResponse({
         "intensity": float(val),
         "x": x,
         "y": y
     })
+
+
+@app.get("/api/viewer/brightest_pixel")
+async def get_brightest_pixel(file_id: str):
+    """Find the location of the brightest pixel in the image"""
+    if file_id not in image_cache:
+        raise HTTPException(status_code=404, detail="Image not found in cache")
+
+    img = image_cache[file_id]
+
+    # Find brightest pixel
+    max_val = img.max()
+    max_loc = np.unravel_index(img.argmax(), img.shape)
+
+    print(f"[DEBUG] Brightest pixel: ({max_loc[1]}, {max_loc[0]}): value={max_val}")
+
+    return JSONResponse({
+        "x": int(max_loc[1]),
+        "y": int(max_loc[0]),
+        "intensity": float(max_val)
+    })
+
+
+@app.post("/api/auto_calibrate")
+async def auto_calibrate(
+    image_file_id: str = Form(...),
+    space_group: int = Form(...),
+    lattice_a: float = Form(...),
+    lattice_b: float = Form(...),
+    lattice_c: float = Form(...),
+    lattice_alpha: float = Form(...),
+    lattice_beta: float = Form(...),
+    lattice_gamma: float = Form(...),
+    lsd: float = Form(...),
+    lsd_guess: float = Form(...),
+    bc_x: float = Form(...),
+    bc_y: float = Form(...),
+    bc_guess_x: float = Form(0.0),
+    bc_guess_y: float = Form(0.0),
+    px: float = Form(...),
+    wavelength: float = Form(...),
+    tx: float = Form(0.0),
+    ty: float = Form(0.0),
+    tz: float = Form(0.0),
+    stopping_strain: float = Form(0.0005),
+    convert_file: int = Form(1),
+    im_trans_opt: int = Form(0),
+    make_plots: int = Form(1),
+    bad_px_intensity: float = Form(-2.0),
+    gap_intensity: float = Form(-1.0),
+    save_plots_hdf: Optional[str] = Form(None),
+    mask_file: Optional[UploadFile] = File(None)
+):
+    """Run MIDAS auto-calibration on uploaded image"""
+    try:
+        # Get the image file path
+        if image_file_id not in image_paths:
+            raise HTTPException(status_code=404, detail="Image file not found")
+
+        image_path = image_paths[image_file_id]
+
+        # Read the actual image dimensions
+        import tifffile
+        img = tifffile.imread(image_path)
+        nr_pixels_y, nr_pixels_z = img.shape[:2] if len(img.shape) >= 2 else (img.shape[0], img.shape[0])
+
+        # Create a parameter file
+        param_file = upload_dir / "calib_params_temp.txt"
+        with open(param_file, 'w') as f:
+            f.write(f"SpaceGroup {space_group}\n")
+            f.write(f"LatticeParameter {lattice_a} {lattice_b} {lattice_c} {lattice_alpha} {lattice_beta} {lattice_gamma}\n")
+            f.write(f"px {px}\n")
+            f.write(f"Wavelength {wavelength}\n")
+            f.write(f"tx {tx}\n")
+            f.write(f"ty {ty}\n")
+            f.write(f"tz {tz}\n")
+            f.write(f"NrPixelsY {nr_pixels_y}\n")
+            f.write(f"NrPixelsZ {nr_pixels_z}\n")
+            f.write(f"ImTransOpt {im_trans_opt}\n")
+            f.write(f"BadPxIntensity {bad_px_intensity}\n")
+            f.write(f"GapIntensity {gap_intensity}\n")
+
+        # Save mask file if provided
+        mask_path = None
+        if mask_file:
+            mask_path = upload_dir / mask_file.filename
+            with open(mask_path, "wb") as f:
+                f.write(await mask_file.read())
+
+        # Prepare AutoCalibrateZarr command
+        import subprocess
+        import sys
+
+        # Import find_midas_python and get_midas_env from midas_comprehensive_server
+        sys.path.insert(0, str(Path(__file__).parent))
+        from midas_comprehensive_server import find_midas_python, get_midas_env
+
+        # Find AutoCalibrateZarr.py
+        midas_path = Path.home() / "opt" / "MIDAS" / "utils" / "AutoCalibrateZarr.py"
+        if not midas_path.exists():
+            midas_path = Path("/Users/b324240/Git/MIDAS/utils/AutoCalibrateZarr.py")
+
+        if not midas_path.exists():
+            raise HTTPException(status_code=500, detail="AutoCalibrateZarr.py not found")
+
+        # Use MIDAS Python environment and environment variables
+        midas_python = find_midas_python()
+        midas_env = get_midas_env()
+
+        cmd = [
+            midas_python,
+            str(midas_path),
+            "-dataFN", str(image_path),
+            "-ConvertFile", str(convert_file),
+            "-paramFN", str(param_file),
+            "-LsdGuess", str(lsd_guess),
+            "-StoppingStrain", str(stopping_strain),
+            "-MakePlots", str(make_plots),
+            "-ImTransOpt", str(im_trans_opt),
+            "-BadPxIntensity", str(bad_px_intensity),
+            "-GapIntensity", str(gap_intensity)
+        ]
+
+        # Add BC guess if provided
+        if bc_guess_x != 0.0 or bc_guess_y != 0.0:
+            cmd.extend(["-BCGuess", str(bc_guess_x), str(bc_guess_y)])
+
+        # Add SavePlotsHDF if specified
+        if save_plots_hdf:
+            cmd.extend(["-SavePlotsHDF", str(upload_dir / save_plots_hdf)])
+
+        # Run calibration with MIDAS environment
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600, env=midas_env)
+
+        # Find refined parameters file
+        refined_params = upload_dir / "refined_MIDAS_params.txt"
+        if not refined_params.exists():
+            # Try in current directory
+            refined_params = Path("refined_MIDAS_params.txt")
+
+        return JSONResponse({
+            "success": result.returncode == 0,
+            "output_file": str(refined_params) if refined_params.exists() else None,
+            "stdout": result.stdout,
+            "stderr": result.stderr
+        })
+
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=500, detail="Calibration timed out after 10 minutes")
+    except Exception as e:
+        import traceback
+        return JSONResponse({
+            "success": False,
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        })
+
+
+@app.post("/api/midas_integrate")
+async def midas_integrate(
+    result_folder: str = Form(...),
+    param_file_id: Optional[str] = Form(None),
+    param_file_upload: Optional[UploadFile] = File(None),
+    data_file: str = Form(...),
+    dark_file: Optional[str] = Form(""),
+    start_file_nr: int = Form(-1),
+    end_file_nr: int = Form(-1),
+    data_loc: str = Form("/exchange/data"),
+    dark_loc: str = Form("/exchange/data"),
+    num_frame_chunks: int = Form(-1),
+    preproc_thresh: int = Form(-1),
+    convert_files: int = Form(1),
+    map_detector: int = Form(1),
+    n_cpus: int = Form(4),
+    write_mat: int = Form(0),
+    skip_existing: int = Form(0)
+):
+    """Run MIDAS integration (caking) on data files"""
+    try:
+        # Get parameter file path
+        param_file_path = None
+        if param_file_id and param_file_id in image_paths:
+            param_file_path = image_paths[param_file_id]
+        elif param_file_upload:
+            # Save uploaded parameter file
+            param_file_path = upload_dir / param_file_upload.filename
+            with open(param_file_path, "wb") as f:
+                f.write(await param_file_upload.read())
+
+        if not param_file_path or not Path(param_file_path).exists():
+            raise HTTPException(status_code=400, detail="Parameter file required")
+
+        # Create result folder if it doesn't exist
+        result_folder_path = Path(result_folder)
+        if not result_folder_path.is_absolute():
+            result_folder_path = upload_dir / result_folder
+        result_folder_path.mkdir(parents=True, exist_ok=True)
+
+        # Import find_midas_python and get_midas_env from midas_comprehensive_server
+        sys.path.insert(0, str(Path(__file__).parent))
+        from midas_comprehensive_server import find_midas_python, get_midas_env
+
+        # Find integrator.py
+        integrator_path = Path.home() / "opt" / "MIDAS" / "utils" / "integrator.py"
+        if not integrator_path.exists():
+            integrator_path = Path("/Users/b324240/Git/MIDAS/utils/integrator.py")
+
+        if not integrator_path.exists():
+            raise HTTPException(status_code=500, detail="integrator.py not found")
+
+        # Use MIDAS Python environment and environment variables
+        midas_python = find_midas_python()
+        midas_env = get_midas_env()
+
+        # Build command
+        cmd = [
+            midas_python,
+            str(integrator_path),
+            "-resultFolder", str(result_folder_path),
+            "-paramFN", str(param_file_path),
+            "-dataFN", data_file,
+            "-dataLoc", data_loc,
+            "-darkLoc", dark_loc,
+            "-numFrameChunks", str(num_frame_chunks),
+            "-preProcThresh", str(preproc_thresh),
+            "-startFileNr", str(start_file_nr),
+            "-endFileNr", str(end_file_nr),
+            "-convertFiles", str(convert_files),
+            "-mapDetector", str(map_detector),
+            "-nCPUs", str(n_cpus),
+            "-writeMat", str(write_mat)
+        ]
+
+        # Add dark file if provided
+        if dark_file and dark_file.strip():
+            cmd.extend(["-darkFN", dark_file])
+
+        # Add skip existing flag if enabled
+        if skip_existing == 1:
+            cmd.append("-skipExisting")
+
+        # Run integration with MIDAS environment
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800, env=midas_env)
+
+        return JSONResponse({
+            "success": result.returncode == 0,
+            "result_folder": str(result_folder_path),
+            "stdout": result.stdout,
+            "stderr": result.stderr
+        })
+
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=500, detail="Integration timed out after 30 minutes")
+    except Exception as e:
+        import traceback
+        return JSONResponse({
+            "success": False,
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        })
 
 
 @app.post("/api/export_paraview")
@@ -955,25 +1222,25 @@ async def export_to_paraview(
 ):
     """
     Export MIDAS analysis results to VTK format for ParaView visualization
-    
+
     Args:
         results_path: Path to MIDAS output file (CSV or H5)
         data_type: Type of data ("grains", "voxels", or "peaks")
-    
+
     Returns:
         VTK file for download
     """
     try:
         from paraview_export import grains_to_vtk, nf_voxels_to_vtk, peaks_to_vtk
-        
+
         # Resolve path
         input_path = Path(results_path)
         if not input_path.exists():
             raise HTTPException(status_code=404, detail=f"File not found: {results_path}")
-        
+
         # Create output path
         output_path = upload_dir / f"{data_type}.vtp"
-        
+
         # Convert based on type
         if data_type == "grains":
             grains_to_vtk(str(input_path), str(output_path))
@@ -983,13 +1250,13 @@ async def export_to_paraview(
             peaks_to_vtk(str(input_path), str(output_path))
         else:
             raise HTTPException(status_code=400, detail=f"Unknown data type: {data_type}")
-            
+
         return FileResponse(
             path=output_path,
             filename=f"{data_type}.vtp",
             media_type="application/octet-stream"
         )
-        
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

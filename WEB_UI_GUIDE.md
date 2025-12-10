@@ -552,8 +552,8 @@ For developers and advanced users:
 
 ## Version History
 
-**Current Version:** 1.0.0  
-**Last Updated:** November 2024  
+**Version:** 0.2.0  
+**Last Updated:** December 2025  
 **Compatibility:** APEXA 1.0.0+, All major browsers
 
 ---

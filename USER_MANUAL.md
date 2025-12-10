@@ -566,6 +566,73 @@ APEXA> switch to claudesonnet4
 
 ---
 
+## 🧠 Knowledge Base & Domain Expertise
+
+APEXA includes a RAG-powered knowledge base that provides PhD-level domain expertise by indexing research papers, experimental logbooks, and textbooks.
+
+### Setup Knowledge Base
+
+```bash
+# 1. Install dependencies (if not already installed)
+uv add chromadb sentence-transformers pypdf2 mp-api
+
+# 2. Optional: Fetch materials from Materials Project
+export MP_API_KEY="your_api_key"  # Get from https://materialsproject.org/api
+python knowledge_base/fetch_materials_from_mp.py
+
+# 3. Add your documents
+cp /path/to/papers/*.pdf knowledge_base/papers/
+cp /path/to/logbooks/*.txt knowledge_base/logbooks/
+
+# 4. Index the knowledge base (one-time, 10-30 min)
+python knowledge_base/index_knowledge.py
+```
+
+### Ask Questions
+
+Once indexed, you can ask domain-specific questions:
+
+```
+APEXA> What is a good calibration strain value?
+APEXA> How should I process Ti-6Al-4V samples?
+APEXA> Explain Bragg's law for 61keV beam energy
+APEXA> What parameters were used for experiment 2019-03-15?
+```
+
+### Get Material Properties
+
+```
+APEXA> Get properties for CeO2
+APEXA> Show me lattice parameters for LaB6
+APEXA> What is the space group of Ti-6Al-4V?
+```
+
+**Available materials:** CeO2, LaB6, Si, Al2O3, Fe, Ti, Ni, Al, Steel_316L, Ti6Al4V (from Materials Project)
+
+### Estimate Parameters
+
+```
+APEXA> Estimate Lsd from ring at radius 412 pixels for CeO2 at 61keV
+APEXA> What's the typical detector distance for FF-HEDM?
+APEXA> What are quality thresholds for calibration?
+```
+
+### Knowledge Base Contents
+
+- **Papers** - Research publications on HEDM, calibration methods, analysis workflows
+- **Logbooks** - Experimental notes from 10+ years of beamline operations
+- **Books** - Crystallography fundamentals, diffraction theory textbooks
+- **Materials DB** - Authoritative data from Materials Project (lattice params, d-spacings)
+- **Typical Parameters** - HEDM best practices, quality thresholds, typical ranges
+
+### Performance
+
+- **Query time:** <200ms (vector search)
+- **Material lookup:** <10ms (dictionary)
+- **Local processing:** All data stays on your machine
+
+---
+
 ## Troubleshooting
 
 ### "Tool not found" Warning

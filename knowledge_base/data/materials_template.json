@@ -1,0 +1,20 @@
+{
+  "_metadata": {
+    "description": "Materials database for HEDM calibration and analysis",
+    "sources": [
+      "Materials Project (https://materialsproject.org/)",
+      "NIST Standard Reference Materials",
+      "User-added custom materials"
+    ],
+    "last_updated": "2025-12-04",
+    "notes": "To populate this database, run: python knowledge_base/fetch_materials_from_mp.py"
+  },
+  "CeO2": {
+    "name": "Cerium Oxide (Ceria)",
+    "source": "manual_entry",
+    "space_group": 225,
+    "lattice_parameters": {"a": 5.4116, "b": 5.4116, "c": 5.4116, "alpha": 90, "beta": 90, "gamma": 90},
+    "common_use": "calibration_standard",
+    "nist_srm": "674b"
+  }
+}

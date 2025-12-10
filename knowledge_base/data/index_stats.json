@@ -1,0 +1,9 @@
+{
+  "papers": 4,
+  "logbooks": 10,
+  "books": 0,
+  "total_chunks": 166,
+  "collection_name": "hedm_knowledge",
+  "embedding_model": "all-MiniLM-L6-v2",
+  "last_indexed": "auto-generated"
+}

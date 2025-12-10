@@ -128,6 +128,8 @@
             justify-content: center;
             color: white;
             font-weight: bold;
+            font-size: 9px;
+            letter-spacing: -0.5px;
             animation: logoPulse 3s ease-in-out infinite;
         }
 
@@ -579,7 +581,8 @@
             align-items: center;
             justify-content: center;
             font-weight: 600;
-            font-size: 12px;
+            font-size: 9px;
+            letter-spacing: -0.5px;
             flex-shrink: 0;
         }
 
@@ -589,7 +592,7 @@
         }
 
         .message.assistant .message-avatar {
-            background: var(--accent);
+            background: var(--gradient-primary);
             color: white;
         }
 
@@ -790,9 +793,9 @@
 
         /* Modern Compact Workflow Stepper */
         .workflow-step-compact {
-            width: 32px;
             height: 32px;
-            border-radius: 50%;
+            padding: 0 12px;
+            border-radius: 16px;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -803,10 +806,12 @@
             position: relative;
         }
 
-        .workflow-step-compact .step-icon-emoji {
-            font-size: 16px;
-            opacity: 0.5;
-            transition: opacity 0.3s ease;
+        .workflow-step-compact .step-label {
+            font-size: 11px;
+            font-weight: 500;
+            color: var(--text-muted);
+            transition: color 0.3s ease;
+            white-space: nowrap;
         }
 
         .workflow-step-compact[data-status="pending"] {
@@ -818,11 +823,11 @@
             background: var(--primary);
             border-color: var(--primary);
             box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.2);
-            transform: scale(1.1);
         }
 
-        .workflow-step-compact[data-status="active"] .step-icon-emoji {
-            opacity: 1;
+        .workflow-step-compact[data-status="active"] .step-label {
+            color: white;
+            font-weight: 600;
         }
 
         .workflow-step-compact[data-status="completed"] {
@@ -830,16 +835,17 @@
             border-color: var(--success);
         }
 
-        .workflow-step-compact[data-status="completed"] .step-icon-emoji {
-            display: none;
+        .workflow-step-compact[data-status="completed"] .step-label {
+            color: white;
+            font-weight: 600;
         }
 
-        .workflow-step-compact[data-status="completed"]::after {
-            content: "✓";
-            position: absolute;
-            font-size: 16px;
+        .workflow-step-compact[data-status="completed"]::before {
+            content: "✓ ";
             color: white;
             font-weight: bold;
+            font-size: 12px;
+            margin-right: 4px;
         }
 
         .step-connector {
@@ -847,6 +853,7 @@
             height: 2px;
             background: var(--border);
             transition: background 0.3s ease;
+            min-width: 20px;
         }
 
         .workflow-step-compact[data-status="completed"] + .step-connector {
@@ -854,7 +861,8 @@
         }
 
         .workflow-step-compact:hover {
-            transform: scale(1.05);
+            transform: translateY(-1px);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
         }
     </style>
 </head>
@@ -863,7 +871,7 @@
     <div class="app-container">
         <header class="header">
             <div class="logo">
-                <div class="logo-icon">BA</div>
+                <div class="logo-icon">AX</div>
                 <span>APEXA</span>
             </div>
             <div class="header-controls">
@@ -1030,6 +1038,7 @@
                                 <button class="zoom-btn" onclick="zoomIn()" title="Zoom In">+</button>
                                 <button class="zoom-btn" onclick="zoomOut()" title="Zoom Out">−</button>
                                 <button class="zoom-btn" onclick="resetZoom()" title="Reset Zoom">⊙</button>
+                                <button class="zoom-btn" onclick="findBrightestPixel()" title="Find Brightest Pixel">★</button>
                             </div>
                         </div>
 
@@ -1080,6 +1089,111 @@
                         </div>
                         <div id="azimuthal-plot" style="margin-top: 15px;"></div>
 
+                        <!-- MIDAS Integration Section -->
+                        <div class="visualization-container" style="margin-top: 30px;">
+                            <div class="viz-header">
+                                <h3 class="viz-title">MIDAS Integration (Cake/2D to 1D)</h3>
+                            </div>
+
+                            <!-- Integration Parameters -->
+                            <div style="padding: 20px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2);">
+                                <h4 style="margin: 0 0 15px 0; font-size: 14px; color: var(--primary);">File Selection</h4>
+                                <div style="display: grid; grid-template-columns: 1fr; gap: 15px; margin-bottom: 20px;">
+                                    <div>
+                                        <label style="display: block; margin-bottom: 5px;"><strong>Data File Pattern:</strong></label>
+                                        <input type="text" id="integration-data-file" placeholder="e.g., sample_*.h5" class="input-field" style="width: 100%;">
+                                        <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">
+                                            Pattern for data files (use * for wildcard)
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label style="display: block; margin-bottom: 5px;"><strong>Dark File (optional):</strong></label>
+                                        <input type="text" id="integration-dark-file" placeholder="e.g., dark.h5" class="input-field" style="width: 100%;">
+                                    </div>
+                                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                                        <div>
+                                            <label style="display: block; margin-bottom: 5px;"><strong>Start File Number:</strong></label>
+                                            <input type="number" id="integration-start-nr" value="1" class="input-field" style="width: 100%;">
+                                        </div>
+                                        <div>
+                                            <label style="display: block; margin-bottom: 5px;"><strong>End File Number:</strong></label>
+                                            <input type="number" id="integration-end-nr" value="1" class="input-field" style="width: 100%;">
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <h4 style="margin: 20px 0 15px 0; font-size: 14px; color: var(--primary);">HDF5 Data Locations</h4>
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 20px;">
+                                    <div>
+                                        <label style="display: block; margin-bottom: 5px;"><strong>Data Location:</strong></label>
+                                        <input type="text" id="integration-data-loc" value="/exchange/data" class="input-field" style="width: 100%;">
+                                    </div>
+                                    <div>
+                                        <label style="display: block; margin-bottom: 5px;"><strong>Dark Location:</strong></label>
+                                        <input type="text" id="integration-dark-loc" value="/exchange/data" class="input-field" style="width: 100%;">
+                                    </div>
+                                </div>
+
+                                <h4 style="margin: 20px 0 15px 0; font-size: 14px; color: var(--primary);">Processing Options</h4>
+                                <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; margin-bottom: 20px;">
+                                    <div>
+                                        <label style="display: block; margin-bottom: 5px;"><strong>Number of CPUs:</strong></label>
+                                        <input type="number" id="integration-ncpus" value="4" min="1" class="input-field" style="width: 100%;">
+                                    </div>
+                                    <div>
+                                        <label style="display: block; margin-bottom: 5px;"><strong>Frame Chunks:</strong></label>
+                                        <input type="number" id="integration-frame-chunks" value="-1" class="input-field" style="width: 100%;">
+                                        <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">
+                                            -1 for automatic
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label style="display: block; margin-bottom: 5px;"><strong>Preprocessing Threshold:</strong></label>
+                                        <input type="number" id="integration-preproc-thresh" value="-1" class="input-field" style="width: 100%;">
+                                        <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">
+                                            -1 for none
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label style="display: block; margin-bottom: 5px;"><strong>Result Folder:</strong></label>
+                                        <input type="text" id="integration-result-folder" value="./integration_results" class="input-field" style="width: 100%;">
+                                    </div>
+                                </div>
+
+                                <h4 style="margin: 20px 0 15px 0; font-size: 14px; color: var(--primary);">Options</h4>
+                                <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; margin-bottom: 20px;">
+                                    <label style="display: flex; align-items: center; gap: 8px;">
+                                        <input type="checkbox" id="integration-convert-files" checked>
+                                        <strong>Convert Files to Zarr</strong>
+                                    </label>
+                                    <label style="display: flex; align-items: center; gap: 8px;">
+                                        <input type="checkbox" id="integration-map-detector" checked>
+                                        <strong>Map Detector Geometry</strong>
+                                    </label>
+                                    <label style="display: flex; align-items: center; gap: 8px;">
+                                        <input type="checkbox" id="integration-write-mat">
+                                        <strong>Write MAT Files</strong>
+                                    </label>
+                                    <label style="display: flex; align-items: center; gap: 8px;">
+                                        <input type="checkbox" id="integration-skip-existing">
+                                        <strong>Skip Existing Files</strong>
+                                    </label>
+                                </div>
+
+                                <!-- Action Buttons -->
+                                <div style="margin-top: 20px; display: flex; gap: 10px;">
+                                    <button class="btn btn-primary" onclick="runMIDASIntegration()">Run Integration</button>
+                                    <button class="btn btn-secondary" onclick="showIntegrationPreview()">Preview Command</button>
+                                </div>
+
+                                <!-- Integration Status -->
+                                <div id="integration-status" style="display: none; margin-top: 15px; padding: 15px; border-radius: 8px; background: var(--surface);">
+                                    <h4 style="margin: 0 0 10px 0; font-size: 13px;">Integration Progress</h4>
+                                    <div id="integration-progress-text" style="font-size: 13px; color: var(--text-muted);"></div>
+                                </div>
+                            </div>
+                        </div>
+
                         <!-- 1D Integrated Pattern -->
                         <div id="integrated-pattern-section" style="display: none; margin-top: 30px;">
                             <div class="visualization-container">
@@ -1099,48 +1213,183 @@
                 <div id="tab-calibration" class="tab-content hidden">
                     <div class="visualization-container">
                         <div class="viz-header">
-                            <h3 class="viz-title">Detector Calibration</h3>
-                        </div>
-                        <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px;">
-                            <div>
-                                <label style="display: block; margin-bottom: 5px;"><strong>Detector Distance
-                                        (mm):</strong></label>
-                                <input type="number" id="detector-distance" value="500" class="input-field"
-                                    style="width: 100%;">
-                            </div>
-                            <div>
-                                <label style="display: block; margin-bottom: 5px;"><strong>Wavelength
-                                        (Å):</strong></label>
-                                <input type="number" id="wavelength" value="0.1173" step="0.0001" class="input-field"
-                                    style="width: 100%;">
-                            </div>
-                            <div>
-                                <label style="display: block; margin-bottom: 5px;"><strong>Beam Center
-                                        X:</strong></label>
-                                <input type="number" id="beam-center-x" value="1024" class="input-field"
-                                    style="width: 100%;">
-                            </div>
-                            <div>
-                                <label style="display: block; margin-bottom: 5px;"><strong>Beam Center
-                                        Y:</strong></label>
-                                <input type="number" id="beam-center-y" value="1024" class="input-field"
-                                    style="width: 100%;">
-                            </div>
-                            <div>
-                                <label style="display: block; margin-bottom: 5px;"><strong>Pixel Size
-                                        (μm):</strong></label>
-                                <input type="number" id="pixel-size" value="200" class="input-field"
-                                    style="width: 100%;">
-                            </div>
-                            <div>
-                                <label style="display: block; margin-bottom: 5px;"><strong>Tilt
-                                        (degrees):</strong></label>
-                                <input type="number" id="tilt-angle" value="0" step="0.1" class="input-field"
-                                    style="width: 100%;">
+                            <h3 class="viz-title">Detector Calibration Parameters</h3>
+                            <div class="viz-controls">
+                                <input type="file" id="calib-params-input" accept=".txt" style="display: none;">
+                                <button class="btn btn-secondary" onclick="document.getElementById('calib-params-input').click()">Load Parameters</button>
+                                <button class="btn btn-secondary" onclick="saveCalibrationParams()">Save Parameters</button>
                             </div>
                         </div>
-                        <div style="margin-top: 20px;">
-                            <button class="btn btn-primary" onclick="runCalibration()">Run Calibration</button>
+
+                        <!-- Calibrant Material -->
+                        <h4 style="margin: 20px 0 10px 0; font-size: 14px; color: var(--primary);">Calibrant Material</h4>
+                        <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; margin-bottom: 20px;">
+                            <div>
+                                <label style="display: block; margin-bottom: 5px;"><strong>Space Group:</strong></label>
+                                <input type="number" id="space-group" value="225" class="input-field" style="width: 100%;"
+                                    placeholder="225 (CeO2), 221 (LaB6), 227 (Si)">
+                            </div>
+                            <div>
+                                <label style="display: block; margin-bottom: 5px;"><strong>Calibrant:</strong></label>
+                                <select id="calibrant-material" class="input-field" style="width: 100%;" onchange="updateLatticeParams()">
+                                    <option value="CeO2">CeO2 (Ceria)</option>
+                                    <option value="LaB6">LaB6 (Lanthanum Hexaboride)</option>
+                                    <option value="Si">Si (Silicon)</option>
+                                    <option value="Al2O3">Al2O3 (Alumina)</option>
+                                    <option value="custom">Custom</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <!-- Lattice Parameters -->
+                        <h4 style="margin: 20px 0 10px 0; font-size: 14px; color: var(--primary);">Lattice Parameters (Å, degrees)</h4>
+                        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 20px;">
+                            <input type="number" id="latt-a" value="5.4116" step="0.0001" class="input-field" placeholder="a">
+                            <input type="number" id="latt-b" value="5.4116" step="0.0001" class="input-field" placeholder="b">
+                            <input type="number" id="latt-c" value="5.4116" step="0.0001" class="input-field" placeholder="c">
+                            <input type="number" id="latt-alpha" value="90" step="0.01" class="input-field" placeholder="α">
+                            <input type="number" id="latt-beta" value="90" step="0.01" class="input-field" placeholder="β">
+                            <input type="number" id="latt-gamma" value="90" step="0.01" class="input-field" placeholder="γ">
+                        </div>
+
+                        <!-- Detector Geometry -->
+                        <h4 style="margin: 20px 0 10px 0; font-size: 14px; color: var(--primary);">Detector Geometry</h4>
+                        <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; margin-bottom: 20px;">
+                            <div>
+                                <label style="display: block; margin-bottom: 5px;"><strong>Lsd - Sample-Detector Distance (μm):</strong></label>
+                                <input type="number" id="lsd" value="1000000" class="input-field" style="width: 100%;">
+                            </div>
+                            <div>
+                                <label style="display: block; margin-bottom: 5px;"><strong>Pixel Size px (μm):</strong></label>
+                                <input type="number" id="pixel-size" value="172.0" step="0.1" class="input-field" style="width: 100%;">
+                            </div>
+                            <div>
+                                <label style="display: block; margin-bottom: 5px;"><strong>Beam Center X (pixels):</strong></label>
+                                <input type="number" id="beam-center-x" value="1024" step="0.1" class="input-field" style="width: 100%;">
+                            </div>
+                            <div>
+                                <label style="display: block; margin-bottom: 5px;"><strong>Beam Center Y (pixels):</strong></label>
+                                <input type="number" id="beam-center-y" value="1024" step="0.1" class="input-field" style="width: 100%;">
+                            </div>
+                        </div>
+
+                        <!-- Beam Parameters -->
+                        <h4 style="margin: 20px 0 10px 0; font-size: 14px; color: var(--primary);">Beam Parameters</h4>
+                        <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; margin-bottom: 20px;">
+                            <div>
+                                <label style="display: block; margin-bottom: 5px;"><strong>Wavelength (Å):</strong></label>
+                                <input type="number" id="wavelength" value="0.2021525314" step="0.0000001" class="input-field" style="width: 100%;">
+                            </div>
+                            <div>
+                                <label style="display: block; margin-bottom: 5px;"><strong>Energy (keV):</strong></label>
+                                <input type="number" id="beam-energy" value="61.332" step="0.001" class="input-field" style="width: 100%;"
+                                    onchange="updateWavelength()">
+                            </div>
+                        </div>
+
+                        <!-- Detector Tilt -->
+                        <h4 style="margin: 20px 0 10px 0; font-size: 14px; color: var(--primary);">Detector Tilt (degrees)</h4>
+                        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; margin-bottom: 20px;">
+                            <div>
+                                <label style="display: block; margin-bottom: 5px;"><strong>tx:</strong></label>
+                                <input type="number" id="tilt-x" value="0.0" step="0.001" class="input-field" style="width: 100%;">
+                            </div>
+                            <div>
+                                <label style="display: block; margin-bottom: 5px;"><strong>ty:</strong></label>
+                                <input type="number" id="tilt-y" value="0.0" step="0.001" class="input-field" style="width: 100%;">
+                            </div>
+                            <div>
+                                <label style="display: block; margin-bottom: 5px;"><strong>tz:</strong></label>
+                                <input type="number" id="tilt-z" value="0.0" step="0.001" class="input-field" style="width: 100%;">
+                            </div>
+                        </div>
+
+                        <!-- Auto-Calibration Settings -->
+                        <h4 style="margin: 20px 0 10px 0; font-size: 14px; color: var(--primary);">Auto-Calibration Settings</h4>
+                        <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; margin-bottom: 20px;">
+                            <div>
+                                <label style="display: block; margin-bottom: 5px;"><strong>Lsd Guess (μm):</strong></label>
+                                <input type="number" id="lsd-guess" value="1000000" class="input-field" style="width: 100%;"
+                                    placeholder="Initial guess for Lsd">
+                            </div>
+                            <div>
+                                <label style="display: block; margin-bottom: 5px;"><strong>BC Guess (pixels):</strong></label>
+                                <div style="display: flex; gap: 5px;">
+                                    <input type="number" id="bc-guess-x" value="0" step="0.1" class="input-field" style="width: 100%;" placeholder="X">
+                                    <input type="number" id="bc-guess-y" value="0" step="0.1" class="input-field" style="width: 100%;" placeholder="Y">
+                                </div>
+                            </div>
+                            <div>
+                                <label style="display: block; margin-bottom: 5px;"><strong>Stopping Strain:</strong></label>
+                                <input type="number" id="stopping-strain" value="0.0005" step="0.0001" class="input-field" style="width: 100%;">
+                            </div>
+                            <div>
+                                <label style="display: block; margin-bottom: 5px;"><strong>Convert File Type:</strong></label>
+                                <select id="convert-file" class="input-field" style="width: 100%;">
+                                    <option value="0">Zarr zip (no conversion)</option>
+                                    <option value="1" selected>HDF5 → Zarr</option>
+                                    <option value="2">GE binary → Zarr</option>
+                                    <option value="3">TIFF → Zarr</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label style="display: block; margin-bottom: 5px;"><strong>Image Transform:</strong></label>
+                                <select id="im-trans-opt" class="input-field" style="width: 100%;">
+                                    <option value="0" selected>None</option>
+                                    <option value="1">Flip Left-Right</option>
+                                    <option value="2">Flip Up-Down</option>
+                                    <option value="3">Transpose</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label style="display: flex; align-items: center; gap: 8px; margin-top: 25px;">
+                                    <input type="checkbox" id="make-plots" checked>
+                                    <strong>Generate Calibration Plots</strong>
+                                </label>
+                            </div>
+                            <div>
+                                <label style="display: block; margin-bottom: 5px;"><strong>Bad Pixel Intensity:</strong></label>
+                                <input type="number" id="bad-px-intensity" value="-2.0" step="0.1" class="input-field" style="width: 100%;">
+                            </div>
+                            <div>
+                                <label style="display: block; margin-bottom: 5px;"><strong>Gap Intensity:</strong></label>
+                                <input type="number" id="gap-intensity" value="-1.0" step="0.1" class="input-field" style="width: 100%;">
+                            </div>
+                        </div>
+
+                        <!-- Optional: Save Plots -->
+                        <div style="padding: 15px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); margin-bottom: 20px;">
+                            <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 10px;">
+                                <input type="checkbox" id="save-plots-hdf">
+                                <strong>Save Calibration Plots to HDF5</strong>
+                            </label>
+                            <input type="text" id="save-plots-filename" placeholder="calibration_plots.h5" class="input-field"
+                                style="width: 100%;" disabled>
+                        </div>
+
+                        <!-- Mask File -->
+                        <h4 style="margin: 20px 0 10px 0; font-size: 14px; color: var(--primary);">Detector Mask (Optional)</h4>
+                        <div style="padding: 15px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); margin-bottom: 20px;">
+                            <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 10px;">
+                                Upload a mask file to exclude bad pixels, gaps, or regions from calibration
+                            </p>
+                            <div style="display: flex; gap: 10px; align-items: center;">
+                                <input type="file" id="mask-file-input" accept=".bin,.tif,.tiff,.npy,.h5" style="display: none;">
+                                <button class="btn btn-secondary" onclick="document.getElementById('mask-file-input').click()">
+                                    Upload Mask File
+                                </button>
+                                <span id="mask-file-name" style="font-size: 13px; color: var(--text-muted);">No mask file selected</span>
+                                <button class="btn btn-secondary" onclick="clearMaskFile()" style="margin-left: auto;">Clear</button>
+                            </div>
+                            <div style="margin-top: 8px; font-size: 12px; color: var(--text-muted);">
+                                Supported formats: .bin (binary), .tif/.tiff, .npy (NumPy), .h5 (HDF5)
+                            </div>
+                        </div>
+
+                        <!-- Action Buttons -->
+                        <div style="margin-top: 20px; display: flex; gap: 10px;">
+                            <button class="btn btn-primary" onclick="runAutoCalibration()">Run Auto-Calibration</button>
+                            <button class="btn btn-secondary" onclick="applyCalibrationOverlay()">Show Calibration Rings</button>
                         </div>
                     </div>
                 </div>
@@ -1249,28 +1498,28 @@
 
             <!-- Compact Workflow Progress (Modern Single-Line Stepper) -->
             <div id="workflow-progress" style="padding: 16px 20px; background: var(--surface-2); border-bottom: 1px solid var(--border);">
-                <div style="display: flex; align-items: center; justify-content: space-between;">
-                    <div id="step-upload" class="workflow-step-compact" data-status="pending" title="Upload Image">
-                        <span class="step-icon-emoji">📁</span>
+                <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">
+                    <div id="step-upload" class="workflow-step-compact" data-status="pending" title="Upload diffraction image">
+                        <span class="step-label">Upload</span>
                     </div>
                     <div class="step-connector"></div>
-                    <div id="step-calibrate" class="workflow-step-compact" data-status="pending" title="Calibrate">
-                        <span class="step-icon-emoji">⚙️</span>
+                    <div id="step-calibrate" class="workflow-step-compact" data-status="pending" title="Calibrate detector geometry">
+                        <span class="step-label">Calibrate</span>
                     </div>
                     <div class="step-connector"></div>
-                    <div id="step-integrate" class="workflow-step-compact" data-status="pending" title="Integrate">
-                        <span class="step-icon-emoji">🔄</span>
+                    <div id="step-integrate" class="workflow-step-compact" data-status="pending" title="Integrate to 1D pattern">
+                        <span class="step-label">Integrate</span>
                     </div>
                     <div class="step-connector"></div>
-                    <div id="step-analyze" class="workflow-step-compact" data-status="pending" title="Analyze">
-                        <span class="step-icon-emoji">🔬</span>
+                    <div id="step-analyze" class="workflow-step-compact" data-status="pending" title="Analyze phases and peaks">
+                        <span class="step-label">Analyze</span>
                     </div>
                 </div>
             </div>
 
             <div class="chat-messages" id="chat-messages">
                 <div class="message assistant">
-                    <div class="message-avatar" style="font-size: 10px;">APEXA</div>
+                    <div class="message-avatar">AX</div>
                     <div>
                         <div class="message-content">Hello! I'm your APS Beamline Assistant. I can help you analyze
                             diffraction patterns, identify phases, and interpret results. Upload a file or ask me about
@@ -1853,7 +2102,7 @@ Match quality: Excellent`;
             const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
             messageDiv.innerHTML = `
-                <div class="message-avatar">${sender === 'user' ? 'U' : 'BA'}</div>
+                <div class="message-avatar">${sender === 'user' ? 'U' : 'AX'}</div>
                 <div>
                     <div class="message-content">${content}</div>
                     <div class="message-time">${timeStr}</div>
@@ -1947,17 +2196,458 @@ Match quality: Excellent`;
         }
 
         // Advanced features functions
+        // Calibration helper functions
+        function updateLatticeParams() {
+            const calibrant = document.getElementById('calibrant-material').value;
+            const latticeData = {
+                'CeO2': { a: 5.4116, b: 5.4116, c: 5.4116, alpha: 90, beta: 90, gamma: 90, sg: 225 },
+                'LaB6': { a: 4.15695, b: 4.15695, c: 4.15695, alpha: 90, beta: 90, gamma: 90, sg: 221 },
+                'Si': { a: 5.43123, b: 5.43123, c: 5.43123, alpha: 90, beta: 90, gamma: 90, sg: 227 },
+                'Al2O3': { a: 4.7589, b: 4.7589, c: 12.9916, alpha: 90, beta: 90, gamma: 120, sg: 167 }
+            };
+
+            if (calibrant in latticeData) {
+                const data = latticeData[calibrant];
+                document.getElementById('latt-a').value = data.a;
+                document.getElementById('latt-b').value = data.b;
+                document.getElementById('latt-c').value = data.c;
+                document.getElementById('latt-alpha').value = data.alpha;
+                document.getElementById('latt-beta').value = data.beta;
+                document.getElementById('latt-gamma').value = data.gamma;
+                document.getElementById('space-group').value = data.sg;
+            }
+        }
+
+        function updateWavelength() {
+            const energy = parseFloat(document.getElementById('beam-energy').value);
+            if (energy > 0) {
+                // E (keV) * λ (Å) = 12.398
+                const wavelength = 12.398 / energy;
+                document.getElementById('wavelength').value = wavelength.toFixed(10);
+            }
+        }
+
+        function saveCalibrationParams() {
+            const params = {
+                SpaceGroup: document.getElementById('space-group').value,
+                LatticeParameter: `${document.getElementById('latt-a').value} ${document.getElementById('latt-b').value} ${document.getElementById('latt-c').value} ${document.getElementById('latt-alpha').value} ${document.getElementById('latt-beta').value} ${document.getElementById('latt-gamma').value}`,
+                Lsd: document.getElementById('lsd').value,
+                BC: `${document.getElementById('beam-center-x').value} ${document.getElementById('beam-center-y').value}`,
+                px: document.getElementById('pixel-size').value,
+                Wavelength: document.getElementById('wavelength').value,
+                tx: document.getElementById('tilt-x').value,
+                ty: document.getElementById('tilt-y').value,
+                tz: document.getElementById('tilt-z').value,
+                StoppingStrain: document.getElementById('stopping-strain').value,
+                ImTransOpt: document.getElementById('im-trans-opt').value,
+                BadPxIntensity: document.getElementById('bad-px-intensity').value,
+                GapIntensity: document.getElementById('gap-intensity').value
+            };
+
+            // Create file content
+            let content = '# MIDAS Calibration Parameters\n';
+            for (const [key, value] of Object.entries(params)) {
+                content += `${key} ${value}\n`;
+            }
+
+            // Download file
+            const blob = new Blob([content], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'calibration_params.txt';
+            a.click();
+            URL.revokeObjectURL(url);
+
+            addMessage('assistant', 'Calibration parameters saved to calibration_params.txt');
+        }
+
+        // Mask file handling
+        let maskFileData = null;
+
+        function clearMaskFile() {
+            maskFileData = null;
+            document.getElementById('mask-file-input').value = '';
+            document.getElementById('mask-file-name').textContent = 'No mask file selected';
+        }
+
+        // Load calibration parameters from file
+        function loadCalibrationParams(fileContent) {
+            const lines = fileContent.split('\n');
+            for (const line of lines) {
+                if (line.trim().startsWith('#') || !line.trim()) continue;
+
+                const parts = line.trim().split(/\s+/);
+                const key = parts[0];
+                const values = parts.slice(1);
+
+                switch(key) {
+                    case 'SpaceGroup':
+                        document.getElementById('space-group').value = values[0];
+                        break;
+                    case 'LatticeConstant':
+                    case 'LatticeParameter':
+                        if (values.length >= 6) {
+                            document.getElementById('latt-a').value = values[0];
+                            document.getElementById('latt-b').value = values[1];
+                            document.getElementById('latt-c').value = values[2];
+                            document.getElementById('latt-alpha').value = values[3];
+                            document.getElementById('latt-beta').value = values[4];
+                            document.getElementById('latt-gamma').value = values[5];
+                        }
+                        break;
+                    case 'Lsd':
+                        document.getElementById('lsd').value = values[0];
+                        document.getElementById('lsd-guess').value = values[0];
+                        break;
+                    case 'BC':
+                        if (values.length >= 2) {
+                            document.getElementById('beam-center-x').value = values[0];
+                            document.getElementById('beam-center-y').value = values[1];
+                            document.getElementById('bc-guess-x').value = values[0];
+                            document.getElementById('bc-guess-y').value = values[1];
+                        }
+                        break;
+                    case 'px':
+                        document.getElementById('pixel-size').value = values[0];
+                        break;
+                    case 'Wavelength':
+                        document.getElementById('wavelength').value = values[0];
+                        // Calculate energy
+                        const energy = 12.398 / parseFloat(values[0]);
+                        document.getElementById('beam-energy').value = energy.toFixed(3);
+                        break;
+                    case 'tx':
+                        document.getElementById('tilt-x').value = values[0];
+                        break;
+                    case 'ty':
+                        document.getElementById('tilt-y').value = values[0];
+                        break;
+                    case 'tz':
+                        document.getElementById('tilt-z').value = values[0];
+                        break;
+                    case 'StoppingStrain':
+                        document.getElementById('stopping-strain').value = values[0];
+                        break;
+                    case 'ImTransOpt':
+                        document.getElementById('im-trans-opt').value = values[0];
+                        break;
+                    case 'BadPxIntensity':
+                        document.getElementById('bad-px-intensity').value = values[0];
+                        break;
+                    case 'GapIntensity':
+                        document.getElementById('gap-intensity').value = values[0];
+                        break;
+                }
+            }
+            addMessage('assistant', `✓ Calibration parameters loaded from file`);
+        }
+
+        // Set up mask file input handler and plot saving checkbox
+        document.addEventListener('DOMContentLoaded', () => {
+            const maskFileInput = document.getElementById('mask-file-input');
+            if (maskFileInput) {
+                maskFileInput.addEventListener('change', (e) => {
+                    const file = e.target.files[0];
+                    if (file) {
+                        maskFileData = file;
+                        document.getElementById('mask-file-name').textContent = file.name;
+                    }
+                });
+            }
+
+            // Enable/disable HDF5 plot filename based on checkbox
+            const savePlotsCheckbox = document.getElementById('save-plots-hdf');
+            const plotsFilename = document.getElementById('save-plots-filename');
+            if (savePlotsCheckbox && plotsFilename) {
+                savePlotsCheckbox.addEventListener('change', (e) => {
+                    plotsFilename.disabled = !e.target.checked;
+                    if (e.target.checked && !plotsFilename.value) {
+                        plotsFilename.value = 'calibration_plots.h5';
+                    }
+                });
+            }
+
+            // Handle calibration parameter file upload
+            const calibParamsInput = document.getElementById('calib-params-input');
+            if (calibParamsInput) {
+                calibParamsInput.addEventListener('change', (e) => {
+                    const file = e.target.files[0];
+                    if (file) {
+                        const reader = new FileReader();
+                        reader.onload = (event) => {
+                            loadCalibrationParams(event.target.result);
+                        };
+                        reader.readAsText(file);
+                    }
+                });
+            }
+        });
+
+        async function runAutoCalibration() {
+            if (!currentImageFileId) {
+                alert('Please upload a calibration image first');
+                return;
+            }
+
+            const params = {
+                space_group: document.getElementById('space-group').value,
+                lattice_a: document.getElementById('latt-a').value,
+                lattice_b: document.getElementById('latt-b').value,
+                lattice_c: document.getElementById('latt-c').value,
+                lattice_alpha: document.getElementById('latt-alpha').value,
+                lattice_beta: document.getElementById('latt-beta').value,
+                lattice_gamma: document.getElementById('latt-gamma').value,
+                lsd: document.getElementById('lsd').value,
+                lsd_guess: document.getElementById('lsd-guess').value,
+                bc_x: document.getElementById('beam-center-x').value,
+                bc_y: document.getElementById('beam-center-y').value,
+                bc_guess_x: document.getElementById('bc-guess-x').value,
+                bc_guess_y: document.getElementById('bc-guess-y').value,
+                px: document.getElementById('pixel-size').value,
+                wavelength: document.getElementById('wavelength').value,
+                tx: document.getElementById('tilt-x').value,
+                ty: document.getElementById('tilt-y').value,
+                tz: document.getElementById('tilt-z').value,
+                stopping_strain: document.getElementById('stopping-strain').value,
+                convert_file: document.getElementById('convert-file').value,
+                im_trans_opt: document.getElementById('im-trans-opt').value,
+                make_plots: document.getElementById('make-plots').checked ? 1 : 0,
+                bad_px_intensity: document.getElementById('bad-px-intensity').value,
+                gap_intensity: document.getElementById('gap-intensity').value,
+                image_file_id: currentImageFileId
+            };
+
+            // Add SavePlotsHDF if enabled
+            if (document.getElementById('save-plots-hdf').checked) {
+                params.save_plots_hdf = document.getElementById('save-plots-filename').value || 'calibration_plots.h5';
+            }
+
+            const maskStatus = maskFileData ? ` (with mask: ${maskFileData.name})` : '';
+            addMessage('assistant', `Running auto-calibration with ${document.getElementById('calibrant-material').value}${maskStatus}...`);
+
+            try {
+                const formData = new FormData();
+                Object.keys(params).forEach(key => formData.append(key, params[key]));
+
+                // Add mask file if provided
+                if (maskFileData) {
+                    formData.append('mask_file', maskFileData);
+                }
+
+                const response = await fetch('/api/auto_calibrate', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    console.error('Server error:', errorText);
+                    addMessage('assistant', `⚠️ Server error (${response.status}): ${errorText}`);
+                    return;
+                }
+
+                const result = await response.json();
+                console.log('Calibration result:', result);
+
+                if (result.success) {
+                    addMessage('assistant', `✓ Auto-calibration completed!\nRefined parameters saved to ${result.output_file}`);
+
+                    // Show stdout if available
+                    if (result.stdout) {
+                        console.log('Calibration stdout:', result.stdout);
+                    }
+
+                    // Update UI with refined parameters if provided
+                    if (result.refined_params) {
+                        document.getElementById('lsd').value = result.refined_params.Lsd || document.getElementById('lsd').value;
+                        document.getElementById('beam-center-x').value = result.refined_params.BCx || document.getElementById('beam-center-x').value;
+                        document.getElementById('beam-center-y').value = result.refined_params.BCy || document.getElementById('beam-center-y').value;
+                    }
+                } else {
+                    const errorMsg = result.error || result.stderr || 'Unknown error';
+                    addMessage('assistant', `⚠️ Calibration failed: ${errorMsg}`);
+
+                    // Show detailed traceback in console
+                    if (result.traceback) {
+                        console.error('Calibration traceback:', result.traceback);
+                    }
+                    if (result.stderr) {
+                        console.error('Calibration stderr:', result.stderr);
+                    }
+                }
+            } catch (error) {
+                console.error('Auto-calibration error:', error);
+                addMessage('assistant', `⚠️ Error running auto-calibration: ${error.message}`);
+            }
+        }
+
+        async function runMIDASIntegration() {
+            try {
+                // Get all parameters from UI
+                const dataFile = document.getElementById('integration-data-file').value;
+                const darkFile = document.getElementById('integration-dark-file').value;
+                const startFileNr = document.getElementById('integration-start-file').value;
+                const endFileNr = document.getElementById('integration-end-file').value;
+                const dataLoc = document.getElementById('integration-data-loc').value;
+                const darkLoc = document.getElementById('integration-dark-loc').value;
+                const nCPUs = document.getElementById('integration-ncpus').value;
+                const frameChunks = document.getElementById('integration-frame-chunks').value;
+                const preprocThresh = document.getElementById('integration-preproc-thresh').value;
+                const resultFolder = document.getElementById('integration-result-folder').value;
+                const convertFiles = document.getElementById('integration-convert-files').checked ? 1 : 0;
+                const mapDetector = document.getElementById('integration-map-detector').checked ? 1 : 0;
+                const writeMat = document.getElementById('integration-write-mat').checked ? 1 : 0;
+                const skipExisting = document.getElementById('integration-skip-existing').checked ? 1 : 0;
+
+                // Validate required fields
+                if (!dataFile) {
+                    alert('Please provide a data file pattern');
+                    return;
+                }
+                if (!resultFolder) {
+                    alert('Please provide a result folder name');
+                    return;
+                }
+
+                // Check if parameter file is loaded
+                if (!currentImageFileId) {
+                    alert('Please upload and load a parameter file first in the calibration section');
+                    return;
+                }
+
+                // Show status
+                const statusDiv = document.getElementById('integration-status');
+                const progressText = document.getElementById('integration-progress-text');
+                statusDiv.style.display = 'block';
+                progressText.textContent = 'Starting MIDAS integration...';
+
+                addMessage('assistant', `Starting MIDAS integration for ${dataFile}...`);
+
+                // Prepare form data
+                const formData = new FormData();
+                formData.append('result_folder', resultFolder);
+                formData.append('param_file_id', currentImageFileId);
+                formData.append('data_file', dataFile);
+                formData.append('dark_file', darkFile);
+                formData.append('start_file_nr', startFileNr);
+                formData.append('end_file_nr', endFileNr);
+                formData.append('data_loc', dataLoc);
+                formData.append('dark_loc', darkLoc);
+                formData.append('num_frame_chunks', frameChunks);
+                formData.append('preproc_thresh', preprocThresh);
+                formData.append('convert_files', convertFiles);
+                formData.append('map_detector', mapDetector);
+                formData.append('n_cpus', nCPUs);
+                formData.append('write_mat', writeMat);
+                formData.append('skip_existing', skipExisting);
+
+                // Call backend API
+                const response = await fetch('/api/midas_integrate', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    console.error('Server error:', errorText);
+                    addMessage('assistant', `⚠️ Server error (${response.status}): ${errorText}`);
+                    statusDiv.style.display = 'none';
+                    return;
+                }
+
+                const result = await response.json();
+                console.log('Integration result:', result);
+
+                if (result.success) {
+                    progressText.textContent = 'Integration completed successfully!';
+                    addMessage('assistant', `✓ MIDAS integration completed!\nResults saved to: ${result.result_folder}`);
+
+                    // Show stdout if available
+                    if (result.stdout) {
+                        console.log('Integration output:', result.stdout);
+                    }
+                } else {
+                    const errorMsg = result.error || result.stderr || 'Unknown error';
+                    progressText.textContent = 'Integration failed!';
+                    addMessage('assistant', `⚠️ Integration failed: ${errorMsg}`);
+
+                    // Show detailed traceback in console
+                    if (result.traceback) {
+                        console.error('Integration traceback:', result.traceback);
+                    }
+                    if (result.stderr) {
+                        console.error('Integration stderr:', result.stderr);
+                    }
+                }
+
+                // Hide status after 3 seconds
+                setTimeout(() => {
+                    statusDiv.style.display = 'none';
+                }, 3000);
+
+            } catch (error) {
+                console.error('Integration error:', error);
+                addMessage('assistant', `⚠️ Error running integration: ${error.message}`);
+                document.getElementById('integration-status').style.display = 'none';
+            }
+        }
+
+        function showIntegrationPreview() {
+            // Build preview command
+            const dataFile = document.getElementById('integration-data-file').value || '<data_file>';
+            const darkFile = document.getElementById('integration-dark-file').value || '<dark_file>';
+            const startFileNr = document.getElementById('integration-start-file').value || '-1';
+            const endFileNr = document.getElementById('integration-end-file').value || '-1';
+            const dataLoc = document.getElementById('integration-data-loc').value || '/exchange/data';
+            const darkLoc = document.getElementById('integration-dark-loc').value || '/exchange/data';
+            const nCPUs = document.getElementById('integration-ncpus').value || '4';
+            const frameChunks = document.getElementById('integration-frame-chunks').value || '-1';
+            const preprocThresh = document.getElementById('integration-preproc-thresh').value || '-1';
+            const resultFolder = document.getElementById('integration-result-folder').value || './results';
+            const convertFiles = document.getElementById('integration-convert-files').checked ? '1' : '0';
+            const mapDetector = document.getElementById('integration-map-detector').checked ? '1' : '0';
+            const writeMat = document.getElementById('integration-write-mat').checked ? '1' : '0';
+            const skipExisting = document.getElementById('integration-skip-existing').checked ? '-skipExisting' : '';
+
+            let cmd = `python integrator.py \\
+  -resultFolder ${resultFolder} \\
+  -paramFN <parameter_file> \\
+  -dataFN ${dataFile} \\
+  -dataLoc ${dataLoc} \\
+  -darkFN ${darkFile} \\
+  -darkLoc ${darkLoc} \\
+  -startFileNr ${startFileNr} \\
+  -endFileNr ${endFileNr} \\
+  -numFrameChunks ${frameChunks} \\
+  -preProcThresh ${preprocThresh} \\
+  -convertFiles ${convertFiles} \\
+  -mapDetector ${mapDetector} \\
+  -nCPUs ${nCPUs} \\
+  -writeMat ${writeMat}`;
+
+            if (skipExisting) {
+                cmd += ` \\\n  ${skipExisting}`;
+            }
+
+            addMessage('assistant', `MIDAS Integration Command Preview:\n\`\`\`bash\n${cmd}\n\`\`\``);
+        }
+
         async function runCalibration() {
             const params = {
-                detector_distance: parseFloat(document.getElementById('detector-distance').value),
+                detector_distance: parseFloat(document.getElementById('lsd').value) / 1000,  // Convert to mm
                 wavelength: parseFloat(document.getElementById('wavelength').value),
                 beam_center_x: parseFloat(document.getElementById('beam-center-x').value),
                 beam_center_y: parseFloat(document.getElementById('beam-center-y').value),
                 pixel_size: parseFloat(document.getElementById('pixel-size').value),
-                tilt_angle: parseFloat(document.getElementById('tilt-angle').value)
+                tilt_angle: Math.sqrt(
+                    Math.pow(parseFloat(document.getElementById('tilt-x').value), 2) +
+                    Math.pow(parseFloat(document.getElementById('tilt-y').value), 2) +
+                    Math.pow(parseFloat(document.getElementById('tilt-z').value), 2)
+                )
             };
 
-            addMessage('assistant', `Running calibration with parameters: detector=${params.detector_distance}mm, wavelength=${params.wavelength}Å...`);
+            addMessage('assistant', `Running calibration with parameters: Lsd=${params.detector_distance.toFixed(1)}mm, wavelength=${params.wavelength}Å...`);
 
             try {
                 const formData = new FormData();
@@ -2733,6 +3423,51 @@ Model Options:
             updateImageTransform();
         }
 
+        async function findBrightestPixel() {
+            if (!currentImageFileId || !currentImageStats) {
+                alert('Please load an image first');
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_VIEWER}/brightest_pixel?file_id=${currentImageFileId}`);
+                const result = await response.json();
+
+                if (result.x !== undefined && result.y !== undefined) {
+                    console.log(`Brightest pixel at (${result.x}, ${result.y}): intensity = ${result.intensity}`);
+
+                    // Zoom to 4x
+                    imageState.scale = 4.0;
+
+                    // Center on the brightest pixel
+                    const container = document.getElementById('image-container');
+                    const image = document.getElementById('diffraction-image');
+
+                    // Calculate the center of the container
+                    const containerCenterX = container.clientWidth / 2;
+                    const containerCenterY = container.clientHeight / 2;
+
+                    // Calculate where the pixel is in the scaled image
+                    const pixelScreenX = result.x * imageState.scale;
+                    const pixelScreenY = result.y * imageState.scale;
+
+                    // Set translate so the pixel is at the center
+                    imageState.translateX = containerCenterX - pixelScreenX;
+                    imageState.translateY = containerCenterY - pixelScreenY;
+
+                    updateImageTransform();
+
+                    // Show intensity info
+                    alert(`Brightest pixel found!\nLocation: (${result.x}, ${result.y})\nIntensity: ${result.intensity.toFixed(0)}`);
+                } else {
+                    alert('Could not find brightest pixel');
+                }
+            } catch (error) {
+                console.error('Error finding brightest pixel:', error);
+                alert('Error finding brightest pixel');
+            }
+        }
+
         // Throttle intensity fetching to avoid too many API calls
         let lastIntensityFetch = 0;
         let lastPixelX = -1;
@@ -2766,6 +3501,8 @@ Model Options:
                     try {
                         const response = await fetch(`${API_VIEWER}/pixel_value?file_id=${currentImageFileId}&x=${imgX}&y=${imgY}`);
                         const result = await response.json();
+
+                        console.log(`Pixel (${imgX}, ${imgY}): intensity = ${result.intensity}, scale = ${imageState.scale}`);
 
                         if (result.intensity !== undefined) {
                             document.getElementById('pixel-intensity').textContent = result.intensity.toFixed(0);

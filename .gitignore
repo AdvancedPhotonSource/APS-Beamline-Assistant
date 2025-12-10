@@ -64,6 +64,18 @@ tmp/
 # Large PDFs
 *.pdf
 
+# Knowledge Base - User Documents (private data, too large)
+knowledge_base/papers/*.pdf
+knowledge_base/logbooks/*.txt
+knowledge_base/logbooks/*.md
+knowledge_base/books/*.pdf
+knowledge_base/chroma_db/
+
+# Knowledge Base - Keep tracked files
+!knowledge_base/data/*.json
+!knowledge_base/*.py
+!knowledge_base/README.md
+
 # Compiled files
 *.pyc
 *.pyo

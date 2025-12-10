@@ -3232,6 +3232,376 @@ async def midas_batch_integrate(
         })
 
 # =============================================================================
+# KNOWLEDGE BASE & DOMAIN EXPERTISE
+# =============================================================================
+
+# Initialize knowledge base (lazy loading)
+_knowledge_base = None
+_materials_db = None
+_typical_params = None
+
+def get_knowledge_base():
+    """Get or initialize the knowledge base (RAG with ChromaDB)"""
+    global _knowledge_base
+    if _knowledge_base is None:
+        try:
+            import chromadb
+            from sentence_transformers import SentenceTransformer
+            from pathlib import Path
+
+            kb_path = Path(__file__).parent / "knowledge_base"
+            chroma_path = kb_path / "chroma_db"
+
+            if chroma_path.exists():
+                _knowledge_base = {
+                    "client": chromadb.PersistentClient(path=str(chroma_path)),
+                    "embedder": SentenceTransformer('all-MiniLM-L6-v2'),
+                    "available": True
+                }
+            else:
+                _knowledge_base = {"available": False, "error": "Knowledge base not indexed"}
+        except Exception as e:
+            _knowledge_base = {"available": False, "error": str(e)}
+
+    return _knowledge_base
+
+
+def get_materials_db():
+    """Get materials database"""
+    global _materials_db
+    if _materials_db is None:
+        try:
+            import json
+            from pathlib import Path
+            kb_path = Path(__file__).parent / "knowledge_base"
+            materials_file = kb_path / "data" / "materials.json"
+
+            if materials_file.exists():
+                with open(materials_file) as f:
+                    _materials_db = json.load(f)
+            else:
+                _materials_db = {}
+        except Exception as e:
+            _materials_db = {}
+
+    return _materials_db
+
+
+def get_typical_parameters():
+    """Get typical HEDM parameters"""
+    global _typical_params
+    if _typical_params is None:
+        try:
+            import json
+            from pathlib import Path
+            kb_path = Path(__file__).parent / "knowledge_base"
+            params_file = kb_path / "data" / "typical_parameters.json"
+
+            if params_file.exists():
+                with open(params_file) as f:
+                    _typical_params = json.load(f)
+            else:
+                _typical_params = {}
+        except Exception as e:
+            _typical_params = {}
+
+    return _typical_params
+
+
+@mcp.tool()
+async def query_hedm_knowledge(
+    question: str,
+    max_results: int = 3,
+    source_type: Optional[str] = None
+) -> str:
+    """Query the HEDM knowledge base using semantic search across papers, logbooks, and books.
+
+    This tool searches through indexed research papers, experimental logbooks, and
+    crystallography textbooks to answer questions about HEDM theory, best practices,
+    and past experiments.
+
+    Args:
+        question: Natural language question about HEDM, crystallography, calibration, etc.
+                 Examples:
+                 - "What is a good calibration strain value?"
+                 - "How was sample XYZ processed in 2019?"
+                 - "Explain Bragg's law for 61keV beam"
+        max_results: Number of relevant excerpts to return (default: 3)
+        source_type: Filter by document type: "paper", "logbook", "book", or None for all
+
+    Returns:
+        JSON string with relevant excerpts, sources, and confidence scores
+    """
+    try:
+        kb = get_knowledge_base()
+
+        if not kb.get("available"):
+            return json.dumps({
+                "status": "error",
+                "error": "Knowledge base not available",
+                "details": kb.get("error", "Not indexed"),
+                "suggestion": "Run: python knowledge_base/index_knowledge.py"
+            }, indent=2)
+
+        # Encode the question
+        query_embedding = kb["embedder"].encode(question).tolist()
+
+        # Get collection
+        collection = kb["client"].get_collection(name="hedm_knowledge")
+
+        # Build filter
+        where_filter = {"type": source_type} if source_type else None
+
+        # Query the knowledge base
+        results = collection.query(
+            query_embeddings=[query_embedding],
+            n_results=max_results,
+            where=where_filter
+        )
+
+        # Format results
+        excerpts = []
+        for i, (doc, meta, dist) in enumerate(zip(
+            results['documents'][0],
+            results['metadatas'][0],
+            results['distances'][0]
+        ), 1):
+            excerpts.append({
+                "rank": i,
+                "source": meta['source'],
+                "type": meta['type'],
+                "relevance_score": round(1 - dist, 3),
+                "excerpt": doc,
+                "chunk_index": meta.get('chunk_index', 0)
+            })
+
+        return json.dumps({
+            "status": "success",
+            "question": question,
+            "results_count": len(excerpts),
+            "excerpts": excerpts
+        }, indent=2)
+
+    except Exception as e:
+        return json.dumps({
+            "status": "error",
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }, indent=2)
+
+
+@mcp.tool()
+async def get_material_properties(material_name: str) -> str:
+    """Get crystallographic properties and metadata for a material.
+
+    Provides authoritative data from Materials Project including lattice parameters,
+    space group, density, and HEDM-specific metadata like typical ring counts and
+    calibration usage.
+
+    Args:
+        material_name: Chemical formula or name (e.g., "CeO2", "LaB6", "Ti", "Steel_316L")
+
+    Returns:
+        JSON string with complete material properties
+    """
+    try:
+        materials_db = get_materials_db()
+
+        # Try exact match first
+        material = materials_db.get(material_name)
+
+        # Try case-insensitive match
+        if not material:
+            for key in materials_db.keys():
+                if key.upper() == material_name.upper():
+                    material = materials_db[key]
+                    break
+
+        if not material:
+            # List available materials
+            available = [k for k in materials_db.keys() if not k.startswith("_")]
+            return json.dumps({
+                "status": "not_found",
+                "requested": material_name,
+                "available_materials": available[:20],
+                "total_available": len(available)
+            }, indent=2)
+
+        return json.dumps({
+            "status": "success",
+            "material": material
+        }, indent=2)
+
+    except Exception as e:
+        return json.dumps({
+            "status": "error",
+            "error": str(e)
+        }, indent=2)
+
+
+@mcp.tool()
+async def get_typical_hedm_parameters(
+    beam_energy_kev: Optional[float] = None,
+    geometry_type: Optional[str] = None
+) -> str:
+    """Get typical HEDM experimental parameters and quality thresholds.
+
+    Provides guidelines for detector distances, calibration quality metrics,
+    integration parameters, and processing recommendations based on experimental
+    geometry and beam energy.
+
+    Args:
+        beam_energy_kev: Beam energy in keV (e.g., 30, 61.3, 90, 120)
+        geometry_type: "ff_hedm" or "nf_hedm" (optional)
+
+    Returns:
+        JSON string with typical parameter ranges and quality thresholds
+    """
+    try:
+        params = get_typical_parameters()
+
+        if not params:
+            return json.dumps({
+                "status": "error",
+                "error": "Typical parameters database not loaded"
+            }, indent=2)
+
+        result = {"status": "success"}
+
+        # Get relevant beam energy info
+        if beam_energy_kev:
+            wavelength_angstrom = 12.398 / beam_energy_kev
+            result["beam_info"] = {
+                "energy_kev": beam_energy_kev,
+                "wavelength_angstrom": round(wavelength_angstrom, 4)
+            }
+
+            # Find closest standard energy
+            energies = params.get("beam_energies", {})
+            for energy_type, energy_data in energies.items():
+                if abs(energy_data["value_kev"] - beam_energy_kev) < 5:
+                    result["beam_info"]["type"] = energy_type
+                    result["beam_info"]["typical_use"] = energy_data["use_case"]
+                    break
+
+        # Get geometry-specific parameters
+        if geometry_type and "detector_geometries" in params:
+            geom_params = params["detector_geometries"].get(geometry_type)
+            if geom_params:
+                result["detector_geometry"] = geom_params
+
+        # Always include quality thresholds
+        result["calibration_quality"] = params.get("calibration_quality", {})
+        result["data_quality_thresholds"] = params.get("data_quality_thresholds", {})
+
+        # Include integration parameters if FF-HEDM
+        if geometry_type == "ff_hedm" or not geometry_type:
+            result["integration_parameters"] = params.get("integration_parameters", {})
+
+        return json.dumps(result, indent=2)
+
+    except Exception as e:
+        return json.dumps({
+            "status": "error",
+            "error": str(e)
+        }, indent=2)
+
+
+@mcp.tool()
+async def estimate_parameters_from_image(
+    wavelength_angstrom: float,
+    ring_radii_px: List[float],
+    pixel_size_um: float,
+    material: Optional[str] = "CeO2"
+) -> str:
+    """Estimate detector geometry (Lsd, beam center) from observed diffraction rings.
+
+    Uses ring positions and known d-spacings to calculate detector distance.
+    Helpful for initial parameter estimation before auto-calibration.
+
+    Args:
+        wavelength_angstrom: X-ray wavelength in Angstroms
+        ring_radii_px: List of observed ring radii in pixels (e.g., [412, 478, 675])
+        pixel_size_um: Detector pixel size in microns (typically 172 for GE)
+        material: Calibrant material (default: "CeO2")
+
+    Returns:
+        JSON string with estimated Lsd and quality metrics
+    """
+    try:
+        import numpy as np
+
+        materials_db = get_materials_db()
+        mat_data = materials_db.get(material)
+
+        if not mat_data:
+            return json.dumps({
+                "status": "error",
+                "error": f"Material {material} not found in database"
+            }, indent=2)
+
+        # Get d-spacings for this material
+        d_spacings = mat_data.get("d_spacings_angstrom")
+        if not d_spacings:
+            return json.dumps({
+                "status": "error",
+                "error": f"No d-spacings available for {material}"
+            }, indent=2)
+
+        # Calculate Lsd for each ring
+        lsd_estimates = []
+        for r_px in ring_radii_px[:len(d_spacings)]:
+            r_mm = r_px * pixel_size_um / 1000  # Convert px to mm
+
+            # Bragg's law: 2*d*sin(theta) = lambda
+            # theta = arcsin(lambda / (2*d))
+            # R = Lsd * tan(2*theta)
+            # Therefore: Lsd = R / tan(2*theta)
+
+            for d in d_spacings:
+                theta_rad = np.arcsin(wavelength_angstrom / (2 * d))
+                two_theta_rad = 2 * theta_rad
+                expected_lsd_mm = r_mm / np.tan(two_theta_rad)
+
+                # Only consider reasonable Lsd values (100mm to 3000mm)
+                if 100 < expected_lsd_mm < 3000:
+                    lsd_estimates.append({
+                        "ring_radius_px": r_px,
+                        "d_spacing_angstrom": d,
+                        "estimated_lsd_mm": round(expected_lsd_mm, 2)
+                    })
+
+        if not lsd_estimates:
+            return json.dumps({
+                "status": "error",
+                "error": "Could not estimate Lsd from provided rings"
+            }, indent=2)
+
+        # Calculate average and std
+        lsd_values = [est["estimated_lsd_mm"] for est in lsd_estimates]
+        mean_lsd = np.mean(lsd_values)
+        std_lsd = np.std(lsd_values)
+
+        return json.dumps({
+            "status": "success",
+            "material": material,
+            "wavelength_angstrom": wavelength_angstrom,
+            "estimated_lsd_mm": round(mean_lsd, 2),
+            "std_lsd_mm": round(std_lsd, 2),
+            "confidence": "high" if std_lsd < 10 else "medium" if std_lsd < 50 else "low",
+            "individual_estimates": lsd_estimates,
+            "recommendation": f"Use Lsd guess: {round(mean_lsd * 1000)} microns (±{round(std_lsd)}mm)"
+        }, indent=2)
+
+    except Exception as e:
+        return json.dumps({
+            "status": "error",
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }, indent=2)
+
+
+# =============================================================================
 # SERVER MAIN
 # =============================================================================
 
@@ -3265,6 +3635,11 @@ if __name__ == "__main__":
     print("  - midas_auto_calibrate (AutoCalibrateZarr.py)", file=sys.stderr)
     print("  - midas_integrate_2d_to_1d (MIDAS Integrator - single frame)", file=sys.stderr)
     print("  - midas_batch_integrate (MIDAS integrator.py - multi-panel batch)", file=sys.stderr)
+    print("\nKnowledge Base & Domain Expertise:", file=sys.stderr)
+    print("  - query_hedm_knowledge (RAG semantic search across papers/logbooks/books)", file=sys.stderr)
+    print("  - get_material_properties (crystallographic data from Materials Project)", file=sys.stderr)
+    print("  - get_typical_hedm_parameters (quality thresholds, typical ranges)", file=sys.stderr)
+    print("  - estimate_parameters_from_image (Lsd estimation from ring positions)", file=sys.stderr)
     print("\n⚠️  NON-MIDAS tools removed from this server:", file=sys.stderr)
     print("  - detect_diffraction_rings → analysis_utilities_server.py (detect_rings_quick)", file=sys.stderr)
     print("  - identify_crystalline_phases → analysis_utilities_server.py (identify_phases_basic)", file=sys.stderr)
