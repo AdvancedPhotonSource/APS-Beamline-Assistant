@@ -1929,13 +1929,14 @@ ARGUMENTS: {"image_path": "/path/data.ge5", "calibration_file": "/path/calib.txt
             try:
                 # Use input with readline support for history and tab completion
                 import readline
-                
+
                 # Set up history
                 readline.clear_history()
                 for cmd in history:
                     readline.add_history(cmd)
-                
-                user_input = input("APEXA> ").strip()
+
+                # Get input and clean any embedded newlines from paste
+                user_input = input("APEXA> ").strip().replace('\n', '').replace('\r', '')
                 
                 if not user_input:
                     continue
