@@ -7,15 +7,47 @@ Your AI beamline scientist for real-time HEDM data analysis at APS.
 
 ## Quick Start
 
+### Option 1: Gradio UI (Recommended - AI-Driven Chat Interface)
+
+```bash
+./start_gradio_ui.sh
+```
+
+Opens a web browser at http://localhost:7860 with:
+- 💬 **Conversational chat interface** (natural language commands)
+- 📁 **Drag-and-drop file uploads** (TIFF, GE, HDF5, etc.)
+- 📊 **Embedded visualizations** (plots appear in chat)
+- 🎯 **Example prompts** to get started quickly
+- ⚡ **Real-time progress** as workflows execute
+
+**Perfect for:** Interactive analysis, exploring data, learning APEXA
+
+### Option 2: Command Line (Power Users)
+
 ```bash
 ./start_beamline_assistant.sh
 ```
 
-That's it! The assistant will:
+Terminal-based interface with:
 - ✅ Load all analysis servers automatically
 - ✅ Connect to Argo-AI (GPT-4o, Claude, Gemini)
 - ✅ Auto-detect MIDAS installation
-- ✅ Ready for natural language commands
+- ✅ Command history and tab completion
+
+**Perfect for:** Scripting, batch processing, SSH access
+
+### Option 3: Web UI (Classic Forms)
+
+```bash
+python web_server.py
+```
+
+Opens http://localhost:8000 with:
+- Traditional forms for calibration, integration, visualization
+- Direct parameter control (no AI)
+- Separate chat assistant
+
+**Perfect for:** Users who prefer traditional GUI controls
 
 ---
 

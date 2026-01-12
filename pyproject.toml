@@ -37,4 +37,5 @@ dependencies = [
     "sentence-transformers>=2.2.0",
     "pypdf2>=3.0.0",
     "mp-api>=0.41.0",
+    "gradio>=6.3.0",
 ]

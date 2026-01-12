@@ -10,6 +10,7 @@ Author: Pawan Tripathi
 import asyncio
 import json
 import os
+import sys
 import re
 from typing import Optional, Dict, Any, List
 from contextlib import AsyncExitStack
@@ -1033,6 +1034,35 @@ class APEXAClient:
         self.realtime_feedback = RealtimeFeedback()
         self.plotting = PlottingEngine()
 
+        # Tool forcing configuration for calculations
+        self.CALCULATION_KEYWORDS = {
+            'd-spacing', 'd spacing', 'dspacing', 'calculate d',
+            'energy to wavelength', 'wavelength to energy', 'kev to angstrom',
+            'convert energy', 'convert wavelength',
+            'two theta', '2theta', '2θ',
+            'strain', 'lattice strain', 'microstrain',
+            'validate parameter', 'check parameter',
+            'bragg', 'bragg angle'
+        }
+
+        self.CALCULATION_TOOL_MAP = {
+            'd-spacing': 'xray_calculate',
+            'dspacing': 'xray_calculate',
+            'd spacing': 'xray_calculate',
+            'two theta': 'xray_calculate',
+            '2theta': 'xray_calculate',
+            '2θ': 'xray_calculate',
+            'energy': 'xray_calculate',
+            'wavelength': 'xray_calculate',
+            'kev': 'xray_calculate',
+            'strain': 'xray_calculate',
+            'miller': 'xray_calculate',
+            'hkl': 'xray_calculate',
+            'plane': 'xray_calculate',
+            'validate': 'validate_beamline_parameters',
+            'check parameter': 'validate_beamline_parameters'
+        }
+
         # Determine environment based on model (dev models require dev endpoint)
         self.anl_username = os.getenv("ANL_USERNAME")
         self.selected_model = os.getenv("ARGO_MODEL", "gpt4o")
@@ -1140,6 +1170,25 @@ class APEXAClient:
                 claude_tools.append(claude_tool)
         return claude_tools
 
+    def _detect_required_calculation_tool(self, user_query: str) -> Optional[str]:
+        """Detect if query requires a specific calculation tool.
+
+        Returns the tool name if detected, None otherwise.
+        """
+        query_lower = user_query.lower()
+
+        # Check for specific tool requirements
+        for keyword, tool_name in self.CALCULATION_TOOL_MAP.items():
+            if keyword in query_lower:
+                return tool_name
+
+        return None
+
+    def _needs_calculation_tool(self, user_query: str) -> bool:
+        """Check if query involves calculations that should use tools."""
+        query_lower = user_query.lower()
+        return any(keyword in query_lower for keyword in self.CALCULATION_KEYWORDS)
+
     def _prepare_argo_payload(self, messages: List[Dict[str, str]], model: str, tools: List[Dict[str, Any]] = None) -> Dict[str, Any]:
         payload = {
             "user": self.anl_username,
@@ -1147,18 +1196,24 @@ class APEXAClient:
             "messages": messages
         }
 
+        # Get user query for tool detection
+        user_query = messages[-1].get("content", "") if messages else ""
+
+        # Lower temperature for better tool calling consistency with calculations
+        needs_calc = self._needs_calculation_tool(user_query) if user_query else False
+
         # Claude Sonnet 4.5 does NOT accept both temperature and top_p
         # Other Claude models require both
         if model == "claudesonnet45":
-            payload["temperature"] = 0.7
+            payload["temperature"] = 0.3 if needs_calc else 0.7  # Lower temp for calculations
             # Do not include top_p for Claude Sonnet 4.5
         elif model.startswith("claude"):
-            payload["temperature"] = 0.7
-            payload["top_p"] = 0.9
+            payload["temperature"] = 0.3 if needs_calc else 0.7
+            payload["top_p"] = 0.85 if needs_calc else 0.9
         else:
             # OpenAI and Google models accept both
-            payload["temperature"] = 0.7
-            payload["top_p"] = 0.9
+            payload["temperature"] = 0.4 if needs_calc else 0.7
+            payload["top_p"] = 0.85 if needs_calc else 0.9
 
         # Set max_tokens based on model
         if model.startswith("claude"):
@@ -1169,13 +1224,38 @@ class APEXAClient:
             payload["max_tokens"] = 4000
 
         if tools:
+            # Detect if specific calculation tool is needed
+            required_tool = self._detect_required_calculation_tool(user_query) if user_query else None
+
             # Claude models use a different tool format than OpenAI
             if model.startswith("claude"):
                 payload["tools"] = self._convert_tools_to_claude_format(tools)
-                payload["tool_choice"] = {"type": "auto"}
+
+                # Force tool use for calculations
+                if required_tool:
+                    # Force specific tool
+                    payload["tool_choice"] = {"type": "tool", "name": required_tool}
+                    print(f"🎯 Forcing calculation tool: {required_tool}", file=sys.stderr)
+                elif needs_calc:
+                    # Force ANY tool use (but don't specify which)
+                    payload["tool_choice"] = {"type": "any"}
+                    print("🎯 Forcing tool use for calculation", file=sys.stderr)
+                else:
+                    payload["tool_choice"] = {"type": "auto"}
             else:
+                # OpenAI/Google format
                 payload["tools"] = tools
-                payload["tool_choice"] = "auto"
+
+                if required_tool:
+                    # Force specific tool (OpenAI format)
+                    payload["tool_choice"] = {"type": "function", "function": {"name": required_tool}}
+                    print(f"🎯 Forcing calculation tool: {required_tool}", file=sys.stderr)
+                elif needs_calc:
+                    # Force tool use
+                    payload["tool_choice"] = "required"
+                    print("🎯 Forcing tool use for calculation", file=sys.stderr)
+                else:
+                    payload["tool_choice"] = "auto"
 
         return payload
 
@@ -1340,21 +1420,35 @@ class APEXAClient:
 
         # Parse server_name and tool_name
         # Tool names might already include the server prefix (e.g., "midas_auto_calibrate")
-        # We need to identify the correct server and pass the full tool name to it
+        # OR they might be unprefixed (e.g., "calculate_d_spacing" from core server)
         server_name = None
         original_tool_name = tool_name
 
-        # Try to match against known server names
+        # Try to match against known server names with prefix
         for srv_name in self.sessions.keys():
             if tool_name.startswith(f"{srv_name}_"):
                 server_name = srv_name
                 # Keep the full tool name as registered in the MCP server
-                # Don't strip the prefix because the tool is registered with it
                 original_tool_name = tool_name
                 break
 
+        # If no prefix match, search all servers for this tool
         if not server_name:
-            # Fallback: assume it's a midas tool
+            for srv_name, session in self.sessions.items():
+                try:
+                    # Get tools from this server (cached during connection)
+                    response = await session.list_tools()
+                    tool_names = [t.name for t in response.tools]
+
+                    if tool_name in tool_names:
+                        server_name = srv_name
+                        original_tool_name = tool_name
+                        break
+                except:
+                    continue
+
+        # Final fallback: assume it's a midas tool
+        if not server_name:
             server_name = "midas"
             original_tool_name = tool_name
 
@@ -1416,6 +1510,65 @@ class APEXAClient:
 You maintain context across the conversation. When users refer to previous files, directories, or results using words like "there", "it", "that file", etc., use the conversation history to understand what they're referring to.
 
 ⚠️ CRITICAL INSTRUCTIONS ⚠️
+
+🔴 ABSOLUTE RULE FOR CALCULATIONS 🔴
+YOU MUST USE TOOLS FOR ALL CALCULATIONS. THIS IS NON-NEGOTIABLE.
+
+Examples of CORRECT behavior:
+
+User: "Calculate d-spacing for (110) plane in bcc iron"
+✅ YOU: *call xray_calculate(calculation_type="d_from_hkl", h=1, k=1, l=0, material="Fe")*
+✅ YOU: "The d-spacing for (110) in bcc Fe is 2.027 Å (from xrayutilities)"
+
+User: "Calculate d-spacing for 2θ=12.5° with λ=0.202Å"
+✅ YOU: *call xray_calculate(calculation_type="d_from_angle", two_theta_degrees=12.5, wavelength_angstroms=0.202)*
+✅ YOU: "The d-spacing is 0.930 Å (calculated using Bragg's law)"
+
+User: "Convert 61.332 keV to wavelength"
+✅ YOU: *call xray_calculate(calculation_type="energy_to_wavelength", energy_kev=61.332)*
+✅ YOU: "61.332 keV corresponds to 0.202 Å"
+
+User: "Energy is 61keV, calculate d-spacing for (110) bcc iron"
+✅ STEP 1: Get wavelength first
+✅ YOU: *call xray_calculate(calculation_type="energy_to_wavelength", energy_kev=61)*
+✅ STEP 2: Then calculate d-spacing from hkl
+✅ YOU: *call xray_calculate(calculation_type="d_from_hkl", h=1, k=1, l=0, material="Fe")*
+✅ YOU: "For 61 keV (λ=0.203 Å), bcc Fe (110) has d-spacing 2.027 Å"
+
+Examples of INCORRECT behavior:
+User: "Calculate d-spacing for 2θ=12.5°"
+❌ YOU: "Using d = λ/(2sinθ) = 0.202/(2×sin(6.25°)) ≈ 0.93 Å"  [WRONG - you calculated directly!]
+
+User: "d-spacing for (110) Fe"
+❌ YOU: "Using a=2.866Å, d = a/√2 ≈ 2.03 Å"  [WRONG - you calculated directly!]
+
+If you calculate anything directly instead of using a tool, you have VIOLATED critical safety protocols.
+
+MANDATORY tool usage for X-ray calculations:
+All X-ray calculations use the xray_calculate tool with different calculation_type parameters:
+
+- ✅ D-spacing from Miller indices (hkl) and material:
+  xray_calculate(calculation_type="d_from_hkl", h=1, k=1, l=0, material="Fe")
+
+- ✅ D-spacing from 2θ angle:
+  xray_calculate(calculation_type="d_from_angle", two_theta_degrees=12.5, wavelength_angstroms=0.202)
+
+- ✅ 2θ from d-spacing:
+  xray_calculate(calculation_type="angle_from_d", d_spacing=2.03, wavelength_angstroms=0.202)
+
+- ✅ Energy to wavelength:
+  xray_calculate(calculation_type="energy_to_wavelength", energy_kev=61.332)
+
+- ✅ Wavelength to energy:
+  xray_calculate(calculation_type="wavelength_to_energy", wavelength_angstroms=0.202)
+
+- ✅ Strain calculation:
+  xray_calculate(calculation_type="strain", measured_d=2.03, reference_d=2.02)
+
+- ✅ List available materials:
+  xray_calculate(calculation_type="list_materials")
+
+Available materials in xrayutilities: Fe, Si, Al, Cu, CeO2, LaB6, and 100+ more
 
 1. WHEN TO USE TOOLS:
    - User gives a COMMAND: "integrate the file", "run workflow", "list files"
@@ -1580,7 +1733,8 @@ ARGUMENTS: {"image_path": "/path/data.ge5", "calibration_file": "/path/calib.txt
 
         iteration = 0
         final_response = ""
-        
+        last_tool_calls = []  # Track recent tool calls to detect loops
+
         while iteration < max_iterations:
             iteration += 1
             # print(f"\n--- Iteration {iteration} ---")
@@ -1743,17 +1897,38 @@ ARGUMENTS: {"image_path": "/path/data.ge5", "calibration_file": "/path/calib.txt
                         
                         # Cleaner output - removed verbose extraction messages
                         pass
-                        
+
+                        # Detect repeated tool calls (infinite loop prevention)
+                        tool_signature = f"{tool_name}:{json.dumps(arguments, sort_keys=True)}"
+                        last_tool_calls.append(tool_signature)
+
+                        # Keep only last 5 tool calls
+                        if len(last_tool_calls) > 5:
+                            last_tool_calls.pop(0)
+
+                        # If same tool called 3+ times in a row, break the loop
+                        if len(last_tool_calls) >= 3 and len(set(last_tool_calls[-3:])) == 1:
+                            print(f"\n⚠️  Detected infinite loop: {tool_name} called 3 times with same arguments")
+                            print(f"   Breaking out and asking AI to proceed with the information it has.\n")
+
+                            # Force AI to stop calling tools and summarize
+                            messages.append(message)
+                            messages.append({
+                                "role": "user",
+                                "content": f"Tool result:\n{tool_result}\n\nYou have called {tool_name} multiple times. Stop calling tools now. Based on the information you have, please proceed with the user's request: '{query}'"
+                            })
+                            continue
+
                         # Execute the tool
                         tool_result = await self.execute_tool_call(tool_name, arguments)
-                        
+
                         # Add assistant message and tool result
                         messages.append(message)
                         messages.append({
                             "role": "user",
                             "content": f"Tool result:\n{tool_result}\n\nPlease provide a natural language summary of these results."
                         })
-                        
+
                         # Continue loop to get interpretation
                         continue
                 
