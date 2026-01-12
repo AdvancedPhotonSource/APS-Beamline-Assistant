@@ -12,7 +12,7 @@ import sys
 import json
 
 # Import existing MCP client
-from argo_mcp_client import ArgoMCPClient
+from argo_mcp_client import APEXAClient
 
 
 class APEXAGradioUI:
@@ -25,7 +25,7 @@ class APEXAGradioUI:
 
     async def initialize(self):
         """Initialize MCP client with servers"""
-        self.client = ArgoMCPClient()
+        self.client = APEXAClient()
 
         # Parse servers.config
         servers = {}
