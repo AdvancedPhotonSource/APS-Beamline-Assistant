@@ -106,7 +106,48 @@ APEXA uses a modular MCP (Model Context Protocol) server architecture:
 
 ## Recent Development Sessions
 
-### Session 2025-12-05: Knowledge Base & RAG Integration
+### Session 2025-12-05 (Part 2): Gradio Conversational UI
+**Added modern AI-driven chat interface**
+
+#### New Features:
+1. **Gradio Web UI** (localhost:7860)
+   - Conversational chat interface (primary interaction method)
+   - Drag-and-drop file uploads
+   - Embedded visualizations in chat thread
+   - Example prompts for quick start
+   - Real-time progress tracking
+
+2. **Infinite Loop Protection**
+   - Detects repeated tool calls (3+ times with same arguments)
+   - Breaks loop and forces AI to proceed with available info
+   - Prevents "filesystem_list_directory" trap
+
+3. **Three UI Options**:
+   - **Gradio UI** (recommended): AI-driven chat, drag-and-drop, embedded plots
+   - **CLI**: Terminal-based, power users, scripting
+   - **Web UI**: Traditional forms, direct parameter control
+
+#### Architecture:
+- `gradio_ui.py`: Wraps existing ArgoMCPClient with Gradio interface
+- `start_gradio_ui.sh`: Startup script for Gradio UI
+- Connects to same MCP servers (filesystem, executor, midas)
+- All MIDAS tools accessible via natural language
+
+#### Why Gradio:
+- ✅ Built-in ChatInterface (perfect for conversational AI)
+- ✅ 20 lines of code to prototype
+- ✅ Plays well with existing FastAPI backend
+- ✅ Easy to embed plots in chat responses
+- ✅ Modern, professional UI out-of-the-box
+
+#### User Experience Improvements:
+- No need to know parameter names
+- Progressive disclosure (simple questions → advanced control)
+- Contextual suggestions ("Would you like to integrate?")
+- Natural language error messages
+- Visual feedback for long-running operations
+
+### Session 2025-12-05 (Part 1): Knowledge Base & RAG Integration
 **Implemented PhD-level domain expertise system**
 
 #### New Features:
