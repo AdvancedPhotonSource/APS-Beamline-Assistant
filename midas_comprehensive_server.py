@@ -116,10 +116,13 @@ def find_midas_python() -> str:
     if python3_path and check_python_deps(python3_path):
         return python3_path
 
-    # Fallback: use current Python (AutoCalibrateZarr.py may fail)
-    print("⚠ No Python with MIDAS deps (zarr, diplib, numba) found — "
-          "calibration may fail. Set MIDAS_PYTHON or activate midas conda env.", file=sys.stderr)
-    return sys.executable
+    # No suitable Python found — raise so the caller gets a clear error
+    raise RuntimeError(
+        "No Python with MIDAS dependencies found.\n"
+        "Expected conda env 'midas_env' with zarr, diplib, numba, h5py, skimage.\n"
+        f"Checked conda base: {conda_base}\n"
+        "Set MIDAS_PYTHON env var to override, or run: conda env create -f MIDAS/environment.yml"
+    )
 
 def get_midas_env() -> dict:
     """Get environment variables needed for MIDAS executables.
@@ -159,6 +162,14 @@ def get_midas_env() -> dict:
 
     # Set MIDAS_PATH for scripts that need it
     env["MIDAS_PATH"] = str(MIDAS_ROOT)
+
+    # Add MIDAS/utils to PYTHONPATH so midas_config and other MIDAS modules are importable
+    # regardless of the working directory the script is launched from
+    midas_utils = str(MIDAS_ROOT / "utils")
+    if "PYTHONPATH" in env:
+        env["PYTHONPATH"] = midas_utils + ":" + env["PYTHONPATH"]
+    else:
+        env["PYTHONPATH"] = midas_utils
 
     return env
 
