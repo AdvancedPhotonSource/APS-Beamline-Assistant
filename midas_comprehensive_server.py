@@ -2472,7 +2472,9 @@ async def midas_auto_calibrate(
     lsd_guess: float = 1000000.0,
     bc_x_guess: float = 0.0,
     bc_y_guess: float = 0.0,
-    stopping_strain: float = 0.00004,
+    n_iterations: int = 40,
+    tol_shifts: float = 3.0,
+    tol_rotation: float = 1.0,
     mult_factor: float = 2.5,
     first_ring_nr: int = 1,
     eta_bin_size: float = 5.0,
@@ -2527,7 +2529,9 @@ async def midas_auto_calibrate(
         lsd_guess: Initial sample-to-detector distance guess in µm (default: 1000000 = auto-detect from ring ratios)
         bc_x_guess: Initial beam center X coordinate in pixels (default: 0.0 = auto-detect from ring geometry)
         bc_y_guess: Initial beam center Y coordinate in pixels (default: 0.0 = auto-detect from ring geometry)
-        stopping_strain: Convergence criterion - refinement stops when mean pseudo-strain < this value (default: 0.00004)
+        n_iterations: Maximum number of refinement iterations (default: 40)
+        tol_shifts: Panel shift convergence tolerance in pixels (default: 3.0)
+        tol_rotation: Panel rotation convergence tolerance in degrees (default: 1.0)
         mult_factor: Outlier rejection multiplier - rings with strain > mult_factor × median_strain are excluded (default: 2.5)
         first_ring_nr: Index (1-based) of first prominent ring for initial Lsd estimation (default: 1)
         eta_bin_size: Azimuthal bin size in degrees for CalibrantOMP fitting (default: 5.0)
@@ -2628,104 +2632,89 @@ async def midas_auto_calibrate(
         # Auto-search for image file if not found
         if not image_path.exists():
             print(f"⚠ Image file not found at: {image_path}", file=sys.stderr)
-            print(f"  Searching parent directory for matching files...", file=sys.stderr)
 
-            parent_dir = image_path.parent
-            if parent_dir.exists():
-                # Search for TIFF/GE/HDF5 files in the directory
-                search_patterns = ["*.tif", "*.tiff", "*.ge2", "*.ge3", "*.ge4", "*.ge5", "*.h5", "*.hdf5"]
-                found_files = []
-                for pattern in search_patterns:
-                    found_files.extend(parent_dir.glob(pattern))
+            # Search dirs: parent of specified path + subdirs of cwd (e.g. test1/)
+            cwd = Path.cwd()
+            search_dirs = {image_path.parent, cwd}
+            for d in cwd.iterdir():
+                if d.is_dir():
+                    search_dirs.add(d)
 
-                if found_files:
-                    # Sort by modification time (most recent first)
-                    found_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+            print(f"  Searching for image in: {', '.join(d.name for d in search_dirs)}", file=sys.stderr)
 
-                    print(f"  Found {len(found_files)} image file(s) in {parent_dir.name}/:", file=sys.stderr)
-                    for i, f in enumerate(found_files[:5], 1):  # Show first 5
-                        print(f"    {i}. {f.name}", file=sys.stderr)
+            search_patterns = ["*.tif", "*.tiff", "*.ge2", "*.ge3", "*.ge4", "*.ge5", "*.h5", "*.hdf5"]
+            found_files = []
+            for search_dir in search_dirs:
+                if search_dir.exists():
+                    for pattern in search_patterns:
+                        found_files.extend(search_dir.glob(pattern))
 
-                    # Use the most recent file (or try to match basename)
-                    # First, try to find a file whose name contains the basename
-                    basename_match = None
-                    search_basename = image_path.stem.lower()
-                    for f in found_files:
-                        if search_basename in f.stem.lower():
-                            basename_match = f
-                            break
+            if found_files:
+                found_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+                print(f"  Found {len(found_files)} image file(s):", file=sys.stderr)
+                for i, f in enumerate(found_files[:5], 1):
+                    print(f"    {i}. {f.parent.name}/{f.name}", file=sys.stderr)
 
-                    if basename_match:
-                        image_path = basename_match
-                        print(f"  ✓ Using matched file: {image_path.name}", file=sys.stderr)
-                    else:
-                        image_path = found_files[0]
-                        print(f"  ✓ Using most recent file: {image_path.name}", file=sys.stderr)
+                # Try to match by basename stem first
+                search_basename = image_path.stem.lower()
+                basename_match = next((f for f in found_files if search_basename in f.stem.lower()), None)
+                if basename_match:
+                    image_path = basename_match
+                    print(f"  ✓ Using matched file: {image_path}", file=sys.stderr)
                 else:
-                    print(f"❌ ERROR: No image files found in directory!", file=sys.stderr)
-                    return format_result({
-                        "tool": "midas_auto_calibrate",
-                        "status": "error",
-                        "error": f"No diffraction images (.tif, .ge, .h5) found in: {parent_dir}\n\nSearched patterns: {', '.join(search_patterns)}"
-                    })
+                    image_path = found_files[0]
+                    print(f"  ✓ Using most recent file: {image_path}", file=sys.stderr)
             else:
-                print(f"❌ ERROR: Parent directory does not exist!", file=sys.stderr)
+                print(f"❌ ERROR: No image files found!", file=sys.stderr)
                 return format_result({
                     "tool": "midas_auto_calibrate",
                     "status": "error",
-                    "error": f"Image file not found and parent directory does not exist: {parent_dir}"
+                    "error": f"No diffraction images (.tif, .ge, .h5) found in cwd or subdirectories. Please provide the full path."
                 })
 
         # Auto-search for parameters file if not found
         if not param_path.exists():
             print(f"⚠ Parameters file not found at: {param_path}", file=sys.stderr)
-            print(f"  Searching parent directory for parameter files...", file=sys.stderr)
 
-            parent_dir = param_path.parent
-            if parent_dir.exists():
-                # Search for common parameter file names
-                param_patterns = ["*arameters*.txt", "*params*.txt", "*Params*.txt", "*.txt"]
-                found_params = []
-                for pattern in param_patterns:
-                    found_params.extend(parent_dir.glob(pattern))
+            cwd = Path.cwd()
+            search_dirs = {param_path.parent, cwd}
+            for d in cwd.iterdir():
+                if d.is_dir():
+                    search_dirs.add(d)
 
-                # Filter out obvious non-parameter files
-                found_params = [p for p in found_params if p.stat().st_size < 10000]  # < 10KB
+            param_patterns = ["*arameters*.txt", "*params*.txt", "*Params*.txt", "*.txt"]
+            found_params = []
+            for search_dir in search_dirs:
+                if search_dir.exists():
+                    for pattern in param_patterns:
+                        found_params.extend(search_dir.glob(pattern))
 
-                if found_params:
-                    found_params.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+            # Filter out obvious non-parameter files (< 10KB)
+            found_params = [p for p in found_params if p.stat().st_size < 10000]
 
-                    print(f"  Found {len(found_params)} potential parameter file(s):", file=sys.stderr)
-                    for i, f in enumerate(found_params[:5], 1):
-                        print(f"    {i}. {f.name}", file=sys.stderr)
+            if found_params:
+                found_params.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+                print(f"  Found {len(found_params)} parameter file(s):", file=sys.stderr)
+                for i, f in enumerate(found_params[:5], 1):
+                    print(f"    {i}. {f.parent.name}/{f.name}", file=sys.stderr)
 
-                    # Try to match basename
-                    basename_match = None
-                    search_basename = param_path.stem.lower()
-                    for f in found_params:
-                        if search_basename in f.stem.lower() or "param" in f.stem.lower():
-                            basename_match = f
-                            break
-
-                    if basename_match:
-                        param_path = basename_match
-                        print(f"  ✓ Using matched file: {param_path.name}", file=sys.stderr)
-                    else:
-                        param_path = found_params[0]
-                        print(f"  ✓ Using: {param_path.name}", file=sys.stderr)
+                search_basename = param_path.stem.lower()
+                basename_match = next(
+                    (f for f in found_params if search_basename in f.stem.lower() or "param" in f.stem.lower()),
+                    None
+                )
+                if basename_match:
+                    param_path = basename_match
+                    print(f"  ✓ Using matched file: {param_path}", file=sys.stderr)
                 else:
-                    print(f"❌ ERROR: No parameter files found!", file=sys.stderr)
-                    return format_result({
-                        "tool": "midas_auto_calibrate",
-                        "status": "error",
-                        "error": f"Parameters file not found: {param_path}\n\nNo .txt files found in: {parent_dir}\n\nCreate a parameter file with:\nSpaceGroup 225\nLatticeParameter 5.411\nWavelength 0.2021\npx 172"
-                    })
+                    param_path = found_params[0]
+                    print(f"  ✓ Using: {param_path}", file=sys.stderr)
             else:
-                print(f"❌ ERROR: Parameters file not found!", file=sys.stderr)
+                print(f"❌ ERROR: No parameter files found!", file=sys.stderr)
                 return format_result({
                     "tool": "midas_auto_calibrate",
                     "status": "error",
-                    "error": f"Parameters file not found: {param_path}"
+                    "error": f"Parameters file not found. Please provide the full path to the MIDAS parameter file."
                 })
 
         # Determine file type for ConvertFile flag
@@ -2797,7 +2786,9 @@ async def midas_auto_calibrate(
             "-dataFN", str(image_path),
             "-paramFN", str(param_path),
             "-ConvertFile", str(convert_file),
-            "-StoppingStrain", str(stopping_strain),
+            "--n-iterations", str(n_iterations),
+            "--tol-shifts", str(tol_shifts),
+            "--tol-rotation", str(tol_rotation),
             "-MultFactor", str(mult_factor),
             "-FirstRingNr", str(first_ring_nr),
             "-EtaBinSize", str(eta_bin_size),
