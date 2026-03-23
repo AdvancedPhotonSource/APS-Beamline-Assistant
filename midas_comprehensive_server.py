@@ -56,7 +56,6 @@ def find_midas_python() -> str:
     if midas_python_env:
         midas_python_path = Path(midas_python_env)
         if midas_python_path.exists():
-            print(f"✓ Using MIDAS_PYTHON from environment: {midas_python_path}", file=sys.stderr)
             return str(midas_python_path)
         else:
             print(f"⚠ MIDAS_PYTHON set but not found: {midas_python_path}", file=sys.stderr)
@@ -84,7 +83,6 @@ def find_midas_python() -> str:
         ]:
             if conda_loc.exists() and (conda_loc / "bin" / "conda").exists():
                 conda_base = conda_loc
-                print(f"Found conda installation at: {conda_base}", file=sys.stderr)
                 break
 
     if conda_base:
@@ -95,13 +93,11 @@ def find_midas_python() -> str:
         for env_name in ["midas_202411", "midas_env", "midas", "MIDAS"]:
             midas_env_python = conda_base / "envs" / env_name / "bin" / "python"
             if midas_env_python.exists():
-                print(f"✓ Found MIDAS conda environment '{env_name}': {midas_env_python}", file=sys.stderr)
                 return str(midas_env_python)
 
         # Check conda base environment
         conda_python = conda_base / "bin" / "python"
         if conda_python.exists() and check_python_deps(str(conda_python)):
-            print(f"✓ Using conda base environment (has MIDAS deps): {conda_python}", file=sys.stderr)
             return str(conda_python)
 
     # PRIORITY 2: Check if current environment has ALL critical MIDAS deps
@@ -111,32 +107,18 @@ def find_midas_python() -> str:
         import numba
         import h5py
         import skimage
-        print(f"✓ Current Python has all MIDAS dependencies: {sys.executable}", file=sys.stderr)
         return sys.executable
-    except ImportError as e:
-        print(f"⚠ Current Python missing MIDAS dependencies: {e}", file=sys.stderr)
+    except ImportError:
+        pass
 
     # PRIORITY 3: Try system python3
     python3_path = shutil.which("python3")
     if python3_path and check_python_deps(python3_path):
-        print(f"✓ Using system Python (has MIDAS deps): {python3_path}", file=sys.stderr)
         return python3_path
 
-    # PRIORITY 4: Fallback to current Python with warning
-    print(f"", file=sys.stderr)
-    print(f"✗ ERROR: No Python with complete MIDAS dependencies found!", file=sys.stderr)
-    print(f"✗ Using current Python: {sys.executable}", file=sys.stderr)
-    print(f"", file=sys.stderr)
-    print(f"AutoCalibrateZarr.py requires: zarr, diplib, numba, h5py, scikit-image", file=sys.stderr)
-    print(f"", file=sys.stderr)
-    print(f"To fix, install the official MIDAS conda environment:", file=sys.stderr)
-    print(f"  cd ~/opt/MIDAS  # or wherever MIDAS is installed", file=sys.stderr)
-    print(f"  conda env create -f environment.yml", file=sys.stderr)
-    print(f"  # APEXA will auto-detect midas_env - no manual activation needed!", file=sys.stderr)
-    print(f"", file=sys.stderr)
-    print(f"Or manually specify Python path:", file=sys.stderr)
-    print(f"  export MIDAS_PYTHON=/path/to/conda/envs/midas_env/bin/python", file=sys.stderr)
-    print(f"", file=sys.stderr)
+    # Fallback: use current Python (AutoCalibrateZarr.py may fail)
+    print("⚠ No Python with MIDAS deps (zarr, diplib, numba) found — "
+          "calibration may fail. Set MIDAS_PYTHON or activate midas conda env.", file=sys.stderr)
     return sys.executable
 
 def get_midas_env() -> dict:
@@ -207,14 +189,7 @@ def find_midas_installation() -> Path:
                 (path / "build" / "bin").exists()
             )
 
-            is_valid = autocal.exists() and has_executables
-
-            if is_valid:
-                print(f"✓ Valid MIDAS installation: {path}", file=sys.stderr)
-                print(f"  - AutoCalibrateZarr.py: {autocal.exists()}", file=sys.stderr)
-                print(f"  - Executables: {has_executables}", file=sys.stderr)
-
-            return is_valid
+            return autocal.exists() and has_executables
         except (PermissionError, OSError):
             # Skip paths we don't have permission to access
             return False
@@ -223,14 +198,11 @@ def find_midas_installation() -> Path:
     if "MIDAS_PATH" in os.environ:
         midas_path = Path(os.environ["MIDAS_PATH"]).expanduser().absolute()
         if validate_midas_path(midas_path):
-            print(f"Using MIDAS_PATH from environment: {midas_path}", file=sys.stderr)
             return midas_path
         else:
             print(f"⚠ MIDAS_PATH set but invalid: {midas_path}", file=sys.stderr)
 
     # Search common installation locations
-    print("Searching for MIDAS installation...", file=sys.stderr)
-
     # Build search paths dynamically
     common_paths = []
 
@@ -272,31 +244,15 @@ def find_midas_installation() -> Path:
         selected = valid_installations[0]
 
         if len(valid_installations) > 1:
-            print(f"\n⚠ Multiple MIDAS installations found:", file=sys.stderr)
-            for i, p in enumerate(valid_installations, 1):
-                marker = "→" if p == selected else " "
-                print(f"  {marker} {i}. {p}", file=sys.stderr)
-            print(f"\nUsing: {selected}", file=sys.stderr)
-            print(f"To override, set: export MIDAS_PATH={valid_installations[1]}", file=sys.stderr)
+            print(f"⚠ Multiple MIDAS installations found — using {selected}. "
+                  f"Set MIDAS_PATH to override.", file=sys.stderr)
 
         return selected
 
     # No valid installation found
-    print("\n❌ ERROR: No valid MIDAS installation found!", file=sys.stderr)
-    print("\nSearched locations:", file=sys.stderr)
-    for path in common_paths[:10]:  # Show first 10
-        exists = "✓" if path.exists() else "✗"
-        print(f"  {exists} {path}", file=sys.stderr)
-
-    print("\nTo fix:", file=sys.stderr)
-    print("  1. Clone MIDAS: git clone https://github.com/marinerhemant/MIDAS ~/Git/MIDAS", file=sys.stderr)
-    print("  2. Build MIDAS: cd ~/Git/MIDAS && ./build.sh", file=sys.stderr)
-    print("  3. Set environment: export MIDAS_PATH=~/Git/MIDAS", file=sys.stderr)
-
-    # Return default path (will cause errors but at least explicit)
-    default_path = Path.home() / ".MIDAS"
-    print(f"\nUsing fallback path (will likely fail): {default_path}", file=sys.stderr)
-    return default_path
+    print("❌ No valid MIDAS installation found. "
+          "Clone https://github.com/marinerhemant/MIDAS and set MIDAS_PATH.", file=sys.stderr)
+    return Path.home() / ".MIDAS"
 
 # MIDAS installation paths
 MIDAS_ROOT = find_midas_installation()
@@ -307,13 +263,9 @@ MIDAS_FF_V7 = MIDAS_ROOT / "FF_HEDM" / "v7"
 MIDAS_NF_V7 = MIDAS_ROOT / "NF_HEDM" / "v7"
 MIDAS_UTILS = MIDAS_ROOT / "utils"
 
-# Diagnostic: Check for critical MIDAS scripts
 _autocal_script = MIDAS_UTILS / "AutoCalibrateZarr.py"
-if _autocal_script.exists():
-    print(f"✓ AutoCalibrateZarr.py found at {_autocal_script}", file=sys.stderr)
-else:
-    print(f"⚠ AutoCalibrateZarr.py NOT found at {_autocal_script}", file=sys.stderr)
-    print(f"  Auto-calibration will not work until MIDAS is properly installed", file=sys.stderr)
+if not _autocal_script.exists():
+    print(f"⚠ AutoCalibrateZarr.py not found at {_autocal_script} — calibration unavailable", file=sys.stderr)
 
 # Add MIDAS Python modules to path
 for path in [MIDAS_UTILS, MIDAS_FF_V7, MIDAS_NF_V7]:
@@ -341,10 +293,9 @@ try:
     import matplotlib.pyplot as plt
 
     MIDAS_AVAILABLE = True
-    print("✓ MIDAS scientific dependencies available", file=sys.stderr)
 except ImportError as e:
     MIDAS_AVAILABLE = False
-    print(f"⚠ MIDAS dependencies not available: {e}", file=sys.stderr)
+    print(f"⚠ MIDAS scientific deps missing: {e}", file=sys.stderr)
 
 # Try to import MIDAS Python workflow modules
 try:
@@ -353,10 +304,8 @@ try:
     # from nf_MIDAS import run_preprocessing, run_fitting_and_postprocessing
     # from calcMiso import GetMisorientationAngle
     MIDAS_PYTHON_AVAILABLE = True
-    print("✓ MIDAS Python APIs available", file=sys.stderr)
 except ImportError:
     MIDAS_PYTHON_AVAILABLE = False
-    print("ℹ MIDAS Python APIs not imported (will use subprocess)", file=sys.stderr)
 
 # =============================================================================
 # UTILITY FUNCTIONS
@@ -3606,44 +3555,6 @@ async def estimate_parameters_from_image(
 # =============================================================================
 
 if __name__ == "__main__":
-    print("=" * 70, file=sys.stderr)
-    print("MIDAS Comprehensive MCP Server", file=sys.stderr)
-    print("=" * 70, file=sys.stderr)
-    print(f"MIDAS Root: {MIDAS_ROOT}", file=sys.stderr)
-    print(f"MIDAS Available: {MIDAS_AVAILABLE}", file=sys.stderr)
-    print(f"Python APIs: {MIDAS_PYTHON_AVAILABLE}", file=sys.stderr)
-    print("\nAvailable Tools:", file=sys.stderr)
-    print("\nFF-HEDM Production:", file=sys.stderr)
-    print("  - run_ff_hedm_full_workflow", file=sys.stderr)
-    print("  - run_pf_hedm_workflow", file=sys.stderr)
-    print("  - run_ff_calibration", file=sys.stderr)
-    print("  - run_ff_grain_tracking", file=sys.stderr)
-    print("\nNF-HEDM Reconstruction:", file=sys.stderr)
-    print("  - run_nf_hedm_reconstruction", file=sys.stderr)
-    print("  - convert_nf_to_dream3d", file=sys.stderr)
-    print("  - overlay_ff_nf_results", file=sys.stderr)
-    print("\nAdvanced Analysis:", file=sys.stderr)
-    print("  - calculate_misorientation", file=sys.stderr)
-    print("  - run_forward_simulation", file=sys.stderr)
-    print("  - extract_grain_centroids", file=sys.stderr)
-    print("\nData Management:", file=sys.stderr)
-    print("  - batch_convert_ge_to_tiff", file=sys.stderr)
-    print("  - create_midas_parameter_file", file=sys.stderr)
-    print("  - validate_midas_installation", file=sys.stderr)
-    print("  - get_midas_workflow_status", file=sys.stderr)
-    print("\nFF-HEDM Calibration & Integration (MIDAS Official):", file=sys.stderr)
-    print("  - midas_auto_calibrate (AutoCalibrateZarr.py)", file=sys.stderr)
-    print("  - midas_integrate_2d_to_1d (MIDAS Integrator - single frame)", file=sys.stderr)
-    print("  - midas_batch_integrate (MIDAS integrator.py - multi-panel batch)", file=sys.stderr)
-    print("\nKnowledge Base & Domain Expertise:", file=sys.stderr)
-    print("  - query_hedm_knowledge (RAG semantic search across papers/logbooks/books)", file=sys.stderr)
-    print("  - get_material_properties (crystallographic data from Materials Project)", file=sys.stderr)
-    print("  - get_typical_hedm_parameters (quality thresholds, typical ranges)", file=sys.stderr)
-    print("  - estimate_parameters_from_image (Lsd estimation from ring positions)", file=sys.stderr)
-    print("\n⚠️  NON-MIDAS tools removed from this server:", file=sys.stderr)
-    print("  - detect_diffraction_rings → analysis_utilities_server.py (detect_rings_quick)", file=sys.stderr)
-    print("  - identify_crystalline_phases → analysis_utilities_server.py (identify_phases_basic)", file=sys.stderr)
-    print("\n✅ All tools in this server follow official MIDAS workflows", file=sys.stderr)
-    print("=" * 70, file=sys.stderr)
-
+    if not MIDAS_AVAILABLE:
+        print("⚠ MIDAS scientific dependencies not available", file=sys.stderr)
     mcp.run(transport='stdio')

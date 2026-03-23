@@ -8,6 +8,9 @@ export PATH="$HOME/.local/bin:$PATH"
 # Prevent stale VIRTUAL_ENV from another project causing uv warnings
 unset VIRTUAL_ENV
 
+# Silence numexpr thread count banner
+export NUMEXPR_MAX_THREADS=10
+
 # Change to script directory
 cd "$(dirname "$0")"
 

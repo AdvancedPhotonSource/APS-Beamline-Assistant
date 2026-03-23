@@ -17,7 +17,12 @@ from typing import Any, Optional, List, Dict
 import json
 import sys
 import os
+import logging
 from pathlib import Path
+
+# Suppress noisy third-party library startup messages
+logging.getLogger("numexpr").setLevel(logging.WARNING)
+logging.getLogger("numexpr.utils").setLevel(logging.WARNING)
 import subprocess
 import stat
 import time
@@ -42,7 +47,6 @@ try:
     import xrayutilities as xu
     import xrayutilities.materials as xumaterials
     XRAYUTILITIES_AVAILABLE = True
-    print("✓ xrayutilities available for X-ray calculations", file=sys.stderr)
 except ImportError:
     XRAYUTILITIES_AVAILABLE = False
     print("⚠️ xrayutilities not available - install with: pip install xrayutilities", file=sys.stderr)
@@ -767,12 +771,8 @@ async def list_common_calibrants() -> str:
 # =============================================================================
 
 if __name__ == "__main__":
-    print("=" * 70, file=sys.stderr)
-    print("🚀 Beamline Core Operations Server", file=sys.stderr)
-    print("   Unified server: filesystem + commands + X-ray utilities", file=sys.stderr)
-    print("=" * 70, file=sys.stderr)
-    print(f"✓ Scipy/fabio available: {SCIPY_AVAILABLE}", file=sys.stderr)
-    print(f"✓ Allowed commands: {len(ALLOWED_COMMANDS)}", file=sys.stderr)
-    print(f"✓ MIDAS_PATH: {os.environ.get('MIDAS_PATH', 'Not set')}", file=sys.stderr)
-    print("=" * 70, file=sys.stderr)
+    if not XRAYUTILITIES_AVAILABLE:
+        print("⚠ xrayutilities not available — X-ray calculations limited", file=sys.stderr)
+    if not SCIPY_AVAILABLE:
+        print("⚠ scipy/fabio not available — image analysis limited", file=sys.stderr)
     mcp.run()
