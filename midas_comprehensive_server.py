@@ -198,6 +198,7 @@ def find_midas_installation() -> Path:
     if "MIDAS_PATH" in os.environ:
         midas_path = Path(os.environ["MIDAS_PATH"]).expanduser().absolute()
         if validate_midas_path(midas_path):
+            print(f"  MIDAS: {midas_path}", file=sys.stderr)
             return midas_path
         else:
             print(f"⚠ MIDAS_PATH set but invalid: {midas_path}", file=sys.stderr)
@@ -240,13 +241,12 @@ def find_midas_installation() -> Path:
             valid_installations.append(path)
 
     if valid_installations:
-        # Use the first valid installation found
         selected = valid_installations[0]
-
         if len(valid_installations) > 1:
-            print(f"⚠ Multiple MIDAS installations found — using {selected}. "
+            print(f"⚠ Multiple MIDAS installations — using {selected}. "
                   f"Set MIDAS_PATH to override.", file=sys.stderr)
-
+        else:
+            print(f"  MIDAS: {selected}", file=sys.stderr)
         return selected
 
     # No valid installation found
