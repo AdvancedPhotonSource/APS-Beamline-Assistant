@@ -634,11 +634,11 @@ async def chat_with_assistant(
                     image_path = str(potential_path)
                     break
         
-        # Process the query
-        response = await mcp_client.process_diffraction_query(
-            message, 
-            image_path=image_path
-        )
+        # Prepend image path context if provided, then route through orchestrator
+        full_query = message
+        if image_path:
+            full_query = f"Image file: {image_path}\n\n{message}"
+        response = await mcp_client.run_query(full_query)
         
         return {"response": response}
         
@@ -704,7 +704,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
                         print(f"Sending to AI with context: {user_message[:500]}...")  # Debug log
 
-                        response = await mcp_client.process_diffraction_query(user_message)
+                        response = await mcp_client.run_query(user_message)
                         await manager.send_personal_message({
                             "type": "chat_response",
                             "message": response
@@ -1388,7 +1388,7 @@ async def run_calibration(
 
 Please use the AutoCalibrateZarr tool and return the refined parameters."""
         
-        response = await mcp_client.send_message(prompt)
+        response = await mcp_client.run_query(prompt)
         
         return {"success": True, "calibration": response, "message": "Calibration completed"}
         

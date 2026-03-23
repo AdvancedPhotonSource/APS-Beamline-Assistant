@@ -23,29 +23,54 @@ class APEXAGradioUI:
         self.client = None
         self.chat_history = []
 
-    async def initialize(self):
-        """Initialize MCP client with servers"""
+    def _read_servers_config(self) -> List:
+        """Parse servers.config into a list of {name, script_path} dicts."""
+        configs = []
+        config_path = Path(self.servers_config)
+        if not config_path.exists():
+            print(f"⚠️  {self.servers_config} not found — no MCP servers will be loaded")
+            return configs
+        for line in config_path.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if ":" in line:
+                name, script_path = line.split(":", 1)
+                if Path(script_path).exists():
+                    configs.append({"name": name.strip(), "script_path": script_path.strip()})
+                    print(f"  ✓ {name.strip()} ({script_path.strip()})")
+                else:
+                    print(f"  ✗ {name.strip()} — file not found: {script_path.strip()}")
+        return configs
+
+    def initialize_sync(self):
+        """Initialize MCP client with servers (synchronous wrapper)"""
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(self._initialize_async())
+            print("✓ APEXA initialized successfully!")
+        except Exception as e:
+            print(f"❌ Initialization failed: {e}")
+            import traceback
+            traceback.print_exc()
+        finally:
+            loop.close()
+
+    async def _initialize_async(self):
+        """Initialize MCP client and connect to MCP servers from servers.config."""
         self.client = APEXAClient()
+        print(f"✓ Argo API: {self.client.environment} environment, model={self.client.selected_model}")
 
-        # Parse servers.config
-        servers = {}
-        with open(self.servers_config, 'r') as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith('#'):
-                    if ':' in line:
-                        name, path = line.split(':', 1)
-                        servers[name.strip()] = path.strip()
+        print("Loading MCP servers:")
+        server_configs = self._read_servers_config()
 
-        # Connect to servers
-        for name, path in servers.items():
-            try:
-                await self.client.connect_to_server(name, path)
-                print(f"✓ Connected to {name}")
-            except Exception as e:
-                print(f"✗ Failed to connect to {name}: {e}")
-
-        return "✓ APEXA initialized successfully!"
+        if server_configs:
+            await self.client.connect_to_multiple_servers(server_configs)
+            print(f"✓ Connected to {len(self.client.sessions)} server(s): "
+                  f"{list(self.client.sessions.keys())}")
+        else:
+            print("⚠️  No MCP servers loaded — tool calls will fail")
 
     async def chat(self, message: str, history: List[Tuple[str, str]]) -> str:
         """Process chat message through MCP client"""
@@ -54,7 +79,7 @@ class APEXAGradioUI:
 
         try:
             # Process query through MCP client
-            response = await self.client.process_diffraction_query(
+            response = await self.client.run_query(
                 query=message,
                 use_history=True
             )
@@ -83,28 +108,27 @@ class APEXAGradioUI:
         return f"✓ Uploaded: {dest}\n\nYou can now reference it in chat: '{dest.name}'"
 
 
+# Custom CSS for scientific look
+CUSTOM_CSS = """
+.gradio-container {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+}
+.chat-message {
+    font-size: 14px;
+}
+footer {
+    display: none !important;
+}
+"""
+
+
 def create_ui():
     """Create Gradio interface"""
 
     ui = APEXAGradioUI()
 
-    # Custom CSS for scientific look
-    custom_css = """
-    .gradio-container {
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
-    }
-    .chat-message {
-        font-size: 14px;
-    }
-    footer {
-        display: none !important;
-    }
-    """
-
     with gr.Blocks(
-        title="APEXA - Advanced Photon EXperiment Assistant",
-        theme=gr.themes.Soft(primary_hue="blue"),
-        css=custom_css
+        title="APEXA - Advanced Photon EXperiment Assistant"
     ) as demo:
 
         # Header
@@ -115,18 +139,13 @@ def create_ui():
         Natural language interface to MIDAS workflows: calibration, integration, phase analysis, and more.
         """)
 
-        # Initialize on load
-        demo.load(ui.initialize, outputs=None)
-
         with gr.Row():
             with gr.Column(scale=3):
                 # Main chat interface
                 chatbot = gr.Chatbot(
                     label="APEXA Chat",
                     height=600,
-                    show_copy_button=True,
-                    bubble_full_width=False,
-                    avatar_images=(None, "🤖")
+                    value=[]  # Initialize with empty list
                 )
 
                 with gr.Row():
@@ -192,16 +211,28 @@ def create_ui():
                     lines=4
                 )
 
+        # Initialize client on first load
+        ui.initialize_sync()
+
         # Chat interaction
         def respond(message, history):
+            # Initialize history if None
+            if history is None:
+                history = []
+
             # Run async function
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             response = loop.run_until_complete(ui.chat(message, history))
             loop.close()
 
-            # Add to history
-            history.append((message, response))
+            # Add to history in Gradio 6.x format
+            if not history:
+                history = []
+            history = history + [
+                {"role": "user", "content": message},
+                {"role": "assistant", "content": response}
+            ]
             return "", history
 
         # Submit handlers
@@ -230,5 +261,8 @@ if __name__ == "__main__":
         server_port=7860,
         share=False,  # Set True for public Gradio link
         show_error=True,
-        quiet=False
+        quiet=False,
+        # Gradio 6.x parameters
+        theme=gr.themes.Soft(primary_hue="blue"),
+        css=CUSTOM_CSS
     )
