@@ -226,6 +226,7 @@ ANALYSIS_AGENT = APEXAAgent(
         "run_pf_hedm_workflow",
         # Post-processing
         "run_ff_grain_tracking",
+        "match_grains",
         "overlay_ff_nf_results",
         "calculate_misorientation",
         "run_forward_simulation",
@@ -254,7 +255,7 @@ Capabilities (use the matching tool for each):
 - FF-HEDM reconstruction: run_ff_hedm_full_workflow
 - NF-HEDM mapping: run_nf_hedm_reconstruction
 - PF-HEDM pole figures: run_pf_hedm_workflow
-- Grain tracking: run_ff_grain_tracking
+- Grain tracking/matching: run_ff_grain_tracking, match_grains (Hungarian algorithm)
 - Misorientation: calculate_misorientation
 - Dream3D export: convert_nf_to_dream3d
 - X-ray calculations: xray_calculate (NEVER compute manually)
@@ -264,7 +265,7 @@ Standard workflow:
   1. list_directory to find data files
   2. midas_integrate_2d_to_1d for 2D → 1D
   3. run_ff_hedm_full_workflow or run_nf_hedm_reconstruction
-  4. Post-process: run_ff_grain_tracking, overlay_ff_nf_results, extract_grain_centroids
+  4. Post-process: match_grains, run_ff_grain_tracking, overlay_ff_nf_results, extract_grain_centroids
   5. Export: convert_nf_to_dream3d
 
 Always report: grains found, convergence quality, output file paths.""",
@@ -494,7 +495,7 @@ class AgentRunner:
             messages.extend(history[-10:])   # last 5 exchanges
         messages.append({"role": "user", "content": query})
 
-        for iteration in range(max_iterations):
+        for _ in range(max_iterations):
             response = await provider.chat(messages, agent.temperature)
 
             # ── Mode 1: Native API tool_calls ──

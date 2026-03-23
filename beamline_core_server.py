@@ -71,37 +71,108 @@ ALLOWED_COMMANDS = {
     'ps', 'df', 'du', 'whoami', 'env', 'echo', 'date',
     'which', 'file', 'wc', 'sort', 'uniq',
 
-    # MIDAS FF-HEDM executables
-    'IndexerOMP', 'FitPosOrStrainsOMP', 'ProcessGrainsZarr',
-    'GetHKLListZarr', 'PeaksFittingOMPZarrRefactor',
-    'MergeOverlappingPeaksAllZarr', 'CalcRadiusAllZarr',
-    'SaveBinData', 'FitSetupZarr',
-    'CalibrantOMP', 'Calibrant', 'FitTiltBCLsdSample',
-    'CalibrantPanelShiftsOMP', 'ForwardSimulation',
-    'ForwardSimulationCompressed', 'SimulateScanning',
-    'GrainTracking', 'CalcStrains', 'DetectorMapper',
-    'Integrator', 'FindSaturatedPixels', 'CalcRadius',
-    'IndexerScanningOMP', 'FitOrStrainsScanningOMP',
+    # ── FF-HEDM CPU executables ──────────────────────────────────────────────
+    'GetHKLListZarr',
+    'PeaksFittingOMPZarrRefactor',
+    'MergeOverlappingPeaksAllZarr',
+    'CalcRadiusAllZarr',
+    'FitSetupZarr',
+    'SaveBinData',
+    'SaveBinDataScanning',
+    'IndexerOMP',
+    'IndexerScanningOMP',
+    'FitPosOrStrainsOMP',
+    'FitOrStrainsScanningOMP',
+    'FitPosOrStrainsDoubleDataset',
+    'FitMultipleGrains',
+    'FitWedgeParallel',
+    'ProcessGrains',
+    'ProcessGrainsScanningHEDM',
+    'MatchGrains',
+    'MergeMultipleScans',
+    'mergeScansScanning',
 
-    # MIDAS NF-HEDM executables
-    'FitOrientationOMP', 'FitOrientation', 'FitOrientationSinglePoint',
-    'GetHKLListNF', 'MakeHexGrid', 'MakeDiffrSpots',
-    'ParseMic', 'NFGrainCentroids', 'MedianImageLibTiff',
-    'ImageProcessingLibTiffOMP', 'ImageProcessingLibTiff',
-    'FitOrientationParameters', 'FitOrientationParametersMultiPoint',
-    'GenSeedOrientationsFF2NFHEDM', 'SimulateDiffractionSpots',
-    'ProcessNFMicRemote', 'compareNF', 'simulateNF',
+    # ── FF-HEDM GPU executables (v10) ────────────────────────────────────────
+    'IndexerGPU',
+    'IndexerScanningGPU',
+    'FitPosOrStrainsGPU',
+    'FitOrStrainsScanningGPU',
+    'IntegratorFitPeaksGPUStream',
 
-    # MIDAS Python workflows
-    'ff_MIDAS.py', 'nf_MIDAS.py', 'pf_MIDAS.py',
+    # ── FF-HEDM calibration & integration ───────────────────────────────────
+    'CalibrantIntegratorOMP',       # primary calibrant integrator (v10)
+    'CalibrantPanelShiftsOMP',      # multi-panel shift calibration (v10)
+    'CalibrantOMP',                 # legacy (keep for compatibility)
+    'FitTiltBCLsdSample',
+    'IntegratorZarrOMP',            # primary integrator (v10)
+    'IntegratorZarrOMP_f32',        # float32 variant
+    'DetectorMapper',
+    'MapDatasets',
+    'ForwardSimulationCompressed',
+    'findSingleSolutionPFRefactored',
+    'findMultipleSolutionsPF',
+    'FindSaturatedPixels',
+    'CalcRadius',
 
-    # MIDAS utilities
-    'GE2Tiff.py', 'calcMiso.py', 'SpotMatrixToSpotsHDF.py',
-    'hdf_gen_nf.py', 'nf_paraview_gen.py', 'PlotFFNF.py',
-    'NFGrainCentroids.py', 'extractPeaks.py', 'mergePeaks.py',
-    'simulatePeaks.py', 'GFF2Grains.py', 'batchImages.py',
-    'run_full_images_ff.py', 'ffGenerateZip.py',
-    'ffGenerateZipRefactor.py'
+    # ── NF-HEDM executables ──────────────────────────────────────────────────
+    'GetHKLListNF',
+    'MakeHexGrid',
+    'MakeDiffrSpots',
+    'MedianImageLibTiff',
+    'ProcessImagesCombined',        # replaces ImageProcessingLibTiffOMP (v10)
+    'MMapImageInfo',
+    'FitOrientationOMP',
+    'FitOrientationGPU',            # GPU NF reconstruction (v10)
+    'FitOrientationParameters',
+    'FitOrientationParametersMultiPoint',
+    'GenSeedOrientationsFF2NFHEDM',
+    'SimulateDiffractionSpots',
+    'filterGridfromTomo',
+    'ParseMic',
+    'ParseDeconvOutput',
+    'Mic2GrainsList',
+    'NFGrainCentroids',
+    'compareNF',
+    'simulateNF',
+
+    # ── TOMO executables ─────────────────────────────────────────────────────
+    'GenMedianDark',
+
+    # ── Python workflow drivers ──────────────────────────────────────────────
+    'ff_MIDAS.py',
+    'nf_MIDAS.py',
+    'nf_MIDAS_Multiple_Resolutions.py',
+    'pf_MIDAS.py',
+    'integrator.py',
+    'integrator_server.py',
+    'integrator_batch_process.py',
+    'AutoCalibrateZarr.py',
+    'ffGenerateZipRefactor.py',
+    'ffGenerateZip.py',
+    'runDTrecon.py',
+
+    # ── Python utilities (v10) ───────────────────────────────────────────────
+    'match_grains.py',
+    'phase_id.py',
+    'validate_calibration.py',
+    'generate_mask.py',
+    'undistort_image.py',
+    'updateZarrDset.py',
+    'extract_lineouts.py',
+    'fit_caked_peaks.py',
+    'BatchCake.py',
+    'runScanning.py',
+    'evalScanning.py',
+    'calcMiso.py',
+    'simulatePeaks.py',
+    'blobPeaksearch.py',
+    'nf_paraview_gen.py',
+    'nf_mic_to_grains.py',
+    'NFGrainCentroids.py',
+    'DL2FF.py',
+    'GE2Tiff.py',
+    'hdf_gen_nf.py',
+    'PlotFFNF.py',
 }
 
 # =============================================================================

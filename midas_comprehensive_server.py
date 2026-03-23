@@ -462,7 +462,10 @@ async def run_ff_hedm_full_workflow(
     do_peak_search: bool = True,
     grains_seed_file: str = None,
     machine_name: str = "local",
-    convert_files: bool = True
+    convert_files: bool = True,
+    use_gpu: bool = False,
+    resume_file: str = None,
+    restart_from: str = None
 ) -> str:
     """Run complete FF-HEDM production workflow using ff_MIDAS.py.
 
@@ -473,9 +476,9 @@ async def run_ff_hedm_full_workflow(
     4. Peak merging (MergeOverlappingPeaksAllZarr)
     5. Data preparation (CalcRadiusAllZarr, FitSetupZarr)
     6. Data binning (SaveBinData)
-    7. Indexing (IndexerOMP)
-    8. Refinement (FitPosOrStrainsOMP)
-    9. Post-processing (ProcessGrainsZarr)
+    7. Indexing (IndexerOMP or IndexerGPU if use_gpu=True)
+    8. Refinement (FitPosOrStrainsOMP or FitPosOrStrainsGPU if use_gpu=True)
+    9. Post-processing (ProcessGrains)
 
     Args:
         result_folder: Output directory for results
@@ -488,6 +491,9 @@ async def run_ff_hedm_full_workflow(
         grains_seed_file: Optional seed grains file for indexing
         machine_name: Machine config (local, orthrosnew, umich, polaris)
         convert_files: Whether to convert raw data to Zarr
+        use_gpu: Use GPU executables (IndexerGPU, FitPosOrStrainsGPU) — v10 feature
+        resume_file: Path to checkpoint file to resume from (--resume flag) — v10 feature
+        restart_from: Step name to restart workflow from (--restartFrom flag) — v10 feature
 
     Returns:
         JSON with workflow status, output files, and grain statistics
@@ -517,6 +523,13 @@ async def run_ff_hedm_full_workflow(
             "-doPeakSearch", "1" if do_peak_search else "0",
             "-convertFiles", "1" if convert_files else "0"
         ]
+
+        if use_gpu:
+            args.append("-useGPU")
+        if resume_file:
+            args.extend(["--resume", resume_file])
+        if restart_from:
+            args.extend(["--restartFrom", restart_from])
 
         if grains_seed_file:
             valid, seed_path = validate_file(grains_seed_file)
@@ -592,7 +605,11 @@ async def run_pf_hedm_workflow(
     one_solution_per_voxel: bool = True,
     normalize_intensities: str = "none",
     do_peak_search: bool = True,
-    machine_name: str = "local"
+    machine_name: str = "local",
+    use_gpu: bool = False,
+    resume_file: str = None,
+    restart_from: str = None,
+    do_tomo: bool = False
 ) -> str:
     """Run Point-Focus HEDM scanning workflow using pf_MIDAS.py.
 
@@ -607,6 +624,10 @@ async def run_pf_hedm_workflow(
         normalize_intensities: Normalization method (none, max, sum)
         do_peak_search: Whether to perform peak search
         machine_name: Machine config (local, orthrosnew, umich, polaris)
+        use_gpu: Use GPU executables — v10 feature
+        resume_file: Path to checkpoint file to resume from (--resume flag) — v10 feature
+        restart_from: Step name to restart from (--restartFrom flag) — v10 feature
+        do_tomo: Enable tomographic reconstruction mode — v10 feature
 
     Returns:
         JSON with workflow status and 3D orientation map data
@@ -630,6 +651,15 @@ async def run_pf_hedm_workflow(
             "-oneSolPerVox", "1" if one_solution_per_voxel else "0",
             "-normalizeIntensities", normalize_intensities
         ]
+
+        if use_gpu:
+            args.append("-useGPU")
+        if do_tomo:
+            args.append("-doTomo")
+        if resume_file:
+            args.extend(["--resume", resume_file])
+        if restart_from:
+            args.extend(["--restartFrom", restart_from])
 
         print("Starting PF-HEDM scanning workflow", file=sys.stderr)
 
@@ -719,8 +749,8 @@ async def run_ff_calibration(
             "steps": []
         }
 
-        # Step 1: Run calibrant fitting
-        exe = "CalibrantOMP" if use_omp else "Calibrant"
+        # Step 1: Run calibrant fitting (v10: CalibrantIntegratorOMP is primary)
+        exe = "CalibrantIntegratorOMP" if use_omp else "Calibrant"
         print(f"Running {exe} for {calibrant}", file=sys.stderr)
 
         result = run_midas_executable(exe, param_path, cwd=str(work_dir), timeout=600)
@@ -904,6 +934,91 @@ async def run_ff_grain_tracking(
             "error": str(e)
         })
 
+@mcp.tool()
+async def match_grains(
+    grains_files: list,
+    output_file: str = "matched_grains.csv",
+    position_tolerance: float = 100.0,
+    orientation_tolerance: float = 2.0,
+    match_across_layers: bool = False,
+    layer_spacing: float = None
+) -> str:
+    """Match grains across multiple datasets using Hungarian algorithm (v10).
+
+    Uses match_grains.py to link grain IDs across load states, temperatures,
+    or NF-HEDM layers using the Hungarian (linear sum assignment) algorithm.
+    Supports both in-situ load matching and layer-to-layer stitching.
+
+    Args:
+        grains_files: List of Grains.csv files to match (in order)
+        output_file: Output CSV with matched grain IDs across datasets
+        position_tolerance: Max centroid distance for matching (microns)
+        orientation_tolerance: Max misorientation for matching (degrees)
+        match_across_layers: Match grains between NF-HEDM layers for stitching
+        layer_spacing: Layer spacing in microns (required if match_across_layers=True)
+
+    Returns:
+        JSON with matching statistics and matched grain IDs
+    """
+    try:
+        valid_files = []
+        for gf in grains_files:
+            valid, path = validate_file(gf)
+            if valid:
+                valid_files.append(path)
+            else:
+                return format_result({"error": f"File not found: {gf}", "status": "failed"})
+
+        if len(valid_files) < 2:
+            return format_result({"error": "Need at least 2 grains files", "status": "failed"})
+
+        work_dir = Path(valid_files[0]).parent
+        output_path = work_dir / output_file
+
+        args = [
+            "--files", *valid_files,
+            "--output", str(output_path),
+            "--positionTolerance", str(position_tolerance),
+            "--orientationTolerance", str(orientation_tolerance)
+        ]
+
+        if match_across_layers:
+            args.append("--matchLayers")
+        if layer_spacing is not None:
+            args.extend(["--layerSpacing", str(layer_spacing)])
+
+        print(f"Matching grains across {len(valid_files)} datasets", file=sys.stderr)
+
+        result = run_python_script("match_grains.py", args, cwd=str(work_dir), timeout=600)
+
+        match_stats = {"n_datasets": len(valid_files), "datasets": valid_files}
+
+        if output_path.exists():
+            try:
+                with open(output_path, 'r') as f:
+                    match_stats["n_matched_grains"] = sum(1 for line in f) - 1
+            except:
+                pass
+
+        return format_result({
+            "tool": "match_grains",
+            "status": "completed" if result["success"] else "failed",
+            "workflow": "Grain Matching (Hungarian)",
+            "execution": result,
+            "parameters": {
+                "n_datasets": len(valid_files),
+                "position_tolerance_um": position_tolerance,
+                "orientation_tolerance_deg": orientation_tolerance,
+                "match_across_layers": match_across_layers
+            },
+            "statistics": match_stats,
+            "output_file": str(output_path) if output_path.exists() else None
+        })
+
+    except Exception as e:
+        return format_result({"tool": "match_grains", "status": "error", "error": str(e)})
+
+
 # =============================================================================
 # NF-HEDM RECONSTRUCTION TOOLS
 # =============================================================================
@@ -918,7 +1033,10 @@ async def run_nf_hedm_reconstruction(
     refine_parameters: bool = False,
     multi_grid_points: bool = False,
     machine_name: str = "local",
-    n_nodes: int = 1
+    n_nodes: int = 1,
+    use_gpu: bool = False,
+    resume_file: str = None,
+    restart_from: str = None
 ) -> str:
     """Run complete NF-HEDM microstructure reconstruction using nf_MIDAS.py.
 
@@ -930,8 +1048,8 @@ async def run_nf_hedm_reconstruction(
        - Pre-processing: GetHKLListNF, GenSeedOrientationsFF2NFHEDM
        - Grid creation: MakeHexGrid
        - Spot simulation: MakeDiffrSpots
-       - Image processing: MedianImageLibTiff, ImageProcessingLibTiffOMP
-       - Fitting: FitOrientationOMP
+       - Image processing: MedianImageLibTiff, ProcessImagesCombined
+       - Fitting: FitOrientationOMP or FitOrientationGPU (if use_gpu=True)
        - Post-processing: ParseMic
 
     2. Parameter refinement mode (refine_parameters=True):
@@ -947,6 +1065,9 @@ async def run_nf_hedm_reconstruction(
         multi_grid_points: Use multiple grid points for parameter refinement
         machine_name: Machine config (local, orthrosnew, umich, polaris)
         n_nodes: Number of compute nodes for HPC
+        use_gpu: Use FitOrientationGPU (-gpuFit flag) — v10 feature
+        resume_file: Path to checkpoint file to resume from (--resume flag) — v10 feature
+        restart_from: Step name to restart from (--restartFrom flag) — v10 feature
 
     Returns:
         JSON with reconstruction status and Grains.mic output info
@@ -977,6 +1098,13 @@ async def run_nf_hedm_reconstruction(
             "-doImageProcessing", "1" if do_image_processing else "0",
             "-multiGridPoints", "1" if multi_grid_points else "0"
         ]
+
+        if use_gpu:
+            args.append("-gpuFit")
+        if resume_file:
+            args.extend(["--resume", resume_file])
+        if restart_from:
+            args.extend(["--restartFrom", restart_from])
 
         mode = "Parameter Refinement" if refine_parameters else "Full Reconstruction"
         print(f"Starting NF-HEDM {mode}", file=sys.stderr)
@@ -1830,15 +1958,19 @@ async def validate_midas_installation(
         validation["bin_exists"] = bin_path.exists()
 
         key_executables = [
-            # FF-HEDM
-            "IndexerOMP", "FitPosOrStrainsOMP", "ProcessGrainsZarr",
+            # FF-HEDM CPU
+            "IndexerOMP", "FitPosOrStrainsOMP", "ProcessGrains",
             "GetHKLListZarr", "PeaksFittingOMPZarrRefactor",
-            "CalibrantOMP", "ForwardSimulationCompressed",
+            "CalibrantIntegratorOMP", "ForwardSimulationCompressed",
+            # FF-HEDM GPU (v10)
+            "IndexerGPU", "FitPosOrStrainsGPU",
+            # Calibration & Integration (v10)
+            "IntegratorZarrOMP", "CalibrantPanelShiftsOMP",
             # NF-HEDM
-            "FitOrientationOMP", "GetHKLListNF", "MakeHexGrid",
-            "ParseMic", "NFGrainCentroids",
+            "FitOrientationOMP", "FitOrientationGPU", "GetHKLListNF",
+            "MakeHexGrid", "ParseMic", "ProcessImagesCombined",
             # Utilities
-            "GrainTracking", "CalcStrains"
+            "GrainTracking", "CalcStrains", "FitWedgeParallel"
         ]
 
         for exe in key_executables:
@@ -1847,9 +1979,11 @@ async def validate_midas_installation(
 
         # Check Python workflows
         workflow_scripts = {
-            "ff_MIDAS.py": midas_root / "FF_HEDM" / "v7" / "ff_MIDAS.py",
-            "pf_MIDAS.py": midas_root / "FF_HEDM" / "v7" / "pf_MIDAS.py",
-            "nf_MIDAS.py": midas_root / "NF_HEDM" / "v7" / "nf_MIDAS.py"
+            "ff_MIDAS.py": midas_root / "FF_HEDM" / "ff_MIDAS.py",
+            "pf_MIDAS.py": midas_root / "FF_HEDM" / "pf_MIDAS.py",
+            "nf_MIDAS.py": midas_root / "NF_HEDM" / "nf_MIDAS.py",
+            "match_grains.py": midas_root / "utils" / "match_grains.py",
+            "AutoCalibrateZarr.py": midas_root / "utils" / "AutoCalibrateZarr.py"
         }
 
         for script, path in workflow_scripts.items():
