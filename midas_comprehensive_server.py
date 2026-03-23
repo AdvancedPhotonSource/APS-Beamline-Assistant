@@ -351,7 +351,7 @@ def run_midas_executable(executable: str, param_file: str, cwd: str = None,
         if env is None:
             env = get_midas_env()
         cmd = [str(exe_path), str(param_file)]
-        print(f"  CMD: {' '.join(cmd)}", file=sys.stderr)
+        print(f"  $ {' '.join(cmd)}", file=sys.stderr)
         result = subprocess.run(
             cmd,
             capture_output=True,
@@ -409,7 +409,7 @@ def run_python_script(script_name: str, args: list, cwd: str = None,
         # Use MIDAS Python (conda midas_env) instead of "python"
         midas_python = find_midas_python()
         cmd = [midas_python, str(script_path)] + args
-        print(f"  CMD: {' '.join(cmd)}", file=sys.stderr)
+        print(f"  $ {' '.join(cmd)}", file=sys.stderr)
         result = subprocess.run(
             cmd,
             capture_output=True,
