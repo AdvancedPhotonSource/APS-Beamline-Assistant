@@ -1108,38 +1108,26 @@ class APEXAClient:
                 await session.initialize()
                 
                 self.sessions[name] = session
-                
-                response = await session.list_tools()
-                tools = response.tools
-                print(f"✓ Connected to {name} server with tools: {[tool.name for tool in tools]}")
-                
-            except Exception as e:
-                print(f"✗ Failed to connect to {name} server: {e}")
-        
-        if "midas" in self.sessions:
-            self.session = self.sessions["midas"]
 
-        # Build tool registry and tool list once (not per-query)
-        self._tool_registry   = {}
-        self._available_tools = []
-        for server_name, session in self.sessions.items():
-            try:
+                # Build tool registry for this server in same pass
                 response = await session.list_tools()
                 for tool in response.tools:
-                    bare_name = tool.name   # use the name as registered on the server
-                    self._tool_registry[bare_name] = server_name
+                    self._tool_registry[tool.name] = name
                     self._available_tools.append({
                         "type": "function",
                         "function": {
-                            "name":        bare_name,
-                            "description": f"[{server_name.upper()}] {tool.description}",
+                            "name":        tool.name,
+                            "description": f"[{name.upper()}] {tool.description}",
                             "parameters":  tool.inputSchema,
                         },
                     })
-            except Exception as e:
-                print(f"✗ Failed to build tool registry for {server_name}: {e}")
+                print(f"  {name}: {len(response.tools)} tools")
 
-        print(f"✓ Tool registry built: {len(self._available_tools)} tools across {len(self.sessions)} servers")
+            except Exception as e:
+                print(f"  {name}: FAILED ({e})")
+
+        if "midas" in self.sessions:
+            self.session = self.sessions["midas"]
 
         # Initialise the orchestrator (Phase 2 core)
         self.orchestrator = OrchestratorAgent(
@@ -1149,8 +1137,6 @@ class APEXAClient:
         )
 
     async def execute_tool_call(self, tool_name: str, arguments: Dict[str, Any]) -> str:
-        # Clean output - just show what we're doing
-        print(f"\n→ {tool_name.replace('midas_', '').replace('_', ' ').title()}")
 
         # ===== ERROR PREVENTION =====
         # Validate parameters before execution
@@ -1237,17 +1223,11 @@ class APEXAClient:
         return False
 
     async def interactive_analysis_session(self):
-        print(f"\n╔══════════════════════════════════════════════════════════════╗")
-        print(f"║  APEXA - Advanced Photon EXperiment Assistant               ║")
-        print(f"║  Your AI Scientist at the Beamline                          ║")
-        print(f"╚══════════════════════════════════════════════════════════════╝")
-        print()
-        print(f"🤖 AI Model: {self.selected_model}")
-        print(f"👤 User: {self.anl_username}")
-        print(f"🔌 Servers: {', '.join(list(self.sessions.keys()))}")
-        print()
-        print("Commands: analyze, batch, workflow, session, image, monitor, models, tools, clear, help, quit")
-        print()
+        n_tools = len(self._available_tools)
+        servers = ', '.join(self.sessions.keys())
+        print(f"\n  APEXA - Advanced Photon EXperiment Assistant")
+        print(f"  Model: {self.selected_model} ({self.environment})  |  {n_tools} tools  |  Servers: {servers}")
+        print(f"  Type 'help' for commands, 'quit' to exit\n")
         
         # Command history
         history = []

@@ -168,20 +168,7 @@ class ArgoProvider:
             headers={"Content-Type": "application/json"},
         )
         response.raise_for_status()
-        data = response.json()
-
-        # Debug: show Argo response structure
-        if "response" in data:
-            resp = data["response"]
-            if isinstance(resp, dict):
-                has_tc = bool(resp.get("tool_calls"))
-                print(f"  [Argo] dict response, tool_calls={has_tc}")
-            else:
-                print(f"  [Argo] string response ({len(str(resp))} chars)")
-        else:
-            print(f"  [Argo] keys={list(data.keys())}")
-
-        return self._parse_response(data)
+        return self._parse_response(response.json())
 
     async def close(self):
         await self._client.aclose()
@@ -507,17 +494,14 @@ class AgentRunner:
             messages.extend(history[-10:])   # last 5 exchanges
         messages.append({"role": "user", "content": query})
 
-        print(f"  [{agent.name}] {len(tools)} tools available")
-
         for iteration in range(max_iterations):
             response = await provider.chat(messages, agent.temperature)
 
             # ── Mode 1: Native API tool_calls ──
             if response.tool_calls:
                 messages.append(self._assistant_message(response, provider.model))
-                print(f"\n→ [{agent.name}] {len(response.tool_calls)} native tool call(s)")
                 for tc in response.tool_calls:
-                    print(f"  • {tc.name}")
+                    print(f"  → {tc.name}")
                     result = await self._execute(tc.name, tc.arguments)
                     messages.append(
                         self._tool_result_message(tc, result, provider.model)
@@ -534,9 +518,8 @@ class AgentRunner:
                 if prose:
                     messages.append({"role": "assistant", "content": prose})
 
-                print(f"\n→ [{agent.name}] {len(text_calls)} text tool call(s)")
                 for tc in text_calls:
-                    print(f"  • {tc.name}")
+                    print(f"  → {tc.name}")
                     result = await self._execute(tc.name, tc.arguments)
                     messages.append({
                         "role": "user",
