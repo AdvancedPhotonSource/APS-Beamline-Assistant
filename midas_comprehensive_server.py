@@ -125,46 +125,52 @@ def find_midas_python() -> str:
     )
 
 def get_midas_env() -> dict:
-    """Get environment variables needed for MIDAS executables.
+    """Get environment variables needed for MIDAS C++ executables.
 
-    Sets up library paths for C++ binaries, adds MIDAS bin to PATH,
-    and ensures Python environment is correct.
+    Sets DYLD_LIBRARY_PATH / LD_LIBRARY_PATH so C++ binaries find MIDAS's
+    own libhdf5, libfftw3, etc.  Do NOT use this for Python scripts —
+    overriding DYLD_LIBRARY_PATH breaks h5py in the midas conda env.
     """
     env = os.environ.copy()
 
-    # Add MIDAS bin directory to PATH (for CalibrantOMP, Integrator, etc.)
-    midas_bin_paths = [
-        str(MIDAS_BIN),
-        str(MIDAS_ROOT / "bin"),
-    ]
+    # Add MIDAS bin directory to PATH
+    midas_bin_paths = [str(MIDAS_BIN), str(MIDAS_ROOT / "bin")]
+    env["PATH"] = ":".join(midas_bin_paths + [env.get("PATH", "")])
 
-    if "PATH" in env:
-        env["PATH"] = ":".join(midas_bin_paths + [env["PATH"]])
-    else:
-        env["PATH"] = ":".join(midas_bin_paths)
-
-    # Add MIDAS library paths for C++ binaries
-    lib_paths = [
-        str(MIDAS_BIN.parent / "lib"),
-        str(MIDAS_ROOT / "lib"),
-    ]
+    # Library paths for C++ binaries (CalibrantIntegratorOMP, IndexerOMP, etc.)
+    lib_paths = [str(MIDAS_BIN.parent / "lib"), str(MIDAS_ROOT / "lib")]
 
     if "LD_LIBRARY_PATH" in env:
         env["LD_LIBRARY_PATH"] = ":".join(lib_paths + [env["LD_LIBRARY_PATH"]])
     else:
         env["LD_LIBRARY_PATH"] = ":".join(lib_paths)
 
-    # For macOS
+    # macOS: needed for C++ executables to find MIDAS dylibs
     if "DYLD_LIBRARY_PATH" in env:
         env["DYLD_LIBRARY_PATH"] = ":".join(lib_paths + [env["DYLD_LIBRARY_PATH"]])
     else:
         env["DYLD_LIBRARY_PATH"] = ":".join(lib_paths)
 
-    # Set MIDAS_PATH for scripts that need it
+    env["MIDAS_PATH"] = str(MIDAS_ROOT)
+    return env
+
+
+def get_midas_python_env() -> dict:
+    """Get environment variables for MIDAS Python scripts (AutoCalibrateZarr, ff_MIDAS, etc.).
+
+    Deliberately does NOT set DYLD_LIBRARY_PATH / LD_LIBRARY_PATH — overriding
+    those breaks h5py in the midas conda env (libhdf5 symbol mismatch on macOS).
+    Only adds PYTHONPATH and MIDAS_PATH.
+    """
+    env = os.environ.copy()
+
+    # Add MIDAS bin to PATH so any CalibrantIntegratorOMP calls inside scripts work
+    midas_bin_paths = [str(MIDAS_BIN), str(MIDAS_ROOT / "bin")]
+    env["PATH"] = ":".join(midas_bin_paths + [env.get("PATH", "")])
+
     env["MIDAS_PATH"] = str(MIDAS_ROOT)
 
-    # Add MIDAS/utils to PYTHONPATH so midas_config and other MIDAS modules are importable
-    # regardless of the working directory the script is launched from
+    # MIDAS/utils must be on PYTHONPATH so midas_config is importable
     midas_utils = str(MIDAS_ROOT / "utils")
     if "PYTHONPATH" in env:
         env["PYTHONPATH"] = midas_utils + ":" + env["PYTHONPATH"]
@@ -426,7 +432,8 @@ def run_python_script(script_name: str, args: list, cwd: str = None,
             capture_output=True,
             text=True,
             timeout=timeout,
-            cwd=cwd
+            cwd=cwd,
+            env=get_midas_python_env()  # Python script — no DYLD_LIBRARY_PATH override
         )
 
         return {
@@ -2860,18 +2867,22 @@ async def midas_auto_calibrate(
             capture_output=True,
             text=True,
             timeout=600,  # 10 minute timeout
-            env=get_midas_env()  # Set proper library paths and environment
+            env=get_midas_python_env()  # Python script — no DYLD_LIBRARY_PATH override
         )
 
         if result.returncode != 0:
-            error_msg = f"Calibration failed with code {result.returncode}"
+            error_msg = f"Calibration failed with exit code {result.returncode}"
 
-            # Check for common issues
-            if "ModuleNotFoundError" in result.stderr or "ImportError" in result.stderr:
-                error_msg += "\n\nMissing Python dependencies for MIDAS AutoCalibrateZarr.py"
-                error_msg += "\nRequired: zarr, numpy, scipy, diplib, matplotlib, pandas, plotly, h5py, numba"
-                error_msg += "\n\nOn beamline computers, ensure MIDAS Python environment is activated."
-                error_msg += "\nFor local testing: pip install zarr numpy scipy diplib matplotlib pandas plotly h5py numba"
+            # Print raw stderr to terminal so operator can see the real error
+            print(f"❌ Calibration failed (exit code {result.returncode})", file=sys.stderr)
+            if result.stderr:
+                print("--- stderr (last 20 lines) ---", file=sys.stderr)
+                for line in result.stderr.strip().splitlines()[-20:]:
+                    print(f"  {line}", file=sys.stderr)
+            if result.stdout:
+                print("--- stdout (last 5 lines) ---", file=sys.stderr)
+                for line in result.stdout.strip().splitlines()[-5:]:
+                    print(f"  {line}", file=sys.stderr)
 
             return format_result({
                 "tool": "midas_auto_calibrate",
