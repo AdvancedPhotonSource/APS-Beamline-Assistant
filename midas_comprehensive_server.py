@@ -2209,275 +2209,107 @@ async def get_midas_workflow_status(
 
 @mcp.tool()
 async def midas_integrate_2d_to_1d(
-    image_path: str,
-    calibration_file: str = None,
-    wavelength: float = None,
-    detector_distance: float = None,
-    beam_center_x: float = None,
-    beam_center_y: float = None,
+    image_file: str,
+    param_file: str,
     dark_file: str = None,
-    output_file: str = None
+    result_folder: str = None,
+    n_cpus: int = 4,
+    convert_files: bool = True
 ) -> str:
-    """Integrate 2D diffraction image to 1D pattern using MIDAS Integrator (MIDAS Official).
+    """Integrate a single 2D diffraction image to a 1D lineout using MIDAS integrator.py (v10).
 
-    ⚠️ WORKFLOW REQUIREMENT:
-    This tool REQUIRES calibrated detector parameters from midas_auto_calibrate.
-    Always run midas_auto_calibrate FIRST to generate refined_MIDAS_params.txt
+    REQUIRES calibrated params from midas_auto_calibrate (refined_MIDAS_params*.txt).
+    integrator.py runs DetectorMapper automatically if Map.bin is missing.
 
-    ✨ AUTOMATED: Runs DetectorMapper if Map.bin missing (one-time setup per directory)
+    v10 executable chain:
+      integrator.py → IntegratorZarrOMP (replaces old Integrator binary)
 
-    MIDAS Component: Integrator (C++ executable)
-    Location: MIDAS/FF_HEDM/bin/Integrator
-    Manual Reference: FF_Analysis.md (azimuthal integration step)
-
-    DESCRIPTION:
-    Converts a 2D detector image into a 1D azimuthally-integrated intensity vs. 2θ pattern.
-    Uses MIDAS's native Integrator executable (not pyFAI) for consistency with MIDAS workflows.
-    Supports dark image subtraction and various detector formats (TIFF, GE2/GE5, ED5, EDF).
-
-    AUTOMATED WORKFLOW:
-    1. Check for Map.bin and nMap.bin in working directory
-    2. If missing: Auto-run DetectorMapper to create geometry maps
-    3. Run MIDAS Integrator for azimuthal integration
-    4. Return 1D pattern (.dat file)
-
-    FF-HEDM WORKFLOW POSITION:
-    Step 2 - INTEGRATION (after calibration, before phase ID)
-    ├─ Prerequisites: midas_auto_calibrate (must have refined_MIDAS_params.txt)
-    ├─ Input: 2D diffraction image + calibrated parameters
-    ├─ Output: 1D intensity vs. 2theta pattern
-    └─ Next steps: Phase identification (use GSAS-II or utilities server)
+    Outputs written to result_folder (default: image_dir/integration/):
+      *_lineout.xy         — 2θ (degrees) vs intensity text file
+      *_lineout.bin        — binary lineout
+      *_caked.hdf.zarr.zip — caked output (GSAS-II compatible)
+      Map.bin / nMap.bin / maskMap.bin — geometry maps (first run only)
 
     Args:
-        image_path: Path to 2D diffraction image (.tiff, .ge2, .ge5, .ed5, .edf)
-        calibration_file: MIDAS parameters file with detector geometry (wavelength, distance, BC, etc.)
-        wavelength: X-ray wavelength in Angstroms (creates temp param file if calibration_file not provided)
-        detector_distance: Sample-to-detector distance in mm
-        beam_center_x: Beam center X coordinate in pixels
-        beam_center_y: Beam center Y coordinate in pixels
-        dark_file: Optional dark image file for background subtraction (.tiff, .ge2, .ge5, .ed5)
-        output_file: Output filename for 1D pattern (default: image_name_1d.dat)
-
-    Returns:
-        JSON with integration results using MIDAS Integrator
-
-    Example:
-        With calibration file from midas_auto_calibrate:
-        integrate_2d_to_1d("CeO2.tif", "ParametersCalibrated.txt", dark_file="dark.tif")
-
-        Or provide parameters directly:
-        integrate_2d_to_1d("CeO2.tif", wavelength=0.1741, detector_distance=1998.5,
-                          beam_center_x=1450, beam_center_y=1426)
+        image_file: Path to 2D diffraction image (.tif/.tiff, .ge/.ge1-.ge5, .h5/.hdf5, .zip)
+        param_file: Calibrated MIDAS parameter file (refined_MIDAS_params*.txt)
+        dark_file: Optional dark field image for background subtraction
+        result_folder: Output directory (default: <image_dir>/integration)
+        n_cpus: OMP threads for IntegratorZarrOMP (default: 4)
+        convert_files: Convert input to Zarr before integrating (default: True)
     """
     try:
-        image_path = Path(image_path).expanduser().absolute()
+        image_path = Path(image_file).expanduser().absolute()
+        param_path = Path(param_file).expanduser().absolute()
 
         if not image_path.exists():
-            return format_result({
-                "tool": "integrate_2d_to_1d",
-                "status": "error",
-                "error": f"Image not found: {image_path}"
-            })
+            return format_result({"tool": "midas_integrate_2d_to_1d", "status": "error",
+                                  "error": f"Image not found: {image_path}"})
+        if not param_path.exists():
+            return format_result({"tool": "midas_integrate_2d_to_1d", "status": "error",
+                                  "error": f"Parameter file not found: {param_path}"})
 
-        # Set output file
-        if output_file is None:
-            output_file = image_path.stem + "_1d.dat"
+        # Find integrator.py in MIDAS/utils/
+        integrator_script = MIDAS_ROOT / "utils" / "integrator.py"
+        if not integrator_script.exists():
+            return format_result({"tool": "midas_integrate_2d_to_1d", "status": "error",
+                                  "error": f"integrator.py not found at {integrator_script}"})
 
-        output_path = image_path.parent / output_file
+        out_dir = Path(result_folder).expanduser().absolute() if result_folder \
+                  else image_path.parent / "integration"
+        out_dir.mkdir(parents=True, exist_ok=True)
 
-        # Primary method: Use MIDAS Integrator (preferred for consistency with MIDAS workflow)
-        if MIDAS_AVAILABLE and calibration_file:
-            cal_path = Path(calibration_file).expanduser().absolute()
-            if not cal_path.exists():
-                return format_result({
-                    "tool": "integrate_2d_to_1d",
-                    "status": "error",
-                    "error": f"Parameters file not found: {cal_path}"
-                })
+        midas_python = find_midas_python()
+        cmd = [
+            midas_python, str(integrator_script),
+            "-paramFN",      str(param_path),
+            "-dataFN",       str(image_path),
+            "-resultFolder", str(out_dir),
+            "-nCPUsLocal",   str(n_cpus),
+            "-nCPUs",        "1",
+            "-mapDetector",  "1",
+            "-convertFiles", "1" if convert_files else "0",
+            "-writeMat",     "0",
+        ]
+        if dark_file:
+            dark_path = Path(dark_file).expanduser().absolute()
+            if not dark_path.exists():
+                return format_result({"tool": "midas_integrate_2d_to_1d", "status": "error",
+                                      "error": f"Dark file not found: {dark_path}"})
+            cmd += ["-darkFN", str(dark_path)]
 
-            # Locate MIDAS Integrator executable
-            integrator_exe = MIDAS_ROOT / "FF_HEDM" / "bin" / "Integrator"
-            if not integrator_exe.exists():
-                return format_result({
-                    "tool": "integrate_2d_to_1d",
-                    "status": "error",
-                    "error": f"MIDAS Integrator not found at {integrator_exe}"
-                })
+        print(f"\n  $ {' '.join(cmd)}", file=sys.stderr)
 
-            # Build command: Integrator ParamFN ImageName (optional)DarkName
-            cmd = [str(integrator_exe), str(cal_path), str(image_path)]
+        result = subprocess.run(cmd, cwd=str(image_path.parent),
+                                capture_output=True, text=True,
+                                timeout=600, env=get_midas_env())
 
-            # Add dark file if provided
-            if dark_file:
-                dark_path = Path(dark_file).expanduser().absolute()
-                if not dark_path.exists():
-                    return format_result({
-                        "tool": "midas_integrate_2d_to_1d",
-                        "status": "error",
-                        "error": f"Dark file not found: {dark_path}"
-                    })
-                cmd.append(str(dark_path))
+        if result.returncode != 0:
+            print(f"❌ Integration failed (exit {result.returncode})", file=sys.stderr)
+            for line in result.stderr.strip().splitlines()[-20:]:
+                print(f"  {line}", file=sys.stderr)
+            return format_result({"tool": "midas_integrate_2d_to_1d", "status": "error",
+                                  "error": f"integrator.py exited {result.returncode}",
+                                  "stderr": result.stderr, "stdout": result.stdout})
 
-            # ===== AUTO-RUN DetectorMapper if Map.bin missing =====
-            map_bin = image_path.parent / "Map.bin"
-            nmap_bin = image_path.parent / "nMap.bin"
+        lineout = sorted(out_dir.glob("*_lineout.xy"), key=lambda p: p.stat().st_mtime, reverse=True)
+        zarr_out = sorted(out_dir.glob("*_caked.hdf.zarr.zip"), key=lambda p: p.stat().st_mtime, reverse=True)
 
-            if not map_bin.exists() or not nmap_bin.exists():
-                print("\n" + "="*70, file=sys.stderr)
-                print("🗺️  Map.bin not found - Running DetectorMapper first", file=sys.stderr)
-                print("="*70, file=sys.stderr)
-
-                detector_mapper = None
-                if MIDAS_ROOT:
-                    dm_path = Path(MIDAS_ROOT) / "FF_HEDM" / "bin" / "DetectorMapper"
-                    if dm_path.exists():
-                        detector_mapper = dm_path
-
-                if not detector_mapper:
-                    return format_result({
-                        "tool": "midas_integrate_2d_to_1d",
-                        "status": "error",
-                        "error": "DetectorMapper not found in MIDAS installation"
-                    })
-
-                # Run DetectorMapper
-                dm_cmd = [str(detector_mapper), str(cal_path)]
-                print(f"   Running: {' '.join(dm_cmd)}", file=sys.stderr)
-
-                try:
-                    dm_result = subprocess.run(
-                        dm_cmd,
-                        cwd=str(image_path.parent),
-                        capture_output=True,
-                        text=True,
-                        timeout=120,
-                        env=get_midas_env()
-                    )
-
-                    if dm_result.returncode != 0:
-                        return format_result({
-                            "tool": "midas_integrate_2d_to_1d",
-                            "status": "error",
-                            "error": "DetectorMapper failed",
-                            "stderr": dm_result.stderr,
-                            "stdout": dm_result.stdout
-                        })
-
-                    print(f"✓ DetectorMapper completed - Map.bin created", file=sys.stderr)
-                    print("="*70 + "\n", file=sys.stderr)
-
-                except subprocess.TimeoutExpired:
-                    return format_result({
-                        "tool": "midas_integrate_2d_to_1d",
-                        "status": "error",
-                        "error": "DetectorMapper timed out (>2 minutes)"
-                    })
-
-            # ===== TRANSPARENCY: Show exact command being run =====
-            cmd_str = " ".join(cmd)
-            print("="*70, file=sys.stderr)
-            print("🔧 MIDAS INTEGRATION COMMAND:", file=sys.stderr)
-            print(f"   Working directory: {image_path.parent}", file=sys.stderr)
-            print(f"   Command: {cmd_str}", file=sys.stderr)
-            print("="*70, file=sys.stderr)
-
-            # Run MIDAS Integrator with proper environment
-            try:
-                result = subprocess.run(
-                    cmd,
-                    cwd=str(image_path.parent),
-                    capture_output=True,
-                    text=True,
-                    timeout=300,  # 5 minute timeout
-                    env=get_midas_env()  # Set proper library paths
-                )
-
-                if result.returncode != 0:
-                    return format_result({
-                        "tool": "midas_integrate_2d_to_1d",
-                        "status": "error",
-                        "method": "MIDAS Integrator",
-                        "command": cmd_str,
-                        "working_directory": str(image_path.parent),
-                        "error": f"Integration failed with code {result.returncode}",
-                        "stderr": result.stderr,
-                        "stdout": result.stdout
-                    })
-
-                # MIDAS Integrator creates output files in the working directory
-                # Look for generated 1D pattern file
-                output_1d = None
-                for pattern in ["*_1d.txt", "*_integ.dat", "*_integrated.dat"]:
-                    matches = list(image_path.parent.glob(pattern))
-                    if matches:
-                        # Find most recent
-                        output_1d = max(matches, key=lambda p: p.stat().st_mtime)
-                        break
-
-                dark_msg = f" with dark subtraction from {Path(dark_file).name}" if dark_file else ""
-
-                return format_result({
-                    "tool": "midas_integrate_2d_to_1d",
-                    "status": "success",
-                    "method": "MIDAS Integrator",
-                    "command": cmd_str,
-                    "working_directory": str(image_path.parent),
-                    "input_image": str(image_path),
-                    "parameters_file": str(cal_path),
-                    "dark_file": str(dark_file) if dark_file else None,
-                    "output_file": str(output_1d) if output_1d else "Check working directory for output",
-                    "stdout": result.stdout,
-                    "stderr": result.stderr if result.stderr else "(no errors)",
-                    "message": f"Successfully integrated {image_path.name} using MIDAS Integrator{dark_msg}"
-                })
-
-            except subprocess.TimeoutExpired:
-                return format_result({
-                    "tool": "midas_integrate_2d_to_1d",
-                    "status": "error",
-                    "error": "Integration timed out (>5 minutes)"
-                })
-            except Exception as e:
-                return format_result({
-                    "tool": "integrate_2d_to_1d",
-                    "status": "error",
-                    "method": "MIDAS Integrator",
-                    "error": str(e)
-                })
-
-        # If no calibration file, create one from provided parameters
-        elif wavelength is not None and detector_distance is not None and beam_center_x is not None and beam_center_y is not None:
-            # Create temporary MIDAS parameters file
-            temp_params = image_path.parent / "temp_integration_params.txt"
-
-            with open(temp_params, 'w') as f:
-                f.write(f"Wavelength {wavelength}\n")
-                f.write(f"Distance {detector_distance}\n")
-                f.write(f"BC {beam_center_y} {beam_center_x}\n")  # MIDAS uses Y X order
-                f.write(f"px 200\n")  # Default GE detector pixel size
-                f.write(f"SpaceGroup 1\n")  # Generic
-
-            # Recursively call with the temp parameters file
-            return await integrate_2d_to_1d(
-                image_path=str(image_path),
-                calibration_file=str(temp_params),
-                dark_file=dark_file,
-                output_file=output_file
-            )
-
-        else:
-            return format_result({
-                "tool": "integrate_2d_to_1d",
-                "status": "error",
-                "error": "Either parameters_file or all geometry parameters (wavelength, detector_distance, beam_center_x, beam_center_y) must be provided"
-            })
-
-    except Exception as e:
         return format_result({
-            "tool": "integrate_2d_to_1d",
-            "status": "error",
-            "error": str(e)
+            "tool": "midas_integrate_2d_to_1d", "status": "success",
+            "input_image": str(image_path),
+            "param_file": str(param_path),
+            "result_folder": str(out_dir),
+            "lineout_xy": str(lineout[0]) if lineout else "not found — check result_folder",
+            "zarr_zip": str(zarr_out[0]) if zarr_out else "not found",
+            "message": f"Integration complete. Lineout: {lineout[0].name if lineout else 'see result_folder'}"
         })
+
+    except subprocess.TimeoutExpired:
+        return format_result({"tool": "midas_integrate_2d_to_1d", "status": "error",
+                              "error": "integrator.py timed out (>10 min)"})
+    except Exception as e:
+        return format_result({"tool": "midas_integrate_2d_to_1d", "status": "error", "error": str(e)})
 
 # Phase identification tool moved to analysis_utilities_server.py as identify_phases_basic
 # Use GSAS-II server for comprehensive phase identification
@@ -3162,32 +2994,14 @@ async def midas_batch_integrate(
                 "error": f"Parameter file not found: {param_path}"
             })
 
-        # Find MIDAS integrator.py
-        midas_integrator = None
-        if MIDAS_ROOT:
-            integrator_path = Path(MIDAS_ROOT) / "utils" / "integrator.py"
-            if integrator_path.exists():
-                midas_integrator = integrator_path
-
-        # Also check common locations
-        common_paths = [
-            Path.home() / "opt" / "MIDAS" / "utils" / "integrator.py",
-            Path("/home/beams/S1IDUSER/opt/MIDAS/utils/integrator.py"),
-            Path("/clhome/TOMO1/opt/MIDAS/utils/integrator.py")
-        ]
-
-        if not midas_integrator:
-            for p in common_paths:
-                if p.exists():
-                    midas_integrator = p
-                    break
-
-        if not midas_integrator:
-            return format_result({
-                "tool": "midas_batch_integrate",
-                "status": "error",
-                "error": "MIDAS integrator.py not found. Expected locations: ~/opt/MIDAS/utils/integrator.py or MIDAS_ROOT/utils/integrator.py"
-            })
+        # Find MIDAS integrator.py via MIDAS_ROOT (set from .env)
+        if not MIDAS_ROOT:
+            return format_result({"tool": "midas_batch_integrate", "status": "error",
+                                  "error": "MIDAS_PATH not set. Add MIDAS_PATH to .env"})
+        midas_integrator = MIDAS_ROOT / "utils" / "integrator.py"
+        if not midas_integrator.exists():
+            return format_result({"tool": "midas_batch_integrate", "status": "error",
+                                  "error": f"integrator.py not found at {midas_integrator}"})
 
         # Create result folder
         result_path = Path(result_folder).resolve()
@@ -3196,8 +3010,9 @@ async def midas_batch_integrate(
         # Build integrator command
         # Based on: python ~/opt/MIDAS/utils/integrator.py -resultFolder ./ge1_cake -paramFN params.txt -dataFN data.h5 -dataLoc /exchange/data -darkFN dark.h5 -darkLoc /exchange/data -startFileNr 3083 -endFileNr 3085 -convertFiles 1 -mapDetector 1 -nCPUs 80 -writeMat 0 -numFrameChunks 10
 
+        midas_python = find_midas_python()
         cmd = [
-            "python3",
+            midas_python,
             str(midas_integrator),
             "-resultFolder", str(result_path),
             "-paramFN", str(param_path),
@@ -3214,44 +3029,21 @@ async def midas_batch_integrate(
             "-numFrameChunks", str(num_frame_chunks)
         ]
 
-        # ===== TRANSPARENCY: Show exact command being run =====
         cmd_str = " ".join(cmd)
-        print("="*70, file=sys.stderr)
-        print("🔧 MIDAS BATCH INTEGRATION COMMAND:", file=sys.stderr)
-        print(f"   Script: {midas_integrator}", file=sys.stderr)
-        print(f"   Data file: {data_path.name}", file=sys.stderr)
-        print(f"   Dark file: {dark_path.name}", file=sys.stderr)
-        print(f"   Parameters: {param_path.name}", file=sys.stderr)
-        print(f"   Frame range: {start_frame} to {end_frame}", file=sys.stderr)
-        print(f"   Detector mapping: {'ENABLED' if map_detector else 'DISABLED'}", file=sys.stderr)
-        print(f"   CPUs: {num_cpus} | Chunks: {num_frame_chunks}", file=sys.stderr)
-        print(f"   Output: {result_path}", file=sys.stderr)
-        print(f"\n   Full command:", file=sys.stderr)
-        print(f"   {cmd_str}", file=sys.stderr)
-        print("="*70, file=sys.stderr)
-
-        # Run integration
-        print(f"\n🚀 Starting batch integration (this may take several minutes)...\n", file=sys.stderr)
+        print(f"\n  $ {cmd_str}", file=sys.stderr)
 
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
-            timeout=1800  # 30 minute timeout for batch processing
+            timeout=1800,  # 30 minute timeout for batch processing
+            env=get_midas_env()
         )
 
-        # ===== TRANSPARENCY: Show command output =====
-        print("\n" + "="*70, file=sys.stderr)
-        print("📊 INTEGRATION OUTPUT:", file=sys.stderr)
-        print("="*70, file=sys.stderr)
-        if result.stdout:
-            print(result.stdout, file=sys.stderr)
-        if result.stderr:
-            print("\nSTDERR:", file=sys.stderr)
-            print(result.stderr, file=sys.stderr)
-        print("="*70 + "\n", file=sys.stderr)
-
         if result.returncode != 0:
+            print(f"❌ Batch integration failed (exit {result.returncode})", file=sys.stderr)
+            for line in result.stderr.strip().splitlines()[-20:]:
+                print(f"  {line}", file=sys.stderr)
             return format_result({
                 "tool": "midas_batch_integrate",
                 "status": "error",
