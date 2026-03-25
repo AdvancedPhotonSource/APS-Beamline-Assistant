@@ -225,7 +225,6 @@ ANALYSIS_AGENT = APEXAAgent(
         "run_nf_hedm_reconstruction",
         "run_pf_hedm_workflow",
         # Post-processing
-        "run_ff_grain_tracking",
         "match_grains",
         "overlay_ff_nf_results",
         "calculate_misorientation",
@@ -295,6 +294,49 @@ When the user asks about materials, parameters, or HEDM methodology, use your to
 
 Always cite your source: paper title, logbook entry, or database name.
 Prefer tool results over your own knowledge — the tools have verified data.""",
+)
+
+VISUALIZATION_AGENT = APEXAAgent(
+    name        = "VisualizationAgent",
+    temperature = 0.3,
+    tool_names  = [
+        "list_directory",
+        "read_file",
+        "get_file_info",
+        "run_command",
+    ],
+    instructions = """You are a visualization specialist for HEDM diffraction data at APS.
+
+You help users plot and inspect results from calibration, integration, and HEDM workflows
+using the MIDAS viewer scripts (~/Git/MIDAS/gui/viewers/).
+
+Available MIDAS viewer scripts and when to use them:
+- plot_lineout_results.py    — view a single integrated 1D lineout (_lineout.xy)
+- plot_lineout_comparison.py — overlay lineout with ideal ring positions (needs --paramFN)
+- plot_calibrant_results.py  — inspect calibration ring fits and residuals
+- plot_caked_peaks.py        — interactive 4-panel viewer for _caked_peaks.h5 (caked heatmap, 1D profile, peak table, lattice plots)
+- plot_integrator_peaks.py   — fit Pseudo-Voigt peaks from _caked.hdf.zarr.zip offline
+- viz_caking.py              — visualize the 2D caked output
+- live_viewer.py             — real-time PyQtGraph dashboard during GPU streaming (tails lineout.bin + fit.bin)
+- interactiveFFplotting.py   — interactive FF-HEDM spot plotting
+- plotGrains3d.py            — 3D grain visualization from FF-HEDM results
+- plotFFSpots3d.py           — 3D diffraction spot viewer
+- plot_phase_id_results.py   — phase identification result plots
+
+Workflow:
+1. Use list_directory to find output files in the result folder
+2. Match the file type to the right viewer:
+   - *_lineout.xy           → plot_lineout_results.py or plot_lineout_comparison.py
+   - *_caked.hdf.zarr.zip   → plot_integrator_peaks.py or viz_caking.py
+   - *_caked_peaks.h5       → plot_caked_peaks.py
+   - calibrant_screen_out.csv → plot_calibrant_results.py
+   - Grains.csv / *.HDF     → plotGrains3d.py or interactiveFFplotting.py
+3. Use run_command with the midas_env Python to launch the viewer:
+   /Users/b324240/miniconda3/envs/midas_env/bin/python ~/Git/MIDAS/gui/viewers/<script>.py <args>
+
+Always pass --paramFN or --params when a refined_MIDAS_params*.txt is available — it enables 2θ/Q axes.
+For live_viewer.py use --nRBins (case-sensitive capital B).
+Report the exact command used so the user can re-run it manually.""",
 )
 
 
@@ -555,9 +597,10 @@ class OrchestratorAgent:
     """
 
     _ROUTES: Dict[str, APEXAAgent] = {
-        "calibration": CALIBRATION_AGENT,
-        "analysis":    ANALYSIS_AGENT,
-        "knowledge":   KNOWLEDGE_AGENT,
+        "calibration":   CALIBRATION_AGENT,
+        "analysis":      ANALYSIS_AGENT,
+        "knowledge":     KNOWLEDGE_AGENT,
+        "visualization": VISUALIZATION_AGENT,
     }
 
     _KEYWORDS: Dict[str, set] = {
@@ -582,6 +625,13 @@ class OrchestratorAgent:
             "tell me", "describe", "typical", "literature", "paper",
             "best practice", "recommend", "suggest", "look up",
             "material propert", "search", "parameter range",
+        },
+        "visualization": {
+            "plot", "visualiz", "view", "show", "display", "see",
+            "lineout", "caked", "heatmap", "chart", "graph",
+            "live viewer", "overlay", "pattern", "diffraction image",
+            "peak plot", "grain plot", "3d grain", "spots",
+            "ring", "fit result", "caking", "zarr", "lineout.xy",
         },
     }
 
