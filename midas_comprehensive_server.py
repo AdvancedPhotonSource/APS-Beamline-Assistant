@@ -2605,6 +2605,17 @@ async def midas_auto_calibrate(
                             key=lambda p: p.stat().st_mtime, reverse=True)
         refined_params_file = candidates[0] if candidates else image_path.parent / "refined_MIDAS_params.txt"
 
+        # AutoCalibrateZarr.py writes "Dark " (key with no value) when no dark file
+        # is provided. ffGenerateZipRefactor.py crashes on empty-value lines.
+        # Strip them from the output file so integration doesn't fail.
+        if refined_params_file.exists():
+            lines = refined_params_file.read_text().splitlines()
+            cleaned = [ln for ln in lines if len(ln.split()) >= 2 or not ln.split()]
+            if len(cleaned) != len(lines):
+                refined_params_file.write_text("\n".join(cleaned) + "\n")
+                removed = [ln for ln in lines if ln not in cleaned]
+                print(f"  Cleaned {len(removed)} empty-value line(s) from params: {removed}", file=sys.stderr)
+
         calibrated_params = {
             "bc_x": None,
             "bc_y": None,
