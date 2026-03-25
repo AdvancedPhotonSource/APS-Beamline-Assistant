@@ -125,52 +125,22 @@ def find_midas_python() -> str:
     )
 
 def get_midas_env() -> dict:
-    """Get environment variables needed for MIDAS C++ executables.
+    """Get environment variables for all MIDAS operations (C++ and Python).
 
-    Sets DYLD_LIBRARY_PATH / LD_LIBRARY_PATH so C++ binaries find MIDAS's
-    own libhdf5, libfftw3, etc.  Do NOT use this for Python scripts —
-    overriding DYLD_LIBRARY_PATH breaks h5py in the midas conda env.
+    MIDAS C++ binaries have @rpath set at build time so they find their own
+    dylibs without DYLD_LIBRARY_PATH. Overriding DYLD_LIBRARY_PATH breaks
+    h5py in midas_env (HDF5 symbol mismatch). Use this single function for
+    all tools — both C++ executables and Python workflow scripts.
     """
     env = os.environ.copy()
 
-    # Add MIDAS bin directory to PATH
-    midas_bin_paths = [str(MIDAS_BIN), str(MIDAS_ROOT / "bin")]
-    env["PATH"] = ":".join(midas_bin_paths + [env.get("PATH", "")])
-
-    # Library paths for C++ binaries (CalibrantIntegratorOMP, IndexerOMP, etc.)
-    lib_paths = [str(MIDAS_BIN.parent / "lib"), str(MIDAS_ROOT / "lib")]
-
-    if "LD_LIBRARY_PATH" in env:
-        env["LD_LIBRARY_PATH"] = ":".join(lib_paths + [env["LD_LIBRARY_PATH"]])
-    else:
-        env["LD_LIBRARY_PATH"] = ":".join(lib_paths)
-
-    # macOS: needed for C++ executables to find MIDAS dylibs
-    if "DYLD_LIBRARY_PATH" in env:
-        env["DYLD_LIBRARY_PATH"] = ":".join(lib_paths + [env["DYLD_LIBRARY_PATH"]])
-    else:
-        env["DYLD_LIBRARY_PATH"] = ":".join(lib_paths)
-
-    env["MIDAS_PATH"] = str(MIDAS_ROOT)
-    return env
-
-
-def get_midas_python_env() -> dict:
-    """Get environment variables for MIDAS Python scripts (AutoCalibrateZarr, ff_MIDAS, etc.).
-
-    Deliberately does NOT set DYLD_LIBRARY_PATH / LD_LIBRARY_PATH — overriding
-    those breaks h5py in the midas conda env (libhdf5 symbol mismatch on macOS).
-    Only adds PYTHONPATH and MIDAS_PATH.
-    """
-    env = os.environ.copy()
-
-    # Add MIDAS bin to PATH so any CalibrantIntegratorOMP calls inside scripts work
+    # Add MIDAS bin to PATH so C++ executables are found
     midas_bin_paths = [str(MIDAS_BIN), str(MIDAS_ROOT / "bin")]
     env["PATH"] = ":".join(midas_bin_paths + [env.get("PATH", "")])
 
     env["MIDAS_PATH"] = str(MIDAS_ROOT)
 
-    # MIDAS/utils must be on PYTHONPATH so midas_config is importable
+    # MIDAS/utils must be on PYTHONPATH for Python workflow scripts
     midas_utils = str(MIDAS_ROOT / "utils")
     if "PYTHONPATH" in env:
         env["PYTHONPATH"] = midas_utils + ":" + env["PYTHONPATH"]
@@ -433,7 +403,7 @@ def run_python_script(script_name: str, args: list, cwd: str = None,
             text=True,
             timeout=timeout,
             cwd=cwd,
-            env=get_midas_python_env()  # Python script — no DYLD_LIBRARY_PATH override
+            env=get_midas_env()
         )
 
         return {
@@ -2715,7 +2685,7 @@ async def midas_auto_calibrate(
             capture_output=True,
             text=True,
             timeout=600,  # 10 minute timeout
-            env=get_midas_python_env()  # Python script — no DYLD_LIBRARY_PATH override
+            env=get_midas_env()
         )
 
         if result.returncode != 0:
