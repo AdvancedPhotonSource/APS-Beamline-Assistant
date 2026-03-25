@@ -2469,24 +2469,37 @@ async def midas_auto_calibrate(
             midas_friendly_name = f"{prefix}_000001{image_path.suffix}"
             midas_friendly_path = image_path.parent / midas_friendly_name
 
-            # Remove old symlink if it exists
-            if midas_friendly_path.is_symlink():
-                midas_friendly_path.unlink()
-            elif midas_friendly_path.exists():
-                # Don't overwrite real files, use different name
-                midas_friendly_name = f"{prefix}_calibration_000001{image_path.suffix}"
-                midas_friendly_path = image_path.parent / midas_friendly_name
+            # Skip symlink if the friendly name is already the same as the input
+            # (would create a self-referential symlink CeO2_000001.tif -> CeO2_000001.tif)
+            if midas_friendly_name == image_path.name:
+                print(f"  Input already has a MIDAS-friendly name: {image_path.name}", file=sys.stderr)
+                # Resolve the real target if the input is itself a symlink
+                if image_path.is_symlink():
+                    real_target = image_path.resolve()
+                    print(f"  Symlink target: {real_target.name}", file=sys.stderr)
+                    # Rebuild the symlink to point to the real file
+                    image_path.unlink()
+                    image_path.symlink_to(real_target.name)
+                    print(f"  ✓ Refreshed symlink: {image_path.name} -> {real_target.name}", file=sys.stderr)
+            else:
+                # Remove old symlink if it exists
                 if midas_friendly_path.is_symlink():
                     midas_friendly_path.unlink()
+                elif midas_friendly_path.exists():
+                    # Don't overwrite real files, use different name
+                    midas_friendly_name = f"{prefix}_calibration_000001{image_path.suffix}"
+                    midas_friendly_path = image_path.parent / midas_friendly_name
+                    if midas_friendly_path.is_symlink():
+                        midas_friendly_path.unlink()
 
-            # Create symlink
-            try:
-                midas_friendly_path.symlink_to(image_path.name)  # Relative symlink
-                print(f"✓ Created MIDAS-friendly symlink: {midas_friendly_name} -> {image_path.name}", file=sys.stderr)
-                image_path = midas_friendly_path
-            except Exception as e:
-                print(f"⚠ Could not create symlink: {e}. Using original filename.", file=sys.stderr)
-                # Continue with original filename
+                # Create symlink
+                try:
+                    midas_friendly_path.symlink_to(image_path.name)  # Relative symlink
+                    print(f"✓ Created MIDAS-friendly symlink: {midas_friendly_name} -> {image_path.name}", file=sys.stderr)
+                    image_path = midas_friendly_path
+                except Exception as e:
+                    print(f"⚠ Could not create symlink: {e}. Using original filename.", file=sys.stderr)
+                    # Continue with original filename
 
         # Build command with all parameters according to MIDAS manual
         # Use MIDAS Python (conda midas_env) instead of current Python (UV)

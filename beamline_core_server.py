@@ -245,15 +245,35 @@ async def list_directory(path: str = ".", show_hidden: bool = False, details: bo
 
         lines = []
         hidden_count = 0
-        for item in sorted(dir_path.iterdir(), key=lambda p: (p.is_file(), p.name.lower())):
+        def sort_key(p):
+            try:
+                return (not p.is_symlink() and p.is_file(), p.name.lower())
+            except OSError:
+                return (True, p.name.lower())
+
+        for item in sorted(dir_path.iterdir(), key=sort_key):
             if item.name.startswith('.'):
                 if not show_hidden:
                     hidden_count += 1
                     continue
-            if item.is_dir():
+            if item.is_symlink():
+                try:
+                    target = os.readlink(item)
+                    resolved = item.resolve()
+                    if resolved.is_dir():
+                        lines.append(f"  {item.name}/ -> {target}")
+                    else:
+                        sz = human_size(item.stat().st_size)
+                        lines.append(f"  {item.name:<50}  {sz:>6}  -> {target}")
+                except OSError:
+                    lines.append(f"  {item.name:<50}  [broken symlink]")
+            elif item.is_dir():
                 lines.append(f"  {item.name}/")
             else:
-                sz = human_size(item.stat().st_size)
+                try:
+                    sz = human_size(item.stat().st_size)
+                except OSError:
+                    sz = "?"
                 lines.append(f"  {item.name:<50}  {sz:>6}")
 
         output = f"{str(dir_path.absolute())}\n"
