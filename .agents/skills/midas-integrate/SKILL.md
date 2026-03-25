@@ -1,25 +1,34 @@
 ---
 name: midas-integrate
-description: Integrate 2D diffraction images to 1D patterns using MIDAS integrator.py. Use when the user asks to integrate, cake, produce a lineout, convert 2D to 1D, run azimuthal integration, or process diffraction frames for phase identification or GSAS-II.
-compatibility: Requires MIDAS v10 (FF_HEDM/workflows/integrator.py), midas_env conda environment with zarr/numpy/scipy, calibrated params file from midas_auto_calibrate
+description: Integrate 2D diffraction images to 1D patterns using MIDAS. Use when the user asks to integrate, cake, produce a lineout, convert 2D to 1D, run azimuthal integration, process diffraction frames for phase identification, GSAS-II, or live/real-time streaming integration.
+compatibility: Requires MIDAS v11 (FF_HEDM/workflows/), midas_env conda environment (zarr==2.18.3, numpy, scipy), calibrated params file from midas_auto_calibrate
 metadata:
   author: pawan-tripathi
-  version: "2.0"
-  midas-version: "10.0"
+  version: "3.0"
+  midas-version: "11.0"
   manual: MIDAS/manuals/FF_Radial_Integration.md
 ---
 
-## Integration Workflow (MIDAS v10)
+## Integration Workflows (MIDAS v11)
 
-Two tools depending on scope. Both use `FF_HEDM/workflows/integrator.py` which calls `IntegratorZarrOMP`.
+Two workflows depending on hardware and use case:
 
-> **The old `Integrator` C binary is gone in v10 — never use it.**
+| | **Workflow A — GPU Streaming** | **Workflow B — CPU Batch** |
+|---|---|---|
+| Script | `FF_HEDM/workflows/integrator_batch_process.py` | `FF_HEDM/workflows/integrator.py` |
+| Best for | Real-time / high-throughput / large datasets | Post-experiment, single files, no GPU |
+| Engine | `IntegratorFitPeaksGPUStream` (CUDA) | `IntegratorZarrOMP` (OpenMP) |
+| MCP tool | *(call script via `run_command`)* | `midas_integrate_2d_to_1d` / `midas_batch_integrate` |
+
+> **The old `Integrator` C binary is gone — never use it.**
 
 ---
 
+## Workflow B (CPU): MCP Tools
+
 ### Single image → `midas_integrate_2d_to_1d`
 
-Use for one image. `calibration_file` is **optional** — auto-detected from the image directory if omitted.
+`calibration_file` is **optional** — auto-detected from image directory if omitted.
 
 ```
 midas_integrate_2d_to_1d(
@@ -32,16 +41,11 @@ midas_integrate_2d_to_1d(
 )
 ```
 
-**The `refined_MIDAS_params*.txt` from calibration already contains everything needed:**
-`Lsd`, `BC`, `Wavelength`, `px`, `NrPixelsY/Z`, `RMin/Max/BinSize`, `EtaMin/Max/BinSize`, `FileStem`, `Folder`, `DataType`
-
----
-
-### Batch (multiple frames/files) → `midas_batch_integrate`
+### Batch → `midas_batch_integrate`
 
 ```
 midas_batch_integrate(
-    data_file      = "<path to data HDF5 or first image>",
+    data_file      = "<path to HDF5 or first image>",
     dark_file      = "<dark file>",
     parameter_file = "<refined_MIDAS_params*.txt>",
     start_frame    = <int>,
@@ -55,16 +59,56 @@ midas_batch_integrate(
 
 ---
 
-### How integrator.py uses the files (important)
+## Workflow A (GPU): integrator_batch_process.py
 
-- `-paramFN` and `-dataFN` are **both required** by integrator.py
+Use `run_command` to invoke directly. Requires MIDAS compiled with CUDA.
+
+**Process a folder of TIFFs:**
+```bash
+python ~/Git/MIDAS/FF_HEDM/workflows/integrator_batch_process.py \
+    --param-file refined_MIDAS_params_CeO2.txt \
+    --folder /data/experiment/scan_01 \
+    --dark /data/experiment/dark.bin \
+    --output-h5 scan_01_integrated.h5
+```
+
+**Live streaming from EPICS PVA detector:**
+```bash
+python ~/Git/MIDAS/FF_HEDM/workflows/integrator_batch_process.py \
+    --param-file setup.txt \
+    --pva --pva-ip 10.54.105.139 \
+    --output-h5 live_analysis.h5
+```
+
+### integrator_batch_process.py key flags
+
+| Flag | Description |
+|---|---|
+| `--param-file` | **Required.** Parameter file path |
+| `--folder` | Source folder (`.tif`, `.ge`, etc.) — mutually exclusive with `--file`, `--pva` |
+| `--file` | Single image file |
+| `--pva` | Listen to EPICS PVA stream |
+| `--pva-ip` | PVA detector IP address |
+| `--dark` | Dark field file |
+| `--output-h5` | Final consolidated HDF5 output filename |
+| `--output-dir` | Output directory (default: `analysis_YYYYMMDD_HHMMSS`) |
+| `--zarr-output` | Custom zarr.zip filename (default: auto from `--output-h5`) |
+| `--no-zarr` | Skip zarr.zip creation (HDF5 only) |
+
+---
+
+## integrator.py (Workflow B) — CLI reference
+
+### How integrator.py uses files (critical)
+
+- `-paramFN` and `-dataFN` are **both required**
 - `-dataFN` must contain a **6-digit zero-padded number** (e.g. `CeO2_000001.tif` or `scan_004018.tif`)
-- File number is extracted with regex `\d{6}` — used to determine which frame(s) to process
-- If the calibration symlink `CeO2_000001.tif` exists in the image dir, use that as `-dataFN`
+- File number extracted with regex `\d{6}` — determines which frame(s) to process
+- Use the MIDAS-friendly symlink (e.g. `CeO2_000001.tif`) as `-dataFN` when the original filename has a complex name
 - `integrator.py` self-patches its own PYTHONPATH — no external PYTHONPATH needed
 - Script location: `MIDAS/FF_HEDM/workflows/integrator.py` (NOT `utils/`)
 
-### v10 integrator.py CLI flags
+### integrator.py CLI flags
 
 | Flag | Default | Notes |
 |---|---|---|
@@ -72,64 +116,143 @@ midas_batch_integrate(
 | `-dataFN` | required | First data file (6-digit number in name) |
 | `-resultFolder` | `.` | Output directory |
 | `-darkFN` | `''` | Dark field image |
-| `-nCPUs` | `1` | Parallel files |
+| `-nCPUs` | `1` | Simultaneous files (parallel) |
 | `-nCPUsLocal` | `4` | OMP threads per file |
 | `-mapDetector` | `1` | Run DetectorMapper if Map.bin missing |
-| `-convertFiles` | `1` | Convert to Zarr before integrating |
+| `-convertFiles` | `1` | Convert input to Zarr before integrating |
 | `-startFileNr` | `-1` | Start frame (-1 = read from dataFN) |
 | `-endFileNr` | `-1` | End frame (-1 = single file) |
 | `-writeMat` | `0` | Write .mat output |
 | `-skipExisting` | flag | Skip already-processed files |
-| `-liveViewer` | flag | Launch live viewer dashboard |
-| `-peakFit` | flag | Enable 1D peak fitting |
 | `-dataLoc` | `exchange/data` | HDF5 dataset path |
 | `-darkLoc` | `exchange/dark` | Dark HDF5 dataset path |
 
-Parameter overrides can be appended at end of command: `MinRad 10 MaxRad 1000 RBinSize 0.5`
+**Parameter overrides** (append to end of command):
+```bash
+integrator.py -paramFN setup.txt -dataFN scan_001.tif MinRad 10 MaxRad 1000 RBinSize 0.5
+```
 
 ---
 
-### v10 executable chain
+## Executable chain
 
 ```
-integrator.py
-  ├─ DetectorMapper      → Map.bin, nMap.bin, maskMap.bin  (first run only, via -mapDetector 1)
-  └─ IntegratorZarrOMP   → lineout + caked zarr per file
+Workflow B (CPU):
+  integrator.py
+    ├─ DetectorMapper      → Map.bin, nMap.bin, maskMap.bin  (first run only)
+    └─ IntegratorZarrOMP   → _lineout.xy + _caked.hdf.zarr.zip per file
+
+Workflow A (GPU):
+  integrator_batch_process.py
+    ├─ integrator_server.py  (TCP socket server)
+    ├─ DetectorMapper        → Map.bin
+    └─ IntegratorFitPeaksGPUStream → HDF5 + zarr.zip + fit.bin (peak fits)
 ```
 
-### Output files
+> **DetectorMapper** is now a unified binary — `DetectorMapperZarr` is retired. Handles both text and Zarr inputs. Pass `-nCPUs N` to parallelize mapping.
 
-| File | Use |
-|---|---|
-| `*_lineout.xy` | 2θ (degrees) vs intensity (text) — load in GSAS-II, plot directly |
-| `*_lineout.bin` | Binary lineout (backward compatible) |
-| `*_caked.hdf.zarr.zip` | Full caked data — GSAS-II compatible (zarr v2 required) |
-| `Map.bin`, `nMap.bin`, `maskMap.bin` | Geometry maps (generated once per detector/params) |
+---
 
-### Parameter file keys needed for integration
+## Output files
+
+| File | Workflow | Use |
+|---|---|---|
+| `*_lineout.xy` | B (CPU) | 2θ (degrees) vs intensity text — load in GSAS-II, plot directly |
+| `*_lineout.bin` | B (CPU) | Binary lineout (backward compatible) |
+| `*_caked.hdf.zarr.zip` | Both | Full caked data — GSAS-II compatible (`zarr==2.18.3` required) |
+| `Map.bin`, `nMap.bin`, `maskMap.bin` | Both | Geometry maps (generated once per detector/params) |
+| `scan_01_integrated.h5` | A (GPU) | Consolidated HDF5 with lineouts + fit results |
+| `fit.bin` | Both (if peak fit) | Binary stream: 7 doubles/peak/frame (Area, Center, sig, gam, FWHM, η, χ²) |
+| `_caked_peaks.h5` | Both (if peak fit) | HDF5 with per-η fitted peaks for `plot_caked_peaks.py` |
+
+---
+
+## Parameter file keys
 
 From `refined_MIDAS_params*.txt` (auto-written by `midas_auto_calibrate`):
 
 ```
-Lsd        <µm>       detector distance
-BC         <Y> <Z>    beam center
+# Geometry (required)
+Lsd        <µm>       sample-to-detector distance
+BC         <Y> <Z>    beam center (pixels)
 Wavelength <Å>
 px         <µm>       pixel size
-NrPixelsY  <int>
-NrPixelsZ  <int>
+tx ty tz   <deg>      detector tilts
+
+# Integration range (required)
 RMin       <px>       integration range start
 RMax       <px>       integration range end
 RBinSize   <px>       radial bin size
 EtaMin     <deg>
 EtaMax     <deg>
 EtaBinSize <deg>
+
+# File info (required)
 DataType   6          (6=TIFF, 8=HDF5)
-FileStem   <stem>     from calibration symlink
+NrPixelsY  <int>
+NrPixelsZ  <int>
+FileStem   <stem>
 Folder     <path>
+
+# Q-spacing mode (optional — replaces RMin/RMax/RBinSize when all present)
+QBinSize   <Å⁻¹>
+QMin       <Å⁻¹>
+QMax       <Å⁻¹>
+
+# Corrections (optional)
+ImTransOpt 0          (0=none, 1=FlipH, 2=FlipV, 3=Transpose)
+MaskFile   <path>     uint8 TIFF, 0=valid, 1=masked
+BadPxIntensity -2
+GapIntensity   -1
+p0..p5         distortion coefficients
+
+# Peak fitting (optional)
+DoPeakFit      1      enable 1D Pseudo-Voigt peak fitting
+MultiplePeaks  1      allow multiple peaks
+PeakLocation   <px>   expected peak radius — repeatable, one per line
+DoSmoothing    1      Savitzky-Golay smoothing before auto peak detection
+FitROIPadding  20     half-width of fitting ROI (radial bins)
+FitROIAuto     0      1 = auto-size ROI from FWHM
 ```
 
-> `midas_auto_calibrate` writes ALL of these automatically — no manual editing needed for standard integration.
+> **`midas_auto_calibrate` writes all geometry + range keys automatically.** No manual editing needed for standard integration.
 
-### Supported input formats
+> **⚠ Empty-value lines (e.g. `Dark ` with no value) crash `ffGenerateZipRefactor.py`.** The server strips these automatically after calibration, but check manually if editing the params file.
+
+---
+
+## Peak fitting (both engines)
+
+Both `IntegratorZarrOMP` (CPU) and `IntegratorFitPeaksGPUStream` (GPU) support **1D Pseudo-Voigt peak fitting** (GSAS-II area-normalized, TCH mixing).
+
+Two modes:
+- **User-specified:** Add `PeakLocation <px>` lines to params file (one per ring). Implicitly enables `DoPeakFit 1` and `MultiplePeaks 1`.
+- **Auto-discovery:** Set `DoPeakFit 1` + `MultiplePeaks 1` without `PeakLocation`. Engine finds peaks via SNIP baseline + local maxima.
+
+`fit.bin` format: 7 doubles per peak per frame — `[Area, Center, sig, gam, FWHM, η, χ²]`
+
+```python
+import numpy as np
+n_peaks = 3
+data = np.fromfile('fit.bin', dtype=np.float64).reshape(-1, n_peaks, 7)
+area, center, fwhm = data[:,:,0], data[:,:,1], data[:,:,4]
+```
+
+---
+
+## Post-processing tools
+
+| Tool | Use |
+|---|---|
+| `gui/viewers/live_viewer.py` | Real-time PyQtGraph dashboard — tails `lineout.bin` + `fit.bin` during GPU streaming |
+| `gui/viewers/plot_caked_peaks.py` | Interactive Qt viewer for `_caked_peaks.h5` — 4-panel: heatmap, 1D profile, peak table, lattice plots |
+| `gui/viewers/plot_integrator_peaks.py` | Offline Pseudo-Voigt fitting from `.caked.hdf.zarr.zip` |
+| `utils/fit_caked_peaks.py` | Standalone peak fitter — produces `_caked_peaks.h5` |
+| `utils/extract_lineouts.py` | Batch `_lineout.xy` extraction for a file series |
+| `gui/viewers/plot_lineout_comparison.py` | Overlay calibrant + integrator lineouts vs ideal ring positions |
+
+---
+
+## Supported input formats
 
 `.tif/.tiff`, `.ge/.ge1-.ge5`, `.h5/.hdf5/.nxs`, `.zip` (Zarr)
