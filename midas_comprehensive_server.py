@@ -2983,7 +2983,7 @@ async def midas_auto_calibrate(
                         # Format: "INFO - Mean Strain: 0.000123"
                         strain_val = float(last_line.split('Mean Strain:')[-1].strip())
                         convergence_metrics["final_mean_strain"] = strain_val
-                        convergence_metrics["converged"] = strain_val < stopping_strain
+                        convergence_metrics["converged"] = strain_val < 0.0001
                     except:
                         pass
 
@@ -3004,7 +3004,7 @@ async def midas_auto_calibrate(
                     try:
                         strain_val = float(line.split('Mean Strain')[-1].replace(':', '').strip())
                         convergence_metrics["final_mean_strain"] = strain_val
-                        convergence_metrics["converged"] = strain_val < stopping_strain
+                        convergence_metrics["converged"] = strain_val < 0.0001
                     except:
                         pass
 
@@ -3035,13 +3035,12 @@ async def midas_auto_calibrate(
             message += f"  Iterations: {convergence_metrics['num_iterations']}\n"
         if convergence_metrics["final_mean_strain"]:
             message += f"  Final Mean Strain: {convergence_metrics['final_mean_strain']:.6f}\n"
-            message += f"  Target Strain: {stopping_strain:.6f}\n"
-            message += f"  Status: {'CONVERGED ✓' if convergence_metrics['converged'] else 'NOT CONVERGED (increase iterations or relax tolerance)'}\n"
+            message += f"  Status: {'CONVERGED ✓' if convergence_metrics['converged'] else 'HIGH STRAIN — consider increasing --n-iterations'}\n"
         if convergence_metrics["excluded_rings"]:
             message += f"  Excluded Rings: {', '.join(map(str, convergence_metrics['excluded_rings']))}\n"
 
         message += f"\nOutput Files:\n"
-        message += f"  • refined_MIDAS_params.txt - Use this for ff_MIDAS.py\n"
+        message += f"  • {refined_params_file.name} - Use this for ff_MIDAS.py\n"
         if autocal_log.exists():
             message += f"  • autocal.log - Detailed iteration history\n"
         if save_plots_hdf:
