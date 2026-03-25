@@ -2210,7 +2210,7 @@ async def get_midas_workflow_status(
 @mcp.tool()
 async def midas_integrate_2d_to_1d(
     image_file: str,
-    calibration_file: str,
+    calibration_file: str = None,
     dark_file: str = None,
     result_folder: str = None,
     n_cpus: int = 4,
@@ -2218,21 +2218,21 @@ async def midas_integrate_2d_to_1d(
 ) -> str:
     """Integrate a single 2D diffraction image to a 1D lineout using MIDAS integrator.py (v10).
 
-    REQUIRES calibrated params from midas_auto_calibrate (refined_MIDAS_params*.txt).
-    integrator.py runs DetectorMapper automatically if Map.bin is missing.
+    calibration_file is optional — if omitted, auto-searches the image directory for
+    refined_MIDAS_params*.txt produced by midas_auto_calibrate.
 
     v10 executable chain:
-      integrator.py → IntegratorZarrOMP (replaces old Integrator binary)
+      integrator.py (FF_HEDM/workflows/) → IntegratorZarrOMP
 
     Outputs written to result_folder (default: image_dir/integration/):
       *_lineout.xy         — 2θ (degrees) vs intensity text file
       *_lineout.bin        — binary lineout
       *_caked.hdf.zarr.zip — caked output (GSAS-II compatible)
-      Map.bin / nMap.bin / maskMap.bin — geometry maps (first run only)
+      Map.bin / nMap.bin / maskMap.bin — geometry maps (generated once)
 
     Args:
         image_file: Path to 2D diffraction image (.tif/.tiff, .ge/.ge1-.ge5, .h5/.hdf5, .zip)
-        calibration_file: Calibrated MIDAS parameter file — use refined_MIDAS_params*.txt from midas_auto_calibrate
+        calibration_file: MIDAS parameter file (refined_MIDAS_params*.txt). Auto-detected if omitted.
         dark_file: Optional dark field image for background subtraction
         result_folder: Output directory (default: <image_dir>/integration)
         n_cpus: OMP threads for IntegratorZarrOMP (default: 4)
@@ -2240,17 +2240,29 @@ async def midas_integrate_2d_to_1d(
     """
     try:
         image_path = Path(image_file).expanduser().absolute()
-        param_path = Path(calibration_file).expanduser().absolute()
 
         if not image_path.exists():
             return format_result({"tool": "midas_integrate_2d_to_1d", "status": "error",
                                   "error": f"Image not found: {image_path}"})
-        if not param_path.exists():
-            return format_result({"tool": "midas_integrate_2d_to_1d", "status": "error",
-                                  "error": f"Parameter file not found: {param_path}"})
 
-        # Find integrator.py in MIDAS/utils/
-        integrator_script = MIDAS_ROOT / "utils" / "integrator.py"
+        # Auto-find calibration file if not provided
+        if calibration_file is None:
+            candidates = sorted(image_path.parent.glob("refined_MIDAS_params*.txt"),
+                                key=lambda p: p.stat().st_mtime, reverse=True)
+            if not candidates:
+                return format_result({"tool": "midas_integrate_2d_to_1d", "status": "error",
+                                      "error": "No refined_MIDAS_params*.txt found in image directory. "
+                                               "Run midas_auto_calibrate first, or pass calibration_file explicitly."})
+            param_path = candidates[0]
+            print(f"  Auto-detected calibration file: {param_path.name}", file=sys.stderr)
+        else:
+            param_path = Path(calibration_file).expanduser().absolute()
+            if not param_path.exists():
+                return format_result({"tool": "midas_integrate_2d_to_1d", "status": "error",
+                                      "error": f"Parameter file not found: {param_path}"})
+
+        # Find integrator.py — v10 location: FF_HEDM/workflows/
+        integrator_script = MIDAS_ROOT / "FF_HEDM" / "workflows" / "integrator.py"
         if not integrator_script.exists():
             return format_result({"tool": "midas_integrate_2d_to_1d", "status": "error",
                                   "error": f"integrator.py not found at {integrator_script}"})
@@ -2998,7 +3010,7 @@ async def midas_batch_integrate(
         if not MIDAS_ROOT:
             return format_result({"tool": "midas_batch_integrate", "status": "error",
                                   "error": "MIDAS_PATH not set. Add MIDAS_PATH to .env"})
-        midas_integrator = MIDAS_ROOT / "utils" / "integrator.py"
+        midas_integrator = MIDAS_ROOT / "FF_HEDM" / "workflows" / "integrator.py"
         if not midas_integrator.exists():
             return format_result({"tool": "midas_batch_integrate", "status": "error",
                                   "error": f"integrator.py not found at {midas_integrator}"})
