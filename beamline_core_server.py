@@ -221,7 +221,7 @@ async def list_directory(path: str = ".", show_hidden: bool = False, details: bo
 
     Args:
         path: Directory path to list (default: current directory)
-        show_hidden: Include hidden files/directories (default: False)
+        show_hidden: Include hidden files/directories starting with '.' (default: False)
         details: Show detailed file information (default: False)
 
     Returns:
@@ -236,25 +236,35 @@ async def list_directory(path: str = ".", show_hidden: bool = False, details: bo
         if not dir_path.is_dir():
             return format_result({"error": f"Path is not a directory: {path}"})
 
-        items = []
-        for item in sorted(dir_path.iterdir()):
-            if not show_hidden and item.name.startswith('.'):
-                continue
+        def human_size(n):
+            for unit in ('B', 'K', 'M', 'G'):
+                if n < 1024:
+                    return f"{n:.0f}{unit}" if unit == 'B' else f"{n:.1f}{unit}"
+                n /= 1024
+            return f"{n:.1f}T"
 
-            if details:
-                items.append(format_file_info(item))
+        lines = []
+        hidden_count = 0
+        for item in sorted(dir_path.iterdir(), key=lambda p: (p.is_file(), p.name.lower())):
+            if item.name.startswith('.'):
+                if not show_hidden:
+                    hidden_count += 1
+                    continue
+            if item.is_dir():
+                lines.append(f"  {item.name}/")
             else:
-                items.append({
-                    "name": item.name,
-                    "type": "directory" if item.is_dir() else "file",
-                    "size": item.stat().st_size if item.is_file() else None
-                })
+                sz = human_size(item.stat().st_size)
+                lines.append(f"  {item.name:<50}  {sz:>6}")
+
+        output = f"{str(dir_path.absolute())}\n"
+        output += "\n".join(lines)
+        if hidden_count:
+            output += f"\n  ({hidden_count} hidden items not shown — use show_hidden=True)"
 
         return format_result({
             "tool": "list_directory",
             "path": str(dir_path.absolute()),
-            "count": len(items),
-            "items": items
+            "listing": output
         })
 
     except Exception as e:
