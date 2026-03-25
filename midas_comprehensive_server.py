@@ -2210,7 +2210,7 @@ async def get_midas_workflow_status(
 @mcp.tool()
 async def midas_integrate_2d_to_1d(
     image_file: str,
-    param_file: str,
+    calibration_file: str,
     dark_file: str = None,
     result_folder: str = None,
     n_cpus: int = 4,
@@ -2232,7 +2232,7 @@ async def midas_integrate_2d_to_1d(
 
     Args:
         image_file: Path to 2D diffraction image (.tif/.tiff, .ge/.ge1-.ge5, .h5/.hdf5, .zip)
-        param_file: Calibrated MIDAS parameter file (refined_MIDAS_params*.txt)
+        calibration_file: Calibrated MIDAS parameter file — use refined_MIDAS_params*.txt from midas_auto_calibrate
         dark_file: Optional dark field image for background subtraction
         result_folder: Output directory (default: <image_dir>/integration)
         n_cpus: OMP threads for IntegratorZarrOMP (default: 4)
@@ -2240,7 +2240,7 @@ async def midas_integrate_2d_to_1d(
     """
     try:
         image_path = Path(image_file).expanduser().absolute()
-        param_path = Path(param_file).expanduser().absolute()
+        param_path = Path(calibration_file).expanduser().absolute()
 
         if not image_path.exists():
             return format_result({"tool": "midas_integrate_2d_to_1d", "status": "error",
@@ -2298,7 +2298,7 @@ async def midas_integrate_2d_to_1d(
         return format_result({
             "tool": "midas_integrate_2d_to_1d", "status": "success",
             "input_image": str(image_path),
-            "param_file": str(param_path),
+            "calibration_file": str(param_path),
             "result_folder": str(out_dir),
             "lineout_xy": str(lineout[0]) if lineout else "not found — check result_folder",
             "zarr_zip": str(zarr_out[0]) if zarr_out else "not found",
