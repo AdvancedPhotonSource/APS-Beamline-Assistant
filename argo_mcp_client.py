@@ -232,40 +232,6 @@ class ErrorPreventor:
     """Validate inputs and prevent common errors before execution"""
 
     @staticmethod
-    def validate_integration_params(args: Dict[str, Any]) -> tuple[bool, Optional[str]]:
-        """Validate parameters for midas_integrate_2d_to_1d (v10).
-
-        Returns:
-            (is_valid, error_message)
-        """
-        image_file = args.get("image_file")
-        calibration_file = args.get("calibration_file")
-        dark_file = args.get("dark_file")
-
-        # Check image exists
-        if image_file:
-            img_path = Path(image_file).expanduser()
-            if not img_path.exists():
-                return False, f"Image file not found: {image_file}"
-            valid_extensions = ['.tif', '.tiff', '.ge', '.ge1', '.ge2', '.ge3', '.ge4', '.ge5',
-                                 '.h5', '.hdf5', '.hdf', '.nxs', '.zip']
-            if not any(str(img_path).lower().endswith(ext) for ext in valid_extensions):
-                return False, f"Unsupported image format. Use: {', '.join(valid_extensions)}"
-
-        # Calibration file is optional — auto-detected if omitted
-        if calibration_file:
-            cal_path = Path(calibration_file).expanduser()
-            if not cal_path.exists():
-                return False, f"Calibration file not found: {calibration_file}"
-
-        if dark_file:
-            dark_path = Path(dark_file).expanduser()
-            if not dark_path.exists():
-                return False, f"Dark file not found: {dark_file}"
-
-        return True, None
-
-    @staticmethod
     def validate_ff_hedm_params(args: Dict[str, Any]) -> tuple[bool, Optional[str]]:
         """Validate parameters for FF-HEDM workflow"""
         example_dir = args.get("example_dir")
@@ -996,7 +962,6 @@ class SmartCache:
 
 class APEXAClient:
     def __init__(self):
-        self.session: Optional[ClientSession] = None
         self.sessions = {}
         self.exit_stack = AsyncExitStack()
 

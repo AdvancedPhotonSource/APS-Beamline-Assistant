@@ -16,6 +16,7 @@ import numpy as np
 import subprocess
 import asyncio
 import logging
+import traceback
 from mcp.server.fastmcp import FastMCP
 
 # Suppress verbose MCP server logging
@@ -427,17 +428,6 @@ def run_python_script(script_name: str, args: list, cwd: str = None,
             "script": script_name
         }
 
-def load_diffraction_image(image_path: str):
-    """Load diffraction image using fabio."""
-    try:
-        if MIDAS_AVAILABLE:
-            img = fabio.open(image_path)
-            return img.data.astype(np.float64)
-        else:
-            return np.random.rand(2048, 2048) * 1000
-    except Exception as e:
-        raise Exception(f"Error loading image {image_path}: {e}")
-
 # =============================================================================
 # FF-HEDM PRODUCTION TOOLS
 # =============================================================================
@@ -806,121 +796,6 @@ async def run_ff_calibration(
     except Exception as e:
         return format_result({
             "tool": "run_ff_calibration",
-            "status": "error",
-            "error": str(e)
-        })
-
-@mcp.tool()
-async def run_ff_grain_tracking(
-    grains_files: list,
-    tracking_tolerance: float = 50.0,
-    output_file: str = "grains_tracked.csv",
-    position_tolerance: float = 50.0,
-    orientation_tolerance: float = 5.0
-) -> str:
-    """Track grains through deformation/temperature series.
-
-    Links grain IDs across multiple datasets (e.g., in-situ deformation,
-    heating/cooling cycles) based on position and orientation proximity.
-
-    Args:
-        grains_files: List of Grains.csv files in chronological order
-        tracking_tolerance: Overall tracking tolerance (microns)
-        output_file: Output file with tracked grain IDs
-        position_tolerance: Position tolerance in microns
-        orientation_tolerance: Orientation tolerance in degrees
-
-    Returns:
-        JSON with tracking statistics and evolution data
-    """
-    try:
-        # Validate all input files
-        valid_files = []
-        for gf in grains_files:
-            valid, path = validate_file(gf)
-            if valid:
-                valid_files.append(path)
-            else:
-                return format_result({
-                    "error": f"Grains file not found: {gf}",
-                    "status": "failed"
-                })
-
-        if len(valid_files) < 2:
-            return format_result({
-                "error": "Need at least 2 grains files for tracking",
-                "status": "failed"
-            })
-
-        # GrainTracking executable usage
-        # Note: This may need custom implementation or wrapper script
-        # since GrainTracking might need specific parameter file format
-
-        work_dir = Path(valid_files[0]).parent
-
-        # Create temporary parameter file for tracking
-        tracking_params = work_dir / "tracking_params.txt"
-        with open(tracking_params, 'w') as f:
-            f.write(f"PositionTolerance {position_tolerance}\n")
-            f.write(f"OrientationTolerance {orientation_tolerance}\n")
-            f.write(f"OutputFile {output_file}\n")
-            for i, gf in enumerate(valid_files):
-                f.write(f"GrainsFile_{i} {gf}\n")
-
-        print(f"Tracking grains across {len(valid_files)} datasets", file=sys.stderr)
-
-        result = run_midas_executable("GrainTracking", str(tracking_params),
-                                     cwd=str(work_dir), timeout=600)
-
-        # Parse tracking results
-        tracking_stats = {
-            "n_datasets": len(valid_files),
-            "datasets": valid_files,
-            "grains_per_dataset": [],
-            "tracked_grains": 0,
-            "tracking_success_rate": 0.0
-        }
-
-        # Count grains in each dataset
-        for gf in valid_files:
-            try:
-                with open(gf, 'r') as f:
-                    n_grains = sum(1 for line in f) - 1
-                tracking_stats["grains_per_dataset"].append(n_grains)
-            except:
-                tracking_stats["grains_per_dataset"].append(0)
-
-        # Check output file
-        output_path = work_dir / output_file
-        if output_path.exists():
-            try:
-                with open(output_path, 'r') as f:
-                    tracking_stats["tracked_grains"] = sum(1 for line in f) - 1
-
-                if tracking_stats["grains_per_dataset"]:
-                    avg_grains = np.mean(tracking_stats["grains_per_dataset"])
-                    tracking_stats["tracking_success_rate"] = (
-                        tracking_stats["tracked_grains"] / avg_grains
-                    )
-            except:
-                pass
-
-        return format_result({
-            "tool": "run_ff_grain_tracking",
-            "status": "completed" if result["success"] else "failed",
-            "workflow": "Grain Tracking",
-            "execution": result,
-            "parameters": {
-                "position_tolerance_um": position_tolerance,
-                "orientation_tolerance_deg": orientation_tolerance
-            },
-            "tracking_statistics": tracking_stats,
-            "output_file": str(output_path) if output_path.exists() else None
-        })
-
-    except Exception as e:
-        return format_result({
-            "tool": "run_ff_grain_tracking",
             "status": "error",
             "error": str(e)
         })
