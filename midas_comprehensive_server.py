@@ -2540,7 +2540,7 @@ async def midas_auto_calibrate(
     └─ Next steps: integrate_2d_to_1d OR run_ff_hedm_full_workflow
 
     Args:
-        image_file: EXACT path to calibrant diffraction image (.tif, .tiff, .ge2-5, .h5, .zarr.zip)
+        image_file: EXACT path to calibrant diffraction image (.tif/.tiff, .ge/.ge1-.ge5, .h5/.hdf5/.nxs, .zip Zarr)
                    If file not found, will auto-search parent directory for matching files.
         parameters_file: EXACT path to MIDAS parameter file containing material properties (SpaceGroup, LatticeParameter, Wavelength, px)
         dark_file: Optional path to dark field image for background subtraction
@@ -2737,11 +2737,13 @@ async def midas_auto_calibrate(
 
         # Determine file type for ConvertFile flag
         suffix = image_path.suffix.lower()
-        if suffix in ['.zip'] and 'zarr' in image_path.name.lower():
-            convert_file = 0  # Already zarr zip
-        elif suffix in ['.h5', '.hdf5']:
-            convert_file = 1  # HDF5
-        elif suffix in ['.ge2', '.ge3', '.ge4', '.ge5']:
+        # v10: format is auto-detected from extension — ConvertFile is optional.
+        # We still pass it explicitly so the conversion path is unambiguous.
+        if suffix in ['.zip']:
+            convert_file = 0  # Zarr zip
+        elif suffix in ['.h5', '.hdf5', '.hdf', '.nxs']:
+            convert_file = 1  # HDF5 / NeXus
+        elif suffix in ['.ge', '.ge1', '.ge2', '.ge3', '.ge4', '.ge5']:
             convert_file = 2  # GE binary
         elif suffix in ['.tif', '.tiff']:
             convert_file = 3  # TIFF
@@ -2749,7 +2751,7 @@ async def midas_auto_calibrate(
             return format_result({
                 "tool": "midas_auto_calibrate",
                 "status": "error",
-                "error": f"Unsupported file format: {suffix}"
+                "error": f"Unsupported file format: {suffix}. Supported: .zip (Zarr), .h5/.hdf5 (HDF5), .ge/.ge1-.ge5 (GE binary), .tif/.tiff (TIFF)"
             })
 
         # WORKAROUND for MIDAS filename parsing bug:
@@ -2766,7 +2768,9 @@ async def midas_auto_calibrate(
             # Extract just the first part of filename before any numbers
             import re
             # Find the first meaningful word (usually material name)
-            match = re.match(r'^([A-Za-z]+)', image_path.stem)
+            # Preserve material name including trailing digit (e.g. CeO2, LaB6)
+            # so AutoCalibrateZarr.py can auto-detect calibrant from symlink name
+            match = re.match(r'^([A-Za-z]+[0-9]*)', image_path.stem)
             prefix = match.group(1) if match else "calib"
 
             # Create simple MIDAS-friendly name WITHOUT extension
@@ -2892,9 +2896,12 @@ async def midas_auto_calibrate(
                 "stdout": result.stdout
             })
 
-        # Read the calibrated parameters from refined_MIDAS_params.txt
+        # v10 names the output refined_MIDAS_params_<material>.txt (e.g. _CeO2.txt)
+        # so glob for any matching file rather than hardcoding the name
         output = result.stdout
-        refined_params_file = image_path.parent / "refined_MIDAS_params.txt"
+        candidates = sorted(image_path.parent.glob("refined_MIDAS_params*.txt"),
+                            key=lambda p: p.stat().st_mtime, reverse=True)
+        refined_params_file = candidates[0] if candidates else image_path.parent / "refined_MIDAS_params.txt"
 
         calibrated_params = {
             "bc_x": None,
