@@ -233,57 +233,35 @@ class ErrorPreventor:
 
     @staticmethod
     def validate_integration_params(args: Dict[str, Any]) -> tuple[bool, Optional[str]]:
-        """Validate parameters for 2D to 1D integration
+        """Validate parameters for midas_integrate_2d_to_1d (v10).
 
         Returns:
             (is_valid, error_message)
         """
-        image_path = args.get("image_path")
+        image_file = args.get("image_file")
         calibration_file = args.get("calibration_file")
-        wavelength = args.get("wavelength")
-        detector_distance = args.get("detector_distance")
-        beam_center_x = args.get("beam_center_x")
-        beam_center_y = args.get("beam_center_y")
         dark_file = args.get("dark_file")
 
         # Check image exists
-        if image_path:
-            img_path = Path(image_path).expanduser()
+        if image_file:
+            img_path = Path(image_file).expanduser()
             if not img_path.exists():
-                return False, f"Image file not found: {image_path}"
-
-            # Check file extension
-            valid_extensions = ['.tif', '.tiff', '.ge2', '.ge5', '.ed5', '.edf']
+                return False, f"Image file not found: {image_file}"
+            valid_extensions = ['.tif', '.tiff', '.ge', '.ge1', '.ge2', '.ge3', '.ge4', '.ge5',
+                                 '.h5', '.hdf5', '.hdf', '.nxs', '.zip']
             if not any(str(img_path).lower().endswith(ext) for ext in valid_extensions):
                 return False, f"Unsupported image format. Use: {', '.join(valid_extensions)}"
 
-        # Check dark file if provided
-        if dark_file:
-            dark_path = Path(dark_file).expanduser()
-            if not dark_path.exists():
-                return False, f"Dark file not found: {dark_file}"
-
-        # Check calibration or manual parameters
-        has_calib = calibration_file is not None
-        has_manual = all([wavelength, detector_distance, beam_center_x, beam_center_y])
-
-        if not has_calib and not has_manual:
-            return False, "Either calibration_file OR all manual parameters (wavelength, detector_distance, beam_center_x, beam_center_y) must be provided"
-
-        # Validate calibration file if provided
+        # Calibration file is optional — auto-detected if omitted
         if calibration_file:
             cal_path = Path(calibration_file).expanduser()
             if not cal_path.exists():
                 return False, f"Calibration file not found: {calibration_file}"
 
-        # Validate manual parameters if provided
-        if has_manual:
-            if wavelength <= 0:
-                return False, f"Wavelength must be positive, got: {wavelength}"
-            if detector_distance <= 0:
-                return False, f"Detector distance must be positive, got: {detector_distance}"
-            if beam_center_x < 0 or beam_center_y < 0:
-                return False, f"Beam center coordinates must be positive"
+        if dark_file:
+            dark_path = Path(dark_file).expanduser()
+            if not dark_path.exists():
+                return False, f"Dark file not found: {dark_file}"
 
         return True, None
 
@@ -1140,17 +1118,7 @@ class APEXAClient:
 
         # ===== ERROR PREVENTION =====
         # Validate parameters before execution
-        if "integrate_2d_to_1d" in tool_name:
-            is_valid, error_msg = self.error_preventor.validate_integration_params(arguments)
-            if not is_valid:
-                print(f"✗ Validation Error: {error_msg}")
-                return json.dumps({
-                    "status": "validation_error",
-                    "error": error_msg,
-                    "suggestion": "Please check your parameters and try again"
-                })
-
-        elif "ff_hedm" in tool_name:
+        if "ff_hedm" in tool_name:
             is_valid, error_msg = self.error_preventor.validate_ff_hedm_params(arguments)
             if not is_valid:
                 print(f"✗ Validation Error: {error_msg}")
