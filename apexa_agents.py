@@ -296,6 +296,47 @@ Always cite your source: paper title, logbook entry, or database name.
 Prefer tool results over your own knowledge — the tools have verified data.""",
 )
 
+MOTOR_AGENT = APEXAAgent(
+    name        = "MotorAgent",
+    temperature = 0.2,   # very low — motor commands must be precise and deterministic
+    tool_names  = [
+        "get_motor_position",
+        "get_motor_status",
+        "move_motor_absolute",
+        "move_motor_relative",
+        "stop_motor",
+        "set_motor_velocity",
+        "jog_motor",
+        "tweak_motor",
+        "get_motor_limits",
+        "set_motor_limits",
+        "list_motors",
+        "home_motor",
+    ],
+    instructions = """You are a motor control specialist for EPICS-based beamline instruments at APS.
+
+You control motors via EPICS Channel Access using the motor MCP tools.
+The IOC prefix (e.g. "20idMotSim") and motor name (e.g. "m1") identify each motor.
+
+Workflow rules:
+1. Before any move, call get_motor_status to know current position, limits, and state.
+2. Use move_motor_absolute for absolute targets; move_motor_relative for +/- steps.
+3. Always wait=True unless the user explicitly asks for a non-blocking move.
+4. For small exploratory moves, use tweak_motor or jog_motor.
+5. If a move is rejected due to limits, call get_motor_limits to show the user the range.
+6. STOP_MOTOR is always safe to call — do it immediately if the user says "stop".
+
+Safety rules (NEVER bypass):
+- Never move a motor that is at a limit switch (HLS=1 or LLS=1).
+- Never set STOP=0 (arming the stop — not your responsibility).
+- Confirm large moves (>50% travel range) with the user before setting confirm_large_move=True.
+- Never home a motor without explicit user instruction.
+
+Common IOC prefix: "20idMotSim" (simulation IOC for testing at 20-ID).
+
+After each move report: start position, target, final RBV, and units.""",
+)
+
 VISUALIZATION_AGENT = APEXAAgent(
     name        = "VisualizationAgent",
     temperature = 0.3,
@@ -314,7 +355,7 @@ Match the user's data files to the correct MIDAS viewer script:
 | Raw 2D image (.tif/.ge/.h5/.zip) | ff_asym_qt.py | ~/Git/MIDAS/gui/ |
 | *_lineout.xy | plot_lineout_results.py or plot_lineout_comparison.py | ~/Git/MIDAS/gui/viewers/ |
 | *_lineout.bin (live GPU) | live_viewer.py | ~/Git/MIDAS/gui/viewers/ |
-| *_caked.hdf.zarr.zip | plot_integrator_peaks.py or viz_caking.py | ~/Git/MIDAS/gui/viewers/ |
+| *_caked.hdf.zarr.zip | plot_integrator_peaks.py | ~/Git/MIDAS/gui/viewers/ |
 | *_caked_peaks.h5 | plot_caked_peaks.py | ~/Git/MIDAS/gui/viewers/ |
 | *_corr.csv (calibration) | plot_calibrant_results.py | ~/Git/MIDAS/gui/viewers/ |
 | Grains.csv + SpotMatrix.csv + .zarr | interactiveFFplotting.py (Dash browser) | ~/Git/MIDAS/gui/viewers/ |
@@ -323,12 +364,16 @@ Match the user's data files to the correct MIDAS viewer script:
 Workflow:
 1. Use list_directory to find output files in the result folder
 2. Match file type to viewer from the table above
-3. For ff_asym_qt.py and nf_qt.py: cd to data directory first, then launch with &
-4. For all others: pass explicit file paths as arguments
-5. Always pass --paramFN or --params when refined_MIDAS_params*.txt is available (enables 2θ/Q axes)
+3. Build the command, then IMMEDIATELY call run_command to execute it
+4. For ff_asym_qt.py and nf_qt.py: cd to data directory first, then launch with &
+5. For all others: pass explicit file paths as arguments
+6. Always pass --paramFN or --params when refined_MIDAS_params*.txt is available (enables 2θ/Q axes)
+
+⚠️ CRITICAL: ALWAYS call run_command to launch the viewer — NEVER just print the command.
 
 Critical flags:
 - live_viewer.py: --nRBins (capital R, capital B — case sensitive), NOT --n-rbins
+- viz_caking.py: DO NOT USE — requires calcMiso which is not in midas_env; use plot_integrator_peaks.py instead
 - interactiveFFplotting.py: requires BOTH -resultFolder AND -dataFileName (.zarr)
 - plot_caked_peaks.py: run fit_caked_peaks.py first if _caked_peaks.h5 doesn't exist
 - ff_asym_qt.py: auto-detects files from CWD — just cd to data dir and launch
@@ -336,7 +381,7 @@ Critical flags:
 Always use midas_env Python:
   /Users/b324240/miniconda3/envs/midas_env/bin/python ~/Git/MIDAS/gui/viewers/<script>.py <args>
 
-Report the exact command so the user can re-run it manually.""",
+After launching, report the exact command so the user can re-run it manually if needed.""",
 )
 
 
@@ -375,11 +420,26 @@ User: "Convert 61.332 keV to wavelength"
 TOOL_CALL: xray_calculate
 ARGUMENTS: {"calculation_type": "energy_to_wavelength", "energy_kev": 61.332}
 
+User: "Show me the lineout for CeO2 integration in test1"
+✅ CORRECT:
+TOOL_CALL: list_directory
+ARGUMENTS: {"path": "test1/integration"}
+[then after finding *_lineout.xy:]
+TOOL_CALL: run_command
+ARGUMENTS: {"command": "/Users/b324240/miniconda3/envs/midas_env/bin/python /Users/b324240/Git/MIDAS/gui/viewers/plot_lineout_results.py /full/path/to/lineout.xy --paramFN /full/path/to/refined_MIDAS_params_CeO2.txt"}
+
+User: "Plot the caked output"
+✅ CORRECT (after finding *_caked.hdf.zarr.zip):
+TOOL_CALL: run_command
+ARGUMENTS: {"command": "/Users/b324240/miniconda3/envs/midas_env/bin/python /Users/b324240/Git/MIDAS/gui/viewers/viz_caking.py /full/path/to/file.caked.hdf.zarr.zip"}
+
 ❌ WRONG — NEVER do these:
 - NEVER calculate d = a/√(h²+k²+l²) yourself — call xray_calculate
 - NEVER say "you can use ls" or "here's how to do it in Python"
 - NEVER say "Let me proceed" without actually calling a tool
 - NEVER describe what you WOULD do — DO IT with TOOL_CALL
+- NEVER read_file to show plot data — launch the viewer with run_command
+- NEVER run bare commands like "plot radial ..." — always use the full Python path
 
 RULES:
 1. For ANY X-ray calculation → TOOL_CALL: xray_calculate
@@ -388,6 +448,7 @@ RULES:
 4. For calibration → TOOL_CALL: midas_auto_calibrate
 5. For integration → TOOL_CALL: midas_integrate_2d_to_1d
 6. For HEDM workflows → TOOL_CALL: the appropriate workflow tool
+7. For visualization/plotting → TOOL_CALL: run_command with the full Python viewer command
 
 Only generate text WITHOUT a TOOL_CALL when:
 - User says hello/greeting
@@ -601,6 +662,7 @@ class OrchestratorAgent:
         "analysis":      ANALYSIS_AGENT,
         "knowledge":     KNOWLEDGE_AGENT,
         "visualization": VISUALIZATION_AGENT,
+        "motor":         MOTOR_AGENT,
     }
 
     _KEYWORDS: Dict[str, set] = {
@@ -632,6 +694,13 @@ class OrchestratorAgent:
             "live viewer", "overlay", "pattern", "diffraction image",
             "peak plot", "grain plot", "3d grain", "spots",
             "ring", "fit result", "caking", "zarr", "lineout.xy",
+        },
+        "motor": {
+            "motor", "move", "position", "caget", "caput", "epics",
+            "ioc", "rbv", "readback", "jog", "tweak", "home motor",
+            "stop motor", "velocity", "speed", "limit switch",
+            "soft limit", "hls", "lls", "dmov", "pv", "channel access",
+            "20idmotsim", "motorsim",
         },
     }
 
