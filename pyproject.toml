@@ -32,3 +32,17 @@ dependencies = [
     "pypdf2>=3.0.0",
     "mp-api>=0.41.0",
 ]
+
+[project.optional-dependencies]
+# Extra scientific packages (not currently imported but useful for future)
+extra = [
+    "plotly>=6.3.0",
+    "seaborn>=0.13.2",
+    "scikit-image>=0.25.2",
+    "pyfai>=2025.3.0",
+    "lmfit>=1.3.4",
+    "vtk>=9.3.0",
+    "rich>=14.1.0",
+    "typer>=0.17.4",
+    "orjson>=3.11.3",
+]

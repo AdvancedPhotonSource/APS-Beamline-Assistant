@@ -135,10 +135,32 @@ MIDAS v11 Python scripts use the `midas_env` conda environment (`~/miniconda3/en
 
 ## Argo API
 
-- **PROD:** `https://apps.inside.anl.gov/argoapi/api/v1/resource/chat/`
-- **DEV:** `https://apps-dev.inside.anl.gov/argoapi/api/v1/resource/chat/`
+- **PROD:** `https://apps.inside.anl.gov/argoapi/api/v1/resource/chat/` (all models, March 2026)
+- **DEV:** `https://apps-dev.inside.anl.gov/argoapi/api/v1/resource/chat/` (future beta models)
+- `DEV_ONLY_MODELS` set in `apexa_agents.py` -- currently empty, add beta model names here
 - Response: `{"response": "text"}` -- no native tool_calls support
 - Do NOT pass `tools` in API payload
+- Model-specific params: o-series/GPT-5 use `max_completion_tokens` (no temperature); Haiku 4.5/Sonnet 4.5/4.6 reject both temperature+top_p
+
+### Available Models (all on PROD)
+- **OpenAI:** gpt4o (default, fastest ~0.8s), gpt4olatest, gpt41/mini/nano, gpto3mini, gpto4mini, gpt5/mini/nano, gpt51, gpt52, gpt54
+- **Anthropic:** claudeopus46/45/41/4, claudesonnet46/45/4/37, claudehaiku45
+- **Google:** gemini25pro, gemini25flash
+
+## CLI Features
+
+- `timing` command toggles API response time display (or `APEXA_SHOW_TIMING=1`)
+- `model <name>` switches models at runtime
+- `clean_markdown()` strips bold/italic/headers from LLM responses for clean terminal output
+- `plot ...` with unrecognized subcommand falls through to APEXA (not intercepted by CLI)
+
+## Dependencies
+
+- `uv sync` installs ~168 packages in ~1 second
+- `uv run` auto-creates `.venv/` -- users never activate manually
+- Optional extras: `uv sync --extra extra` (pyfai, vtk, seaborn, lmfit, etc.)
+- Core deps: httpx, mcp, fastapi, gradio, numpy, scipy, matplotlib, fabio, h5py, xrayutilities
+- MIDAS Python scripts use separate `midas_env` conda environment (not the uv venv)
 
 ## Adding a New MCP Server
 

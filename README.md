@@ -100,7 +100,7 @@ APEXA> run FF-HEDM workflow on /data/experiment
 **User Settings** (`.env`):
 ```bash
 ANL_USERNAME=your_username
-ARGO_MODEL=gpt4o              # or claudesonnet4, gemini25pro
+ARGO_MODEL=gpt4o              # or gpt54, claudesonnet45, gemini25pro
 MIDAS_PATH=~/Git/MIDAS        # Optional - auto-detected
 ```
 
@@ -114,10 +114,13 @@ midas:midas_comprehensive_server.py
 
 ## Requirements
 
-- **Python:** 3.13+ (with `uv` package manager)
+- **Python:** 3.13+ (with [`uv`](https://github.com/astral-sh/uv) package manager)
 - **Network:** ANL access for Argo Gateway
 - **MIDAS:** v11 with `midas_env` conda environment
 - **Memory:** 16+ GB RAM (64+ GB recommended for FF-HEDM)
+
+`uv` handles the virtual environment automatically — users never need to activate it.
+`uv sync` installs all ~168 packages in ~1 second. Optional extras: `uv sync --extra extra`
 
 ---
 
