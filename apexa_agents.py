@@ -611,6 +611,9 @@ class AgentRunner:
             messages.extend(history[-10:])   # last 5 exchanges
         messages.append({"role": "user", "content": query})
 
+        last_tool_name = None          # track repeated tool calls
+        repeat_count   = 0
+
         for _ in range(max_iterations):
             response = await provider.chat(messages, agent.temperature)
 
@@ -636,11 +639,33 @@ class AgentRunner:
                     messages.append({"role": "assistant", "content": prose})
 
                 for tc in text_calls:
+                    # Detect repeated identical tool calls (loop bug)
+                    if tc.name == last_tool_name:
+                        repeat_count += 1
+                    else:
+                        last_tool_name = tc.name
+                        repeat_count = 0
+
+                    if repeat_count >= 2:
+                        # Model is looping — force it to summarise
+                        messages.append({
+                            "role": "user",
+                            "content": (
+                                f"You already called {tc.name} and got the result above. "
+                                "Do NOT call it again. Summarise the result for the user now."
+                            ),
+                        })
+                        break
+
                     print(f"  → {tc.name}")
                     result = await self._execute(tc.name, tc.arguments)
                     messages.append({
                         "role": "user",
-                        "content": f"[Tool Result for {tc.name}]\n{result}",
+                        "content": (
+                            f"[Tool Result for {tc.name}]\n{result}\n\n"
+                            "Now summarise this result for the user. "
+                            "Do NOT call the same tool again unless the user asks for something different."
+                        ),
                     })
                 continue
 
