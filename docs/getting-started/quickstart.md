@@ -1,6 +1,6 @@
-# Beamline Assistant - Quick Start
+# APEXA - Quick Start
 
-## New User Setup (2 minutes)
+## Setup (2 minutes)
 
 ### 1. Run Setup Script
 ```bash
@@ -11,59 +11,66 @@ cd beamline-assistant
 The script will ask for:
 - Your ANL username
 - Preferred AI model (default: gpt4o)
-- MIDAS path (optional - auto-detected if not specified)
+- MIDAS path (optional -- auto-detected)
 
-### 2. Start the Assistant
+### 2. Start APEXA
 ```bash
 ./start_beamline_assistant.sh
 ```
 
-### 3. Start Analyzing!
+You should see:
 ```
-Beamline> List files in /data/experiment_042
-Beamline> Integrate the .tiff files from 2D to 1D
-Beamline> Run FF-HEDM workflow on /data/experiment_042
+  core: 9 tools
+  midas: 21 tools
+
+  APEXA - Advanced Photon EXperiment Assistant
+  Model: gpt4o (PROD)  |  30 tools  |  Servers: core, midas
+```
+
+### 3. Start Analyzing
+```
+APEXA> list files in /data/experiment
+APEXA> calibrate the CeO2 image
+APEXA> integrate the .tif file
+APEXA> show me the lineout
 ```
 
 ## Requirements
 
-- **Python:** 3.10+ (with `uv` package manager)
-- **Network:** ANL network or VPN connection
-- **MIDAS:** Auto-detected from standard locations (see below)
+- **Python:** 3.13+ (with `uv` package manager)
+- **Network:** ANL network or VPN
+- **MIDAS:** v11, auto-detected from standard locations
 
 ## MIDAS Auto-Detection
 
-**MIDAS is auto-detected from these locations (in order):**
+MIDAS is found automatically from (in order):
 
-1. `$MIDAS_PATH` environment variable (highest priority)
-2. `~/Git/MIDAS` (common for development)
-3. `~/opt/MIDAS` (beamline recommended)
-4. `/home/beams/S*USER/opt/MIDAS` (APS beamlines)
+1. `$MIDAS_PATH` environment variable
+2. `~/Git/MIDAS`
+3. `~/opt/MIDAS`
+4. `/home/beams/S*USER/opt/MIDAS` (beamline systems)
 5. `~/MIDAS`
 6. `/opt/MIDAS`
 7. `~/.MIDAS`
 
-**No configuration needed if MIDAS is in a standard location!**
+No configuration needed if MIDAS is in a standard location.
 
 ## Manual Configuration
 
-If you prefer to edit `.env` manually:
+Edit `.env` directly:
 
 ```bash
 cp .env.template .env
 nano .env
 ```
 
-Set these variables:
 ```bash
 ANL_USERNAME=your_anl_username
-ARGO_MODEL=gpt4o
-# MIDAS_PATH=~/.MIDAS  # Optional - only if auto-detection fails
+ARGO_MODEL=gpt4o                    # or claudesonnet4, gemini25pro
+# MIDAS_PATH=~/Git/MIDAS            # only if auto-detection fails
 ```
 
-## Commands
-
-Once started, you can use:
+## CLI Commands
 
 | Command | Description |
 |---------|-------------|
@@ -71,108 +78,55 @@ Once started, you can use:
 | `model <name>` | Switch AI model |
 | `tools` | List all analysis tools |
 | `servers` | Show connected servers |
-| `ls <path>` | List directory contents |
+| `ls <path>` | List directory |
 | `clear` | Clear conversation history |
 | `help` | Show help |
 | `quit` | Exit |
 
-## Natural Language Queries
+## Natural Language Examples
 
 Just ask in plain English:
 
-- "List files in /data/2024-10/run_042"
-- "Integrate the .tiff file from 2D to 1D"
-- "Run FF-HEDM workflow on this directory"
-- "Read the Parameters.txt file there" (remembers context!)
-- "What phases are in this sample?"
+```
+APEXA> calibrate the CeO2 image in test1
+APEXA> integrate CeO2_000001.tif using refined parameters
+APEXA> show me the lineout for CeO2
+APEXA> convert 61.332 keV to wavelength
+APEXA> what is the d-spacing for Fe (110)?
+APEXA> run FF-HEDM workflow on /data/experiment
+APEXA> explain what beam center calibration does
+```
 
 ## Switching AI Models
 
 ```
-Beamline> models
+APEXA> models
 [Shows available models]
 
-Beamline> model claudesonnet4
-✓ Switched to: claudesonnet4
+APEXA> model claudesonnet4
+Switched to: claudesonnet4 (using DEV environment)
 ```
 
 ## Troubleshooting
 
-### MIDAS Not Found
+**MIDAS Not Found:**
 ```
-WARNING: MIDAS not found, using default: ~/.MIDAS
+WARNING: MIDAS not found
 ```
-**Fix:** Install MIDAS or set `MIDAS_PATH` in `.env`
+Fix: Set `MIDAS_PATH` in `.env`
 
-### Authentication Error
+**Authentication Error:**
 ```
 Error calling Argo API: 401 Unauthorized
 ```
-**Fix:** Check ANL_USERNAME in `.env` and network connection
-
-### Need Help?
-```
-Beamline> help
-```
+Fix: Check `ANL_USERNAME` in `.env` and network connection
 
 ## Multi-User Environments
 
 Each user should:
 1. Run `./setup_user.sh` with their own ANL username
-2. Keep their `.env` file private (chmod 600)
-3. Never share credentials
+2. Keep `.env` private (`chmod 600 .env`)
 
-The system supports multiple users with separate configurations and conversation histories.
+---
 
-## Advanced Usage
-
-See detailed documentation:
-- [BEAMLINE_DEPLOYMENT.md](BEAMLINE_DEPLOYMENT.md) - Full deployment guide
-- [IMPROVEMENTS.md](IMPROVEMENTS.md) - Recent improvements
-- [TOOL_FIX.md](TOOL_FIX.md) - Integration tool details
-
-## Example Session
-
-```bash
-$ ./start_beamline_assistant.sh
-Found MIDAS installation at: /home/username/.MIDAS
-✓ Connected to midas server
-✓ Connected to executor server
-✓ Connected to filesystem server
-
-Beamline> List files in /Users/b324240/opt/MIDAS/FF_HEDM/Example
-
-→ Filesystem List Directory
-
-Files in /Users/b324240/opt/MIDAS/FF_HEDM/Example:
-- Parameters.txt (4.2 KB)
-- ff_011276_ge2_0001.tiff (8.4 MB)
-- GrainsSim.csv (125 KB)
-
-Beamline> Read the Parameters.txt file there
-
-→ Filesystem Read File
-
-The Parameters.txt file contains detailed configuration parameters...
-
-Beamline> Integrate the .tiff file from 2D to 1D
-
-→ Filesystem List Directory
-→ Integrate 2D To 1D
-
-Successfully integrated ff_011276_ge2_0001.tiff to 1D pattern
-- Output: ff_011276_ge2_0001_1d.dat
-- Detected 8 peaks
-- Signal-to-noise ratio: 45.2
-
-Beamline> quit
-Goodbye!
-```
-
-## Security Note
-
-Your `.env` file contains your ANL credentials. Keep it secure:
-- Never commit to git (already in .gitignore)
-- Set permissions: `chmod 600 .env`
-- Don't share with others
-- Each user should have their own
+See [USER_MANUAL.md](../../USER_MANUAL.md) for complete documentation.

@@ -49,29 +49,29 @@ Features:
 - **[QUICK_REFERENCE.md](QUICK_REFERENCE.md)** - Command cheat sheet for demos
 
 ### For Developers & Advanced Users
-- **[APEXA_SMART_FEATURES_MANUAL.md](APEXA_SMART_FEATURES_MANUAL.md)** - Smart features and AI capabilities
-- **[MIDAS_WORKFLOWS_REFERENCE.md](MIDAS_WORKFLOWS_REFERENCE.md)** - Technical MIDAS workflow details
+- **[Architecture](development/architecture.md)** - System architecture (agents, MCP servers, tool registry)
+- **[Agent Skills](.agents/skills/)** - MIDAS workflow reference (calibration, integration, HEDM, visualization)
 
 ---
 
-## 💬 Example Usage
+## Example Usage
 
 ```
-APEXA> calibrate using the CeO2 image in this directory
-→ Auto Calibrate
-✓ Refined parameters saved to refined_MIDAS_params.txt
+APEXA> calibrate the CeO2 image in test1
+  -> midas_auto_calibrate
+  Refined BC: (809.55, 700.52), Lsd: 641.95 mm
 
-APEXA> integrate sample.tif using those parameters
-→ Integrate 2D To 1D
-✓ Output: sample.dat
+APEXA> integrate CeO2 in test1 using the refined params
+  -> midas_integrate_2d_to_1d
+  Output: CeO2_000001.tif.analysis.MIDAS_lineout.xy
 
-APEXA> identify phases from the peaks
-→ Phase Identification
-Detected phases: Ti (α-phase), TiO₂ (rutile)
+APEXA> show me the lineout
+  -> run_command (plot_lineout_results.py)
+  [viewer window opens]
 
 APEXA> run FF-HEDM workflow on /data/experiment
-→ FF-HEDM Full Workflow
-✓ Found 2,347 grains
+  -> run_ff_hedm_full_workflow
+  Found 2,347 grains
 ```
 
 ---
@@ -96,7 +96,7 @@ Suggests next steps after each analysis:
 - Auto-validates parameters before execution
 - Real-time alerts during beamtime
 
-See [APEXA_SMART_FEATURES_MANUAL.md](APEXA_SMART_FEATURES_MANUAL.md) for details on all smart features.
+See [USER_MANUAL.md](USER_MANUAL.md) for details on all features.
 
 ### Extensible
 Add new analysis tools in 5 minutes - see USER_MANUAL.md for details.
@@ -106,13 +106,19 @@ Add new analysis tools in 5 minutes - see USER_MANUAL.md for details.
 ## 🛠️ System Architecture
 
 ```
-User → Argo-AI (GPT-4o/Claude/Gemini)
+User → Argo Gateway (GPT-4o/Claude/Gemini)
          ↓
-    MCP Client (argo_mcp_client.py)
+    OrchestratorAgent (apexa_agents.py)
          ↓
-   ┌─────────┬─────────┬─────────┐
-   │filesystem│  midas  │ executor│
-   └─────────┴─────────┴─────────┘
+   ┌──────────────┬──────────────┬────────────────┬───────────────────┐
+   │ Calibration  │  Analysis   │  Knowledge     │  Visualization    │
+   │    Agent     │    Agent    │    Agent       │     Agent         │
+   └──────┬───────┴──────┬──────┴───────┬────────┴────────┬──────────┘
+          └──────────────┴──────────────┘                 │
+                         ↓                                ↓
+              ┌──────────┬──────────┐           MIDAS viewer scripts
+              │   core   │  midas   │
+              └──────────┴──────────┘
 ```
 
 ---
@@ -128,8 +134,7 @@ MIDAS_PATH=~/Git/MIDAS        # Optional - auto-detected
 
 **Server Configuration** (`servers.config`):
 ```bash
-filesystem:filesystem_server.py
-executor:command_executor_server.py
+core:beamline_core_server.py
 midas:midas_comprehensive_server.py
 ```
 
@@ -137,10 +142,10 @@ midas:midas_comprehensive_server.py
 
 ## 📋 Requirements
 
-- **Python:** 3.10+
+- **Python:** 3.13+
 - **Package Manager:** [uv](https://github.com/astral-sh/uv)
-- **Network:** ANL access for Argo-AI
-- **MIDAS:** Installed with conda environment
+- **Network:** ANL access for Argo Gateway
+- **MIDAS:** v11 with `midas_env` conda environment
 - **Memory:** 16+ GB RAM (64+ GB recommended for FF-HEDM)
 
 ---
@@ -193,7 +198,7 @@ See [USER_MANUAL.md](USER_MANUAL.md#troubleshooting) for detailed troubleshootin
 
 ## 📄 License
 
-Copyright © 2024 UChicago Argonne, LLC  
+Copyright (c) 2024-2026 UChicago Argonne, LLC  
 See [LICENSE](LICENSE) for details.
 
 ---
@@ -206,5 +211,5 @@ See [LICENSE](LICENSE) for details.
 **Documentation Map:**
 - **New user?** → [User Manual](USER_MANUAL.md)
 - **Demo/presentation?** → [Quick Reference](QUICK_REFERENCE.md)
-- **MIDAS expert?** → [MIDAS Workflows](MIDAS_WORKFLOWS_REFERENCE.md)
-- **Want advanced features?** → [Smart Features](APEXA_SMART_FEATURES_MANUAL.md)
+- **Developer?** → [Architecture](development/architecture.md)
+- **MIDAS workflows?** → [Agent Skills](.agents/skills/)

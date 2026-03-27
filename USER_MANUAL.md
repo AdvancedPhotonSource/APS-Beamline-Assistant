@@ -7,20 +7,13 @@ Your AI beamline scientist for real-time HEDM data analysis at APS.
 
 ## Quick Start
 
-### Option 1: Gradio UI (Recommended - AI-Driven Chat Interface)
+### Option 1: Gradio UI (Recommended)
 
 ```bash
 ./start_gradio_ui.sh
 ```
 
-Opens a web browser at http://localhost:7860 with:
-- 💬 **Conversational chat interface** (natural language commands)
-- 📁 **Drag-and-drop file uploads** (TIFF, GE, HDF5, etc.)
-- 📊 **Embedded visualizations** (plots appear in chat)
-- 🎯 **Example prompts** to get started quickly
-- ⚡ **Real-time progress** as workflows execute
-
-**Perfect for:** Interactive analysis, exploring data, learning APEXA
+Opens http://localhost:7860 with conversational chat, drag-and-drop file uploads, and embedded visualizations.
 
 ### Option 2: Command Line (Power Users)
 
@@ -28,779 +21,289 @@ Opens a web browser at http://localhost:7860 with:
 ./start_beamline_assistant.sh
 ```
 
-Terminal-based interface with:
-- ✅ Load all analysis servers automatically
-- ✅ Connect to Argo-AI (GPT-4o, Claude, Gemini)
-- ✅ Auto-detect MIDAS installation
-- ✅ Command history and tab completion
+Terminal interface with command history and tab completion.
 
-**Perfect for:** Scripting, batch processing, SSH access
-
-### Option 3: Web UI (Classic Forms)
+### Option 3: Web UI
 
 ```bash
 python web_server.py
 ```
 
-Opens http://localhost:8000 with:
-- Traditional forms for calibration, integration, visualization
-- Direct parameter control (no AI)
-- Separate chat assistant
-
-**Perfect for:** Users who prefer traditional GUI controls
+Traditional forms for calibration, integration, and visualization at http://localhost:8000.
 
 ---
 
-## What Can APEXA Do?
+## How APEXA Works
 
-### 🔧 Detector Calibration
-Automatically calibrate detector geometry using calibrant materials.
+APEXA uses a multi-agent architecture. Your natural language request is routed by the **OrchestratorAgent** to the right specialist:
 
-**Example Prompts:**
-```
-APEXA> calibrate using the CeO2 image in this directory
-APEXA> auto-calibrate with LaB6_650mm.tif and use stopping strain 1e-3
-APEXA> run calibration on ceria file with mask and initial parameters
-```
+| Agent | Handles | Key Tools |
+|---|---|---|
+| **CalibrationAgent** | Calibration, beam center, detector distance | `midas_auto_calibrate`, `xray_calculate` |
+| **AnalysisAgent** | Integration, FF/NF/PF-HEDM workflows | `midas_integrate_2d_to_1d`, `run_ff_hedm_full_workflow` |
+| **KnowledgeAgent** | Explanations, material properties, best practices | `query_hedm_knowledge`, `get_material_properties` |
+| **VisualizationAgent** | Plotting, viewing lineouts, caked data | `run_command` (launches MIDAS viewer scripts) |
 
-**What It Does:**
-- Finds calibrant image (CeO2, LaB6, Si)
-- Uses MIDAS `AutoCalibrateZarr.py` workflow
-- Iteratively refines: beam center, distance, tilts, distortion
-- Outputs: `refined_MIDAS_params.txt`, `autocal.log`
-
-**Supported Formats:** `.tif`, `.tiff`, `.ge2`, `.ge3`, `.ge4`, `.ge5`, `.h5`
+You don't need to know which agent handles your request -- just ask naturally.
 
 ---
 
-### 📊 2D → 1D Integration
-Integrate diffraction images to 1D patterns for phase analysis.
+## Detector Calibration
 
-#### Simple Single-Frame Integration
-
-**Example Prompts:**
-```
-APEXA> integrate the .tif file to 1D
-APEXA> integrate data.ge5 using Parameters.txt
-APEXA> integrate with dark file subtraction using dark.ge5
-```
-
-**What It Does:**
-- Azimuthal integration using MIDAS Integrator
-- Optional dark file subtraction for background correction
-- Outputs: `.dat` file with Q vs Intensity
-
-**Use Cases:**
-- Quick analysis of single frames
-- Phase identification (peak matching)
-- Texture analysis
-
-#### Multi-Panel Batch Integration (Production Workflow)
-
-**For beamlines with multi-panel detectors like Hydra (4 panels)**
+Calibrate detector geometry using calibrant powders (CeO2, LaB6, Si, Al2O3).
 
 **Example Prompts:**
 ```
-APEXA> batch integrate frames 3083 to 3085 from CeO2_003083.ge1.h5 using dark_003084.ge1.h5 and refined_MIDAS_params_ge1.txt
-APEXA> integrate all panels of Hydra detector with detector mapping enabled
-APEXA> run batch integration with 80 CPUs on frames 100-500
+APEXA> calibrate the CeO2 image in test1
+APEXA> calibrate using LaB6_650mm.tif with 40 iterations
+APEXA> run calibration on the ceria file with initial parameters
 ```
 
-**What It Does:**
-- Uses MIDAS `integrator.py` (Python) instead of simple binary
-- **Detector mapping** for multi-panel detectors (critical for Hydra!)
-- Batch processing of frame ranges
-- Parallel processing (up to 80+ CPUs)
-- HDF5 input/output with `/exchange/data` location
-- Dark file correction with masks
-- Outputs: `.zarr.zip` files (convert to `.mat` if needed)
+**What happens:**
+1. APEXA finds the calibrant image and parameter file
+2. Runs MIDAS `AutoCalibrateZarr.py` (iterative ring-fitting)
+3. Refines: beam center (BC), detector distance (Lsd), tilts (tx/ty/tz), distortion (p0-p5)
+4. Outputs: `refined_MIDAS_params_<material>.txt`, `autocal.log`
 
-**Key Parameters:**
-- `map_detector=True` - **REQUIRED** for multi-panel detectors
-- `num_cpus=80` - Parallel processing (adjust to system)
-- `start_frame` / `end_frame` - Frame range to process
-- `data_location="/exchange/data"` - HDF5 internal path
-- `dark_location="/exchange/data"` - Dark file HDF5 path
+**Supported Formats:** `.tif`, `.tiff`, `.ge`, `.ge1`-`.ge5`, `.h5`, `.hdf5`, `.nxs`
 
-**Multi-Panel Workflow:**
-1. Calibrate each panel separately (ge1, ge2, ge3, ge4)
-2. Run batch integration for each panel with `map_detector=True`
-3. Optional: Convert `.zarr.zip` to `.mat` using `zarr_tomat.py`
-4. Proceed to FF-HEDM grain indexing with `ff_MIDAS.py`
-
-**Outputs:**
-- `*.zarr.zip` - Integrated 1D patterns (ZARR format)
-- `*.hdf` - Intermediate HDF5 files
-- `*.mat` - MATLAB format (if `write_mat=True`)
-
-**Time:** ~5-30 minutes depending on frame count and CPU cores
+**Convergence:** Final mean strain < 0.001 is good. If strain is high, increase iterations or check initial parameters.
 
 ---
 
-### 🔬 FF-HEDM Full Workflow
+## 2D to 1D Integration
+
+Integrate diffraction images to 1D intensity vs 2-theta patterns.
+
+### Single Image
+```
+APEXA> integrate CeO2_000001.tif in test1 using the refined params
+APEXA> integrate the .tif file with dark subtraction
+```
+
+The `calibration_file` is optional -- APEXA auto-detects `refined_MIDAS_params*.txt` in the image directory.
+
+### Batch Integration
+```
+APEXA> batch integrate all .tif files in /data with 8 CPUs
+APEXA> batch integrate frames 1 to 100
+```
+
+### What It Produces
+
+| Output File | Description |
+|---|---|
+| `*_lineout.xy` | 2-theta (degrees) vs intensity -- text file, GSAS-II compatible |
+| `*_lineout.bin` | Binary lineout |
+| `*_caked.hdf.zarr.zip` | Full caked data -- GSAS-II zarr importer compatible |
+| `Map.bin`, `nMap.bin` | Geometry maps (generated once per detector config) |
+
+### GPU Streaming (Real-Time)
+
+For live experiments with GPU hardware, use natural language to invoke `integrator_batch_process.py`:
+```
+APEXA> run GPU streaming integration on /data/scan_01 with dark file
+APEXA> start live streaming integration from PVA detector
+```
+
+---
+
+## FF-HEDM Workflow
+
 Complete Far-Field HEDM grain reconstruction pipeline.
 
-**Example Prompts:**
 ```
 APEXA> run FF-HEDM workflow on /data/experiment
 APEXA> run FF-HEDM with 32 CPUs on layers 1-10
-APEXA> analyze the FF-HEDM data in ~/beamtime/sample1
 ```
 
-**What It Does:**
-1. Data conversion to Zarr format
-2. HKL list generation
-3. Peak search and fitting
-4. Peak merging
-5. Indexing (grain orientation)
-6. Refinement (position/strain)
-7. Post-processing
+**Pipeline:** Data conversion -> HKL generation -> Peak search -> Peak fitting -> Merging -> Indexing -> Refinement
 
-**Outputs:**
-- `GrainsReconstructed.csv` - Grain orientations and positions
-- `*.MIDAS.zip` - Zarr archive with all data
-
-**Time:** ~10-60 minutes depending on dataset size
+**Outputs:** `Grains.csv` (orientations, positions, strains), `*.MIDAS.zip`
 
 ---
 
-### 🗺️ NF-HEDM Reconstruction
-Near-Field HEDM for high-resolution 3D microstructure mapping.
+## NF-HEDM Reconstruction
 
-**Example Prompts:**
+Near-Field HEDM for high-resolution 3D microstructure mapping (~1-5 um resolution).
+
 ```
 APEXA> run NF-HEDM reconstruction with FF seed orientations
 APEXA> process NF data using grains from FF-HEDM
-APEXA> reconstruct microstructure with 10 CPUs
 ```
-
-**What It Does:**
-- Image processing (dark/flat correction, spot finding)
-- Voxel-by-voxel orientation fitting
-- 3D grain map generation
-- Strain tensor calculation
-
-**Resolution:** ~1-5 μm (vs ~50-100 μm for FF-HEDM)
 
 ---
 
-### 🔍 Phase Identification
-Identify crystalline phases from diffraction peaks.
+## Visualization
 
-**Example Prompts:**
+Ask APEXA to plot results using MIDAS viewer scripts:
+
 ```
-APEXA> identify phases from peaks at 12.5, 18.2, 25.8 degrees
-APEXA> what phases match these peaks: 15.3, 22.1, 31.4
-APEXA> match the peaks in pattern.dat to known phases
+APEXA> show me the lineout for CeO2 in test1
+APEXA> plot the caked output from test1/integration
+APEXA> show calibration results for test1
+APEXA> view the 2D diffraction image CeO2_000001.tif
+APEXA> compare lineouts with ideal ring positions
 ```
 
-**What It Does:**
-- Searches crystallography databases (COD, ICSD)
-- Matches d-spacings to known phases
-- Ranks candidates by match quality
+APEXA launches the appropriate MIDAS viewer (PyQt/matplotlib) based on your data files:
 
-**Common Calibrants:** CeO2, LaB6, Si, Al₂O₃, NAC
+| Data File | Viewer Used |
+|---|---|
+| `*_lineout.xy` | `plot_lineout_results.py` or `plot_lineout_comparison.py` |
+| `*_caked.hdf.zarr.zip` | `plot_integrator_peaks.py` |
+| `*_caked_peaks.h5` | `plot_caked_peaks.py` |
+| `*_corr.csv` | `plot_calibrant_results.py` |
+| Raw 2D image | `ff_asym_qt.py` |
+| Grains.csv + SpotMatrix | `interactiveFFplotting.py` |
 
 ---
 
-### 🧮 Crystallography Math Tools
-**⚠️ IMPORTANT: Use these tools for math - LLMs are unreliable at calculations!**
+## X-ray Calculations
 
-APEXA uses **xrayutilities** (industry-standard crystallography library) and verified algorithms for accurate computations.
+APEXA uses verified tools for crystallographic calculations -- never computes manually.
 
-#### Calculate d-spacing from 2θ
-```
-APEXA> calculate d-spacing for 2-theta 10.5 degrees with wavelength 0.2066 angstroms
-APEXA> what's the d-spacing at 3.79 degrees using lambda 0.2021?
-```
-
-**Formula:** d = λ / (2·sin(θ))
-
-**Returns:**
-- d-spacing in Ångströms
-- Formula used
-- Step-by-step calculation
-- Full transparency for verification
-
----
-
-#### Calculate 2θ from d-spacing
-```
-APEXA> calculate 2-theta for d-spacing 3.124 angstroms with wavelength 0.2021
-APEXA> what angle does the (111) peak appear at? d=3.12 Å, λ=0.2021 Å
-```
-
-**Formula:** 2θ = 2·arcsin(λ/(2d))
-
-**Use Case:** Predicting peak positions for phase identification
-
----
-
-#### Convert Energy ↔ Wavelength
+**Energy/Wavelength:**
 ```
 APEXA> convert 61.332 keV to wavelength
-APEXA> what's the wavelength for 71.2 keV X-rays?
 APEXA> convert 0.2021 angstroms to energy
 ```
 
-**Method:** xrayutilities.en2lam() / xrayutilities.lam2en()
-
-**Common Energies:**
-- APS 1-ID: 61.332 keV (λ = 0.2022 Å)
-- APS 1-ID: 71.676 keV (λ = 0.1730 Å)
-
----
-
-#### Calculate Lattice Strain
+**d-spacing:**
 ```
-APEXA> calculate strain for measured d=3.155 and reference d=3.124
-APEXA> what's the strain if d changed from 3.120 to 3.108?
-```
-
-**Formula:** ε = (d_measured - d_reference) / d_reference
-
-**Returns:**
-- Strain (absolute and percentage)
-- Strain type (tensile/compressive)
-- Full calculation shown
-
-**Use Case:** Residual stress analysis, thermal expansion studies
-
----
-
-#### Calculate Detector Distance
-```
-APEXA> calculate detector distance from ring at 512 pixels,
-       d=3.124 angstroms, lambda=0.2021, pixel size 200 microns
-```
-
-**Formula:** L = r / tan(θ), where 2θ = 2·arcsin(λ/(2d))
-
-**Use Case:** Verifying calibration, detector setup validation
-
----
-
-#### Material Database Calculations (xrayutilities)
-
-APEXA includes the xrayutilities material database with verified crystallographic data for common materials.
-
-**Get d-spacing from Material + HKL:**
-```
-APEXA> get d-spacing for Si (111)
+APEXA> calculate d-spacing for 2-theta 10.5 degrees at 0.2066 angstroms
+APEXA> get d-spacing for CeO2 (111)
 APEXA> what's the d-spacing of Fe (110)?
-APEXA> show me d-spacings for LaB6 (100), (110), (111)
 ```
 
-**Returns:**
-- Verified d-spacing from crystallographic database
-- Lattice parameters
-- Crystal structure information
-
-**Calculate Bragg Angle from Material:**
+**Bragg angle:**
 ```
 APEXA> calculate Bragg angle for Si (111) at 61.332 keV
-APEXA> what's the diffraction angle for Fe (110) with wavelength 0.2022 angstroms?
-APEXA> where does Al (111) appear at 71.676 keV?
 ```
 
-**Returns:**
-- 2θ angle (degrees)
-- d-spacing from database
-- Q-vector magnitude
-- Full calculation transparency
+**Strain:**
+```
+APEXA> calculate strain for measured d=3.155 and reference d=3.124
+```
 
-**Available Materials:**
-- **Calibrants**: Si, LaB6, Al2O3 (sapphire), CaF2, BaF2
-- **Metals**: Fe, Al, Cu, Ti, Co, Cr, Ag, Au
-- **Semiconductors**: Si, Ge, GaAs, InP, and many more
-
-**Use:** `list_common_materials` to see full database
+**Common APS Energies:**
+- 1-ID: 61.332 keV (0.2022 A)
+- 1-ID: 71.676 keV (0.1730 A)
 
 ---
 
-### 📁 File Operations
-Navigate, read, and search your data directories.
+## Knowledge Base
 
-**Example Prompts:**
+Ask domain-specific questions:
+
+```
+APEXA> what is FF-HEDM?
+APEXA> explain Bragg's law for 61 keV beam energy
+APEXA> what are typical parameters for steel?
+APEXA> get material properties for CeO2
+APEXA> what are quality thresholds for calibration?
+```
+
+**Available materials:** CeO2, LaB6, Si, Al2O3, Fe, Ti, Ni, Al, Steel_316L, Ti6Al4V
+
+---
+
+## File Operations
+
 ```
 APEXA> list files in /data/experiment
 APEXA> read the Parameters.txt file
-APEXA> find all .ge5 files in this directory
-APEXA> show me the calibration parameters
+APEXA> what's in the integration folder?
 ```
-
-**Available Operations:**
-- List directories (with filters)
-- Read text files
-- Search for files (glob patterns)
-- Get file metadata
-- Navigate directory trees
-
----
-
-### 📈 Data Visualization
-Plot diffraction data for quality checks.
-
-**Example Prompts:**
-```
-APEXA> plot 2D image sample.tif
-APEXA> plot radial profile of data.ge5
-APEXA> compare these three 1D patterns
-APEXA> show me the integrated pattern
-```
-
-**Plot Types:**
-- 2D images (linear + log scale)
-- Radial profiles (with peak detection)
-- 1D patterns (Q vs Intensity)
-- Multi-pattern comparisons
-
-**Outputs:** PNG files saved to `~/.apexa/plots/`
-
----
-
-### ⚡ Batch Processing
-Process hundreds of files with one command.
-
-**Example Prompts:**
-```
-APEXA> batch integrate all .tif files
-APEXA> process all images in /data using Parameters.txt
-APEXA> convert all GE files to TIFF
-```
-
-**What It Does:**
-- Automatically finds matching files
-- Processes in parallel (when possible)
-- Progress tracking
-- Error reporting for failed files
-
-**Use Cases:**
-- Time-resolved experiments
-- Temperature series
-- Deformation series
-- Mapping experiments
-
----
-
-### 🎯 Real-Time Monitoring
-Monitor data quality during beamtime.
-
-**Example Prompts:**
-```
-APEXA> start monitoring /data/live for new images
-APEXA> alert me if detector saturates
-APEXA> check image quality every 5 seconds
-```
-
-**What It Does:**
-- Watches directory for new files
-- Automatic quality checks:
-  - Signal-to-noise ratio
-  - Detector saturation
-  - Hot pixel detection
-  - Ring visibility
-- Real-time alerts for issues
-
-**Perfect For:** Optimizing acquisition during beamtime
-
----
-
-## Example Demo Session
-
-### Setup Check
-```
-APEXA> what tools are available?
-APEXA> check if MIDAS is installed
-APEXA> list the current directory
-```
-
-### Standard Calibration Workflow
-```
-APEXA> I have a CeO2 calibration image. Let's calibrate the detector.
-
-→ AI finds CeO2.tif and Parameters.txt
-→ Runs AutoCalibrateZarr.py
-→ Outputs refined_MIDAS_params.txt
-
-APEXA> show me the calibrated beam center and distance
-
-→ AI reads refined_MIDAS_params.txt
-→ Reports: BC = (1024.3, 1048.7), Lsd = 652.4 mm
-```
-
-### Data Analysis Workflow
-```
-APEXA> integrate sample_001.tif using the calibrated parameters
-
-→ Runs pyFAI integration
-→ Outputs sample_001.dat
-
-APEXA> plot the integrated pattern
-
-→ Creates 1D plot with peak detection
-→ Saves to ~/.apexa/plots/sample_001_1d.png
-
-APEXA> identify the phases from the peaks
-
-→ Matches peaks to crystallography databases
-→ Reports: "Likely phases: Ti (α-phase), TiO₂ (rutile)"
-```
-
-### FF-HEDM Reconstruction
-```
-APEXA> run FF-HEDM on this dataset with 20 CPUs
-
-→ Executes full ff_MIDAS.py workflow
-→ Processes layers 1-10
-→ Finds 2,347 grains
-
-APEXA> what's the average grain size?
-
-→ Analyzes GrainsReconstructed.csv
-→ Reports: "Average grain diameter: 45 μm"
-```
-
----
-
-## Tips for Effective Use
-
-### 🎯 Be Conversational
-You don't need to memorize commands. Just describe what you want:
-
-**Good:**
-- "Calibrate using the ceria file"
-- "Integrate this image with dark subtraction"
-- "Find all gold data in the directory"
-
-**Also Works:**
-- "midas_auto_calibrate --image CeO2.tif --params Parameters.txt"
-- But why type all that? 😊
-
----
-
-### 📂 Use Relative Paths
-The assistant understands context:
-
-```
-APEXA> list files here
-APEXA> read the parameters file there
-APEXA> integrate the .tif file
-```
-
-It remembers the current directory and previous file references.
-
----
-
-### 🔄 Conversation History
-The assistant remembers your session:
-
-```
-APEXA> list files in /data/sample1
-→ Shows: CeO2.tif, Parameters.txt, dark.tif
-
-APEXA> calibrate using the first file
-→ Knows you mean CeO2.tif
-
-APEXA> now integrate with that dark file
-→ Remembers dark.tif from the listing
-```
-
----
-
-### 💡 Ask for Help
-Not sure what to do next?
-
-```
-APEXA> what should I do after calibration?
-APEXA> how do I run FF-HEDM?
-APEXA> what's the difference between FF and NF-HEDM?
-```
-
-The AI provides guidance and suggests next steps.
-
----
-
-## Advanced Features
-
-### Smart Suggestions
-After each analysis, APEXA suggests next steps:
-
-```
-APEXA> integrate sample.tif
-
-→ Integration complete
-
-📊 Suggested next steps:
-• Identify phases from peak positions
-• Perform Rietveld refinement
-• Check for peak splitting (sample stress/strain)
-```
-
----
-
-### Error Prevention
-APEXA validates parameters before execution:
-
-```
-APEXA> integrate missing_file.tif
-
-✗ Validation Error: Image file not found: missing_file.tif
-→ Prevented wasted computation
-```
-
-**Checks:**
-- File existence
-- File format compatibility
-- Required parameters present
-- Parameter value ranges
-
----
-
-### Smart Caching
-Frequently accessed data is cached:
-
-```
-APEXA> list files in /data
-
-→ Lists files
-
-APEXA> list files in /data again
-
-→ Returns instantly (from cache)
-```
-
-Reduces latency for repeated operations.
 
 ---
 
 ## Model Selection
 
-Choose your preferred AI model:
+Switch AI models on the fly:
 
+```
+APEXA> models                    # list available
+APEXA> model claudesonnet4       # switch
+```
+
+**Available:** gpt4o (default), gpt41, claudesonnet4, claudesonnet45, claudeopus4, gemini25pro, gemini25flash
+
+Set default in `.env`:
 ```bash
-# In .env file:
-ARGO_MODEL=gpt4o          # Default - Fast, capable
-ARGO_MODEL=claudesonnet4  # Best reasoning
-ARGO_MODEL=gemini25pro    # Longest context
+ARGO_MODEL=gpt4o
 ```
-
-**Available Models:**
-- **OpenAI:** gpt4o, gpt4turbo, gpt4, gpt35
-- **Anthropic:** claudesonnet4, claudeopus4
-- **Google:** gemini25pro, gemini25flash
-
-**Switch On-the-Fly:**
-```
-APEXA> models
-APEXA> switch to claudesonnet4
-```
-
----
-
-## 🧠 Knowledge Base & Domain Expertise
-
-APEXA includes a RAG-powered knowledge base that provides PhD-level domain expertise by indexing research papers, experimental logbooks, and textbooks.
-
-### Setup Knowledge Base
-
-```bash
-# 1. Install dependencies (if not already installed)
-uv add chromadb sentence-transformers pypdf2 mp-api
-
-# 2. Optional: Fetch materials from Materials Project
-export MP_API_KEY="your_api_key"  # Get from https://materialsproject.org/api
-python knowledge_base/fetch_materials_from_mp.py
-
-# 3. Add your documents
-cp /path/to/papers/*.pdf knowledge_base/papers/
-cp /path/to/logbooks/*.txt knowledge_base/logbooks/
-
-# 4. Index the knowledge base (one-time, 10-30 min)
-python knowledge_base/index_knowledge.py
-```
-
-### Ask Questions
-
-Once indexed, you can ask domain-specific questions:
-
-```
-APEXA> What is a good calibration strain value?
-APEXA> How should I process Ti-6Al-4V samples?
-APEXA> Explain Bragg's law for 61keV beam energy
-APEXA> What parameters were used for experiment 2019-03-15?
-```
-
-### Get Material Properties
-
-```
-APEXA> Get properties for CeO2
-APEXA> Show me lattice parameters for LaB6
-APEXA> What is the space group of Ti-6Al-4V?
-```
-
-**Available materials:** CeO2, LaB6, Si, Al2O3, Fe, Ti, Ni, Al, Steel_316L, Ti6Al4V (from Materials Project)
-
-### Estimate Parameters
-
-```
-APEXA> Estimate Lsd from ring at radius 412 pixels for CeO2 at 61keV
-APEXA> What's the typical detector distance for FF-HEDM?
-APEXA> What are quality thresholds for calibration?
-```
-
-### Knowledge Base Contents
-
-- **Papers** - Research publications on HEDM, calibration methods, analysis workflows
-- **Logbooks** - Experimental notes from 10+ years of beamline operations
-- **Books** - Crystallography fundamentals, diffraction theory textbooks
-- **Materials DB** - Authoritative data from Materials Project (lattice params, d-spacings)
-- **Typical Parameters** - HEDM best practices, quality thresholds, typical ranges
-
-### Performance
-
-- **Query time:** <200ms (vector search)
-- **Material lookup:** <10ms (dictionary)
-- **Local processing:** All data stays on your machine
 
 ---
 
 ## Troubleshooting
 
-### "Tool not found" Warning
-```
-WARNING  Tool 'midas_auto_calibrate' not listed
-```
-
-**Fix:** Restart the assistant. This warning is cosmetic and doesn't affect functionality.
-
----
-
 ### MIDAS Not Detected
 ```
-⚠ No valid MIDAS installation found
+WARNING: MIDAS not found
 ```
-
-**Fix:** Set the path manually:
-```bash
-# In .env:
-export MIDAS_PATH=/path/to/MIDAS
-```
-
-**Or activate MIDAS conda environment first:**
-```bash
-conda activate midas_env
-./start_beamline_assistant.sh
-```
-
----
+Set the path: `export MIDAS_PATH=/path/to/MIDAS` in `.env`
 
 ### Calibration Fails to Converge
+Common causes:
+1. Bad initial guess for Lsd or BC in Parameters.txt
+2. Wrong calibrant material specified
+3. Low-quality image (check saturation)
+
+Fix: Adjust starting parameters or increase `--n-iterations`.
+
+### Integration Fails with h5py Error
 ```
-✗ Convergence failed after 50 iterations
+Symbol not found: _H5T_IEEE_F16BE_g
 ```
+This is an HDF5 version mismatch. APEXA uses `get_midas_python_env()` for Python scripts to avoid DYLD_LIBRARY_PATH conflicts with conda h5py.
 
-**Common Causes:**
-1. **Bad initial guess** - Check `Lsd` and `BC` in Parameters.txt
-2. **Wrong calibrant** - Verify material (CeO2 vs LaB6)
-3. **Low-quality image** - Check saturation and SNR
-
-**Fix:** Adjust starting parameters or use `--mult_factor 3.5` for more aggressive refinement.
-
----
-
-### Integration Produces Noisy Pattern
+### "Validation Error" on Integration
+The model may not pass parameters correctly on the first try. Provide the calibration file name explicitly:
 ```
-Pattern has low signal-to-noise ratio
+APEXA> integrate CeO2_000001.tif using refined_MIDAS_params_CeO2.txt
 ```
-
-**Solutions:**
-1. **Use dark file subtraction:**
-   ```
-   APEXA> integrate with dark file dark_001.tif
-   ```
-
-2. **Check detector mask:**
-   Mask saturated/dead pixels before integration
-
-3. **Increase exposure time** (if possible during collection)
 
 ---
 
 ## File Formats
 
 ### Supported Image Formats
-- **TIFF:** `.tif`, `.tiff` (most common)
-- **GE Detectors:** `.ge2`, `.ge3`, `.ge4`, `.ge5`
-- **Eiger/Pilatus:** `.h5`, `.hdf5`
-- **European Detectors:** `.edf`
+- **TIFF:** `.tif`, `.tiff`
+- **GE Detectors:** `.ge`, `.ge1`-`.ge5`
+- **HDF5:** `.h5`, `.hdf5`, `.nxs`
+- **Zarr:** `.zip` (Zarr format)
 
 ### Parameter Files
-MIDAS uses `Parameters.txt` format:
+MIDAS `Parameters.txt` / `refined_MIDAS_params*.txt`:
 ```
-Lsd 650000         # Sample-to-detector distance (μm)
-BC 1024 1024       # Beam center (pixels)
+Lsd 650000         # Sample-to-detector distance (um)
+BC 1024 1024       # Beam center Y Z (pixels)
 tx 0 ty 0 tz 0     # Detector tilts (degrees)
-px 200             # Pixel size (μm)
-Wavelength 0.1777  # X-ray wavelength (Å)
+px 200             # Pixel size (um)
+Wavelength 0.1777  # X-ray wavelength (A)
 ```
 
-### Output Files
-- **Calibration:** `refined_MIDAS_params.txt`, `autocal.log`
-- **Integration:** `*.dat` (Q, Intensity)
-- **FF-HEDM:** `GrainsReconstructed.csv`, `*.MIDAS.zip`
-- **NF-HEDM:** `Grains.csv`, `Microstructure.h5`
+### Key Output Files
+| Step | Output |
+|---|---|
+| Calibration | `refined_MIDAS_params_<material>.txt`, `autocal.log` |
+| Integration | `*_lineout.xy`, `*_caked.hdf.zarr.zip` |
+| FF-HEDM | `Grains.csv`, `*.MIDAS.zip` |
+| NF-HEDM | `Grains.csv`, `Microstructure.h5` |
 
 ---
 
 ## System Requirements
 
-### Minimum
-- **OS:** Linux (Ubuntu 20.04+, RHEL 8+)
-- **Python:** 3.10+
-- **Memory:** 16 GB RAM
-- **Storage:** 100 GB for typical datasets
-
-### Recommended
-- **CPU:** 32+ cores (for FF-HEDM)
-- **Memory:** 64 GB RAM
-- **GPU:** NVIDIA (for future deep learning features)
-- **Storage:** 1 TB SSD
-
-### Network
-- **ANL Network Access** required for Argo-AI
-- Alternative: Use local LLM (configuration needed)
-
----
-
-## Keyboard Shortcuts
-
-- **Ctrl+C:** Interrupt current operation
-- **Ctrl+D:** Exit assistant
-- **↑/↓:** Navigate command history
-- **Tab:** Auto-complete (if supported by terminal)
-
----
-
-## Getting Help
-
-### Built-in Help
-```
-APEXA> help
-APEXA> what can you do?
-APEXA> how do I calibrate?
-APEXA> explain FF-HEDM workflow
-```
-
-### Documentation
-- This manual: `USER_MANUAL.md`
-- MIDAS docs: https://github.com/marinerhemant/MIDAS
-- Argo Gateway: (ANL internal)
-
-### Support
-- **Issues:** Report via GitHub
-- **Beamline:** Contact beamline scientist
-- **Email:** [your support email]
+| | Minimum | Recommended |
+|---|---|---|
+| Python | 3.13+ | 3.13+ |
+| Memory | 16 GB | 64 GB |
+| CPU | 4 cores | 32+ cores (FF-HEDM) |
+| GPU | -- | NVIDIA (streaming integration) |
+| MIDAS | v11 | v11 |
+| Network | ANL access | ANL access |
 
 ---
 
@@ -811,18 +314,11 @@ APEXA> explain FF-HEDM workflow
 - Advanced Photon Source, Argonne National Laboratory
 
 **Core Dependencies:**
-- **MIDAS:** Hemant Sharma (github.com/marinerhemant/MIDAS)
-- **FastMCP:** Marvin (github.com/jlowin/fastmcp)
-- **Argo Gateway:** Argonne National Laboratory
+- [MIDAS](https://github.com/marinerhemant/MIDAS) v11 - Hemant Sharma
+- [FastMCP](https://github.com/jlowin/fastmcp) - MCP server framework
+- [uv](https://github.com/astral-sh/uv) - Package manager
+- Argo Gateway - Argonne National Laboratory
 
 ---
 
-## Version
-
-**Current Version:** 1.0.0  
-**Last Updated:** November 2024  
-**Compatibility:** MIDAS 2024.11+, Python 3.10+
-
----
-
-**Happy Analyzing! 🔬✨**
+**Version:** 2.0 | **MIDAS:** v11 | **Updated:** March 2026

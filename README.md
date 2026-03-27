@@ -1,10 +1,10 @@
- # APEXA - Advanced Photon EXperiment Assistant
+# APEXA - Advanced Photon EXperiment Assistant
 
-AI-powered beamline scientist for real-time HEDM data analysis at Argonne National Laboratory's Advanced Photon Source.
+AI-powered agentic framework for HEDM data analysis at Argonne National Laboratory's Advanced Photon Source.
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Command-Line Interface (CLI)
 ```bash
@@ -12,112 +12,90 @@ AI-powered beamline scientist for real-time HEDM data analysis at Argonne Nation
 ./start_beamline_assistant.sh    # Start APEXA CLI
 ```
 
-### Web User Interface (Web UI)
+### Gradio UI (Recommended for interactive use)
 ```bash
-./start_web_viewer.sh            # Start Web UI
+./start_gradio_ui.sh             # Opens at http://localhost:7860
 ```
-Then open: **http://localhost:8001**
 
-**That's it!** Natural language interface ready for:
-- ✅ Detector calibration (CeO2, LaB6, Si)
-- ✅ 2D→1D integration with dark subtraction
-- ✅ FF-HEDM grain reconstruction
-- ✅ NF-HEDM microstructure mapping
-- ✅ Phase identification
-- ✅ Batch processing
-- ✅ Real-time monitoring
+### Web UI
+```bash
+python web_server.py             # Opens at http://localhost:8000
+```
 
 ---
 
-## 📖 Documentation
+## Architecture
 
-### 🌐 Interactive Documentation Site
-For the best experience, view our **searchable documentation website**:
-```bash
-./serve_docs.sh  # Opens at http://localhost:8000
+```
+User (natural language)
+         |
+    Argo Gateway (GPT-4o / Claude / Gemini)
+         |
+    OrchestratorAgent (apexa_agents.py)
+         |
+    +----------------+----------------+------------------+-------------------+
+    | Calibration    | Analysis       | Knowledge        | Visualization     |
+    | Agent          | Agent          | Agent            | Agent             |
+    +-------+--------+-------+--------+--------+---------+--------+----------+
+            |                |                 |                  |
+            +----------------+-----------------+      MIDAS viewer scripts
+                             |
+                  +----------+----------+
+                  |   core (9 tools)    |
+                  |   midas (21 tools)  |
+                  +---------------------+
 ```
 
-Features:
-- 🔍 Full-text search across all docs
-- 📱 Mobile-friendly responsive design
-- 🌓 Dark/light mode toggle
-- 📑 Organized navigation and table of contents
+### Specialist Agents
+| Agent | Routes when |
+|---|---|
+| CalibrationAgent | calibrate, CeO2, beam center, Lsd, detector distance |
+| AnalysisAgent | integrate, HEDM, grain, workflow, batch (default) |
+| KnowledgeAgent | explain, what is, literature, best practice |
+| VisualizationAgent | plot, visualize, lineout, caked, heatmap, show |
 
-### For Users
-- **[USER_MANUAL.md](USER_MANUAL.md)** - Complete guide with examples and tutorials
-- **[WEB_UI_GUIDE.md](WEB_UI_GUIDE.md)** - Browser-based interface for demos and collaboration
-- **[QUICK_REFERENCE.md](QUICK_REFERENCE.md)** - Command cheat sheet for demos
+### MCP Servers (`servers.config`)
+| Server | File | Tools |
+|---|---|---|
+| core | `beamline_core_server.py` | 9 tools: file ops, shell commands, X-ray calculations |
+| midas | `midas_comprehensive_server.py` | 21 tools: FF/NF/PF-HEDM, calibration, integration |
 
-### For Developers & Advanced Users
-- **[APEXA_SMART_FEATURES_MANUAL.md](APEXA_SMART_FEATURES_MANUAL.md)** - Smart features and AI capabilities
-- **[MIDAS_WORKFLOWS_REFERENCE.md](MIDAS_WORKFLOWS_REFERENCE.md)** - Technical MIDAS workflow details
+### Agent Skills (`.agents/skills/`)
+Canonical MIDAS workflow reference — correct v11 flags, scripts, output files:
+- `midas-calibrate` — AutoCalibrateZarr.py workflow
+- `midas-integrate` — integrator.py (CPU) and integrator_batch_process.py (GPU)
+- `midas-hedm` — FF/NF/PF-HEDM full pipeline
+- `midas-visualize` — MIDAS viewer scripts for lineouts, caked, grains
 
 ---
 
-## 💬 Example Usage
+## Example Usage
 
 ```
-APEXA> calibrate using the CeO2 image in this directory
-→ Auto Calibrate
-✓ Refined parameters saved to refined_MIDAS_params.txt
+APEXA> calibrate the CeO2 image in test1
+  -> midas_auto_calibrate
+  Refined BC: (809.55, 700.52), Lsd: 641.95 mm
 
-APEXA> integrate sample.tif using those parameters
-→ Integrate 2D To 1D
-✓ Output: sample.dat
+APEXA> integrate CeO2 in test1 using the refined params
+  -> midas_integrate_2d_to_1d
+  Output: CeO2_000001.tif.analysis.MIDAS_lineout.xy
 
-APEXA> identify phases from the peaks
-→ Phase Identification
-Detected phases: Ti (α-phase), TiO₂ (rutile)
+APEXA> show me the lineout
+  -> run_command (plot_lineout_results.py)
+  [viewer window opens]
+
+APEXA> convert 61.332 keV to wavelength
+  -> xray_calculate
+  Wavelength: 0.20215 Angstroms
 
 APEXA> run FF-HEDM workflow on /data/experiment
-→ FF-HEDM Full Workflow
-✓ Found 2,347 grains
+  -> run_ff_hedm_full_workflow
+  Found 2,347 grains
 ```
 
 ---
 
-## 🎯 Key Features
-
-### Smart & Conversational
-No need to memorize commands - just describe what you want:
-- "Calibrate using the ceria file"
-- "Integrate with dark subtraction"
-- "Run FF-HEDM with 32 CPUs"
-
-### Context-Aware
-Remembers your session:
-- Previous files and directories
-- Analysis history
-- Conversation context
-
-### Proactive
-Suggests next steps after each analysis:
-- "📊 Suggested next steps: Integrate rings to 1D pattern"
-- Auto-validates parameters before execution
-- Real-time alerts during beamtime
-
-See [APEXA_SMART_FEATURES_MANUAL.md](APEXA_SMART_FEATURES_MANUAL.md) for details on all smart features.
-
-### Extensible
-Add new analysis tools in 5 minutes - see USER_MANUAL.md for details.
-
----
-
-## 🛠️ System Architecture
-
-```
-User → Argo-AI (GPT-4o/Claude/Gemini)
-         ↓
-    MCP Client (argo_mcp_client.py)
-         ↓
-   ┌─────────┬─────────┬─────────┐
-   │filesystem│  midas  │ executor│
-   └─────────┴─────────┴─────────┘
-```
-
----
-
-## ⚙️ Configuration
+## Configuration
 
 **User Settings** (`.env`):
 ```bash
@@ -128,28 +106,24 @@ MIDAS_PATH=~/Git/MIDAS        # Optional - auto-detected
 
 **Server Configuration** (`servers.config`):
 ```bash
-filesystem:filesystem_server.py
-executor:command_executor_server.py
+core:beamline_core_server.py
 midas:midas_comprehensive_server.py
 ```
 
 ---
 
-## 📋 Requirements
+## Requirements
 
-- **Python:** 3.10+
-- **Package Manager:** [uv](https://github.com/astral-sh/uv)
-- **Network:** ANL access for Argo-AI
-- **MIDAS:** Installed with conda environment
+- **Python:** 3.13+ (with `uv` package manager)
+- **Network:** ANL access for Argo Gateway
+- **MIDAS:** v11 with `midas_env` conda environment
 - **Memory:** 16+ GB RAM (64+ GB recommended for FF-HEDM)
 
 ---
 
-## 🔧 Troubleshooting
+## MIDAS Auto-Detection
 
-**MIDAS not detected?**
-
-APEXA automatically searches for MIDAS in this order:
+APEXA searches for MIDAS in this order:
 1. `$MIDAS_PATH` environment variable
 2. `~/Git/MIDAS`
 3. `~/opt/MIDAS`
@@ -158,53 +132,34 @@ APEXA automatically searches for MIDAS in this order:
 6. `/opt/MIDAS`
 7. `~/.MIDAS`
 
-To override auto-detection:
-```bash
-export MIDAS_PATH=/path/to/MIDAS
-```
+---
 
-**Tool warnings?**
-Restart the assistant - warnings are cosmetic.
+## Documentation
 
-**Need help?**
-```
-APEXA> help
-APEXA> what can you do?
-APEXA> how do I calibrate?
-```
-
-See [USER_MANUAL.md](USER_MANUAL.md#troubleshooting) for detailed troubleshooting.
+- **[USER_MANUAL.md](USER_MANUAL.md)** — Complete guide with examples
+- **[QUICK_REFERENCE.md](QUICK_REFERENCE.md)** — Command cheat sheet
+- **[WEB_UI_GUIDE.md](WEB_UI_GUIDE.md)** — Browser-based interface
+- **[GRADIO_UI_GUIDE.md](GRADIO_UI_GUIDE.md)** — Gradio chat interface
+- **[docs/development/architecture.md](docs/development/architecture.md)** — Developer architecture
+- **[.agents/skills/](.agents/skills/)** — MIDAS workflow reference (Agent Skills)
 
 ---
 
-## 🎓 Credits
+## Credits
 
 **Development:**
 - Pawan Tripathi - Lead Developer
 - Advanced Photon Source, Argonne National Laboratory
 
 **Core Dependencies:**
-- [MIDAS](https://github.com/marinerhemant/MIDAS) - Hemant Sharma
-- [FastMCP](https://github.com/jlowin/fastmcp) - Marvin
-- [uv](https://github.com/astral-sh/uv) - Astral
+- [MIDAS](https://github.com/marinerhemant/MIDAS) v11 - Hemant Sharma
+- [FastMCP](https://github.com/jlowin/fastmcp) - MCP server framework
+- [uv](https://github.com/astral-sh/uv) - Package manager
 - Argo Gateway - Argonne National Laboratory
 
 ---
 
-## 📄 License
+## License
 
-Copyright © 2024 UChicago Argonne, LLC  
+Copyright (c) 2024-2026 UChicago Argonne, LLC
 See [LICENSE](LICENSE) for details.
-
----
-
-**Ready to analyze? Start with:**
-```bash
-./start_beamline_assistant.sh
-```
-
-**Documentation Map:**
-- **New user?** → [User Manual](USER_MANUAL.md)
-- **Demo/presentation?** → [Quick Reference](QUICK_REFERENCE.md)
-- **MIDAS expert?** → [MIDAS Workflows](MIDAS_WORKFLOWS_REFERENCE.md)
-- **Want advanced features?** → [Smart Features](APEXA_SMART_FEATURES_MANUAL.md)

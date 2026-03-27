@@ -208,7 +208,9 @@ def is_command_allowed(command: str) -> bool:
     cmd_parts = command.strip().split()
     if not cmd_parts:
         return False
-    base_command = cmd_parts[0].lower()
+    # Accept bare name ("python") or full path ("/usr/bin/python", "/opt/.../bin/python3")
+    first = cmd_parts[0]
+    base_command = Path(first).name.lower()
     return base_command in ALLOWED_COMMANDS
 
 # =============================================================================

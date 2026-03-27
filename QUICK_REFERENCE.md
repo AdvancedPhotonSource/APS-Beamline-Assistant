@@ -1,154 +1,99 @@
 # Quick Reference - APEXA Commands
 
-## Most Common Commands
-
-### Calibration
+## Calibration (CalibrationAgent)
 ```
-APEXA> calibrate using the CeO2 image
-APEXA> auto-calibrate with stopping strain 1e-3
-```
-
-### Integration
-```
-APEXA> integrate the .tif file to 1D
-APEXA> integrate with dark file dark.ge5
-APEXA> batch integrate all .tif files
+APEXA> calibrate the CeO2 image in test1
+APEXA> calibrate using LaB6_650mm.tif with 40 iterations
+APEXA> convert 61.332 keV to wavelength
+APEXA> what's the d-spacing for CeO2 (111)?
+APEXA> list common calibrants
 ```
 
-### FF-HEDM
+## Integration (AnalysisAgent)
 ```
-APEXA> run FF-HEDM workflow here
+APEXA> integrate CeO2_000001.tif using refined params
+APEXA> integrate with dark file subtraction
+APEXA> batch integrate all .tif files in /data with 8 CPUs
+```
+
+## FF-HEDM (AnalysisAgent)
+```
+APEXA> run FF-HEDM workflow on /data/experiment
 APEXA> run FF-HEDM with 32 CPUs
 ```
 
-### Files
+## NF-HEDM (AnalysisAgent)
+```
+APEXA> run NF-HEDM reconstruction with FF seed orientations
+APEXA> reconstruct microstructure with 10 CPUs
+```
+
+## Visualization (VisualizationAgent)
+```
+APEXA> show me the lineout for CeO2 in test1
+APEXA> plot the caked output from test1/integration
+APEXA> show calibration results for test1
+APEXA> view the 2D diffraction image
+APEXA> compare lineouts with ideal ring positions
+```
+
+## Files
 ```
 APEXA> list files in /data
-APEXA> read Parameters.txt
-APEXA> find all .ge5 files
+APEXA> read the Parameters.txt file
+APEXA> what's in the integration folder?
 ```
 
-### Analysis
+## Knowledge (KnowledgeAgent)
 ```
-APEXA> identify phases from peaks at 12.5, 18.2, 25.8
-APEXA> plot 2D image sample.tif
-APEXA> plot radial profile
-```
-
----
-
-## Changes Made
-
-### ✅ Fixed Bugs
-1. **Tool name duplication** (midas_midas_auto_calibrate → midas_auto_calibrate)
-2. **Removed verbose debug output** ("Extracted tool:", "Arguments:")  
-3. **Cleaner console experience** - just shows "→ Tool Name" now
-
-### ✅ Created Documentation
-1. **USER_MANUAL.md** - Comprehensive guide with:
-   - All capabilities and use cases
-   - Example prompts for demonstrations
-   - Troubleshooting guide
-   - System requirements
-
-2. **QUICK_REFERENCE.md** (this file) - Fast command lookup
-
----
-
-## For Demo Presentation
-
-### Opening
-```
-./start_beamline_assistant.sh
-
-# Shows:
-# ✓ filesystem (filesystem_server.py)
-# ✓ executor (command_executor_server.py)
-# ✓ midas (midas_comprehensive_server.py)
+APEXA> what is FF-HEDM?
+APEXA> explain Bragg's law
+APEXA> what are typical parameters for steel?
+APEXA> get material properties for Ti-6Al-4V
 ```
 
-### Demo Flow
-
-**1. Setup Check**
+## X-ray Calculations
 ```
-APEXA> what can you do?
-APEXA> list files here
-```
-
-**2. Calibration Demo**
-```
-APEXA> calibrate using the CeO2 image
-→ Auto Calibrate
-[runs AutoCalibrateZarr.py]
-✓ Outputs: refined_MIDAS_params.txt
-```
-
-**3. Integration Demo**
-```
-APEXA> integrate sample.tif using refined parameters
-→ Integrate 2D To 1D
-✓ Outputs: sample.dat
-```
-
-**4. Analysis Demo**
-```
-APEXA> plot the integrated pattern
-→ Creates sample_1d.png
-
-APEXA> identify phases from the peaks
-→ Phase Identification
-Returns: "Detected phases: Ti (α), TiO₂ (rutile)"
-```
-
-**5. Batch Processing Demo**
-```
-APEXA> batch integrate all .tif files in /data
-→ Processes 50 files with progress tracking
+APEXA> convert 61.332 keV to wavelength
+APEXA> calculate d-spacing for 2-theta 10.5 degrees at 0.2066 angstroms
+APEXA> calculate strain for measured d=3.155 and reference d=3.124
 ```
 
 ---
 
-## Clean Output Example
-
-**Before (cluttered):**
-```
-  Extracted tool: midas_midas_auto_calibrate
-  Arguments: {'image_file': '/path/...', 'parameters_file': '/path/...'}
-→ Midas Midas Auto Calibrate
-[11/17/25 14:37:30] WARNING Tool 'midas_midas_auto_calibrate' not listed
-```
-
-**After (clean):**
-```
-→ Auto Calibrate
-[processing...]
-✓ Calibration complete
-```
+## CLI Commands (not sent to AI)
+| Command | Description |
+|---------|-------------|
+| `models` | Show available AI models |
+| `model <name>` | Switch model (gpt4o, claudesonnet4, gemini25pro) |
+| `tools` | List all analysis tools |
+| `servers` | Show connected servers |
+| `ls <path>` | List directory |
+| `clear` | Clear conversation history |
+| `help` | Show help |
+| `quit` | Exit |
 
 ---
 
 ## System Overview
 
 ```
-User Query
-    ↓
-Argo-AI (GPT-4o/Claude/Gemini)
-    ↓
-MCP Client (argo_mcp_client.py)
-    ↓
-┌─────────┬──────────┬──────────┐
-│filesystem│  midas   │ executor │
-└─────────┴──────────┴──────────┘
-    ↓           ↓          ↓
-  Files    MIDAS Tools  Commands
+User (natural language)
+         |
+    Argo Gateway (GPT-4o / Claude / Gemini)
+         |
+    OrchestratorAgent
+         |
+    +----------------+----------+-----------+----------------+
+    | Calibration    | Analysis | Knowledge | Visualization  |
+    +----------------+----------+-----------+----------------+
+                         |
+              +----------+----------+
+              |   core (9 tools)    |
+              |   midas (21 tools)  |
+              +---------------------+
 ```
 
-**Automatic Features:**
-- Context awareness (remembers previous files/directories)
-- Proactive suggestions ("Next steps: ...")
-- Error prevention (validates before execution)
-- Smart caching (faster repeated operations)
-
----
+**Servers:** `core` (beamline_core_server.py) + `midas` (midas_comprehensive_server.py)
 
 See **USER_MANUAL.md** for complete documentation.

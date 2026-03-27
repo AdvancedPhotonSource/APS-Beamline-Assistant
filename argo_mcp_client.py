@@ -1498,12 +1498,9 @@ class APEXAClient:
                             break
 
                     if not plot_type:
-                        print("Usage: plot <2d|radial|1d|compare> <file(s)>")
-                        print("Examples:")
-                        print("  plot 2d sample.ge5           - Plot 2D diffraction image")
-                        print("  plot radial data.tiff        - Plot radial intensity profile")
-                        print("  plot 1d pattern.dat          - Plot 1D integrated pattern")
-                        print("  plot compare file1.dat file2.dat - Compare multiple patterns")
+                        # Unrecognized plot subcommand — let APEXA handle it naturally
+                        response = await self.run_query(user_input)
+                        print(f"\n{response}\n")
                         continue
 
                     # Parse file path(s)
