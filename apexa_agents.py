@@ -37,14 +37,8 @@ from typing import List, Dict, Any, Optional, Callable, Awaitable
 PROD_URL = "https://apps.inside.anl.gov/argoapi/api/v1/resource/chat/"
 DEV_URL  = "https://apps-dev.inside.anl.gov/argoapi/api/v1/resource/chat/"
 
-DEV_ONLY_MODELS = {
-    "gpt5", "gpt5mini", "gpt5nano",
-    "gemini25pro", "gemini25flash",
-    "claudeopus41", "claudeopus4", "claudesonnet45",
-    "claudesonnet4", "claudesonnet37",
-    "gpto1", "gpto3mini", "gpto4mini",
-    "gpt41", "gpt41mini", "gpt41nano",
-}
+# Models that require the DEV endpoint (add new beta models here)
+DEV_ONLY_MODELS: set = set()
 
 # ── Data Types ──────────────────────────────────────────────────────────────
 
@@ -92,11 +86,19 @@ class ArgoProvider:
             "temperature": temperature,
         }
 
-        # Max tokens per model family
+        # Max tokens and params per model family
         if self.model.startswith("claude"):
             payload["max_tokens"] = 21000
-            if self.model != "claudesonnet45":   # sonnet45 rejects top_p
+            # Haiku 4.5 and Sonnet 4.5/4.6 reject both temperature+top_p
+            if self.model not in ("claudesonnet45", "claudesonnet46", "claudehaiku45"):
                 payload["top_p"] = 0.9
+        elif self.model.startswith("gpto") or self.model in ("gpt5", "gpt5mini", "gpt5nano", "gpt51", "gpt52", "gpt54"):
+            # o-series and GPT-5 family: use max_completion_tokens, no temperature/top_p
+            payload.pop("temperature", None)
+            payload["max_completion_tokens"] = 16000
+        elif self.model in ("gpt41", "gpt41mini", "gpt41nano"):
+            payload["max_completion_tokens"] = 16000
+            payload["top_p"] = 0.9
         elif self.model.startswith("gpt4o"):
             payload["max_tokens"] = 16000
             payload["top_p"]      = 0.9
@@ -431,7 +433,12 @@ ARGUMENTS: {"command": "/Users/b324240/miniconda3/envs/midas_env/bin/python /Use
 User: "Plot the caked output"
 ✅ CORRECT (after finding *_caked.hdf.zarr.zip):
 TOOL_CALL: run_command
-ARGUMENTS: {"command": "/Users/b324240/miniconda3/envs/midas_env/bin/python /Users/b324240/Git/MIDAS/gui/viewers/viz_caking.py /full/path/to/file.caked.hdf.zarr.zip"}
+ARGUMENTS: {"command": "/Users/b324240/miniconda3/envs/midas_env/bin/python /Users/b324240/Git/MIDAS/gui/viewers/plot_integrator_peaks.py /full/path/to/file.caked.hdf.zarr.zip"}
+
+User: "Plot calibration results in test1"
+✅ CORRECT (after finding *_corr.csv):
+TOOL_CALL: run_command
+ARGUMENTS: {"command": "/Users/b324240/miniconda3/envs/midas_env/bin/python /Users/b324240/Git/MIDAS/gui/viewers/plot_calibrant_results.py /full/path/to/file_corr.csv"}
 
 ❌ WRONG — NEVER do these:
 - NEVER calculate d = a/√(h²+k²+l²) yourself — call xray_calculate

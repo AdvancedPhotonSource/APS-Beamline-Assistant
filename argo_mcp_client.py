@@ -20,7 +20,7 @@ from pathlib import Path
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from dotenv import load_dotenv
-from apexa_agents import ArgoProvider, OrchestratorAgent
+from apexa_agents import ArgoProvider, OrchestratorAgent, DEV_ONLY_MODELS
 
 load_dotenv()
 
@@ -981,15 +981,9 @@ class APEXAClient:
         self.anl_username = os.getenv("ANL_USERNAME")
         self.selected_model = os.getenv("ARGO_MODEL", "gpt4o")
 
-        # Models only available in DEV environment
-        self.dev_only_models = {
-            "gpt5", "gpt5mini", "gpt5nano",
-            "gemini25pro", "gemini25flash",
-            "claudeopus41", "claudeopus4", "claudesonnet45", "claudesonnet4", "claudesonnet37",
-            "gpto1", "gpto3mini", "gpto4mini", "gpt41", "gpt41mini", "gpt41nano"
-        }
-
-        self.environment = "DEV" if self.selected_model in self.dev_only_models else "PROD"
+        # All current models on PROD (March 2026 Argo update)
+        # Future beta models: add to DEV_ONLY_MODELS in apexa_agents.py
+        self.environment = "DEV" if self.selected_model in DEV_ONLY_MODELS else "PROD"
 
         # Phase 2: tool registry (built at connection time, not per-query)
         self._tool_registry:   Dict[str, str]       = {}   # bare_tool_name → server_name
@@ -1000,27 +994,37 @@ class APEXAClient:
             raise ValueError("ANL_USERNAME must be set in environment (.env file)")
 
         self.available_models = {
-            "OpenAI (PROD)": {
-                "gpt35": "GPT-3.5 Turbo (4K tokens)",
-                "gpt4": "GPT-4 (8K tokens)",
+            "OpenAI": {
+                "gpt35": "GPT-3.5 Turbo (4K)",
                 "gpt4turbo": "GPT-4 Turbo (128K input)",
-                "gpt4o": "GPT-4o (128K input, 16K output)"
-            },
-            "OpenAI (DEV only)": {
+                "gpt4o": "GPT-4o (128K input, 16K output)",
+                "gpt4olatest": "GPT-4o latest (128K input, 16K output)",
+                "gpt41": "GPT-4.1 (1M input, 16K output)",
+                "gpt41mini": "GPT-4.1 Mini (1M input, 16K output)",
+                "gpt41nano": "GPT-4.1 Nano (1M input, 16K output)",
+                "gpto3mini": "o3-mini (200K input, 100K output)",
+                "gpto4mini": "o4-mini",
                 "gpt5": "GPT-5 (272K input, 128K output)",
                 "gpt5mini": "GPT-5 Mini (272K input, 128K output)",
-                "gpt5nano": "GPT-5 Nano (272K input, 128K output)"
+                "gpt5nano": "GPT-5 Nano (272K input, 128K output)",
+                "gpt51": "GPT-5.1 (400K input, 128K output)",
+                "gpt52": "GPT-5.2 (400K input, 128K output)",
+                "gpt54": "GPT-5.4 (1M input, 128K output)",
             },
-            "Google (DEV only)": {
-                "gemini25pro": "Gemini 2.5 Pro (1M tokens)",
-                "gemini25flash": "Gemini 2.5 Flash (1M tokens)"
+            "Anthropic": {
+                "claudeopus46": "Claude Opus 4.6 (200K input, 128K output)",
+                "claudeopus45": "Claude Opus 4.5 (200K input, 64K output)",
+                "claudeopus41": "Claude Opus 4.1 (200K input, 32K output)",
+                "claudeopus4": "Claude Opus 4 (200K input, 32K output)",
+                "claudesonnet46": "Claude Sonnet 4.6 (200K input, 64K output)",
+                "claudesonnet45": "Claude Sonnet 4.5 (200K input, 64K output)",
+                "claudesonnet4": "Claude Sonnet 4 (200K input, 64K output)",
+                "claudesonnet37": "Claude Sonnet 3.7 (200K input, 128K output)",
+                "claudehaiku45": "Claude Haiku 4.5 (200K input, 64K output)",
             },
-            "Anthropic (DEV only)": {
-                "claudeopus41": "Claude Opus 4.1 (200K input)",
-                "claudeopus4": "Claude Opus 4 (200K input)",
-                "claudesonnet45": "Claude Sonnet 4.5 (200K input)",
-                "claudesonnet4": "Claude Sonnet 4 (200K input)",
-                "claudesonnet37": "Claude Sonnet 3.7 (200K input)"
+            "Google": {
+                "gemini25pro": "Gemini 2.5 Pro (1M input, 65K output)",
+                "gemini25flash": "Gemini 2.5 Flash (1M input, 64K output)",
             }
         }
 
@@ -1639,14 +1643,7 @@ Use ↑/↓ arrows for command history | Tab for completion
                     model_name = user_input[6:].strip()
                     if self._is_valid_model(model_name):
                         self.selected_model = model_name
-
-                        # Update endpoint based on model environment requirements
-                        if self.selected_model in self.dev_only_models:
-                            self.environment = "DEV"
-                            print(f"✅ Switched to: {model_name} (using DEV environment)")
-                        else:
-                            self.environment = "PROD"
-                            print(f"✅ Switched to: {model_name} (using PROD environment)")
+                        print(f"Switched to: {model_name}")
                     else:
                         print(f"✗ Invalid model: {model_name}")
                         print("Available models: models")
