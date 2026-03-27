@@ -145,8 +145,12 @@ autocal.log
 Parameters.txt
 Parameters_CeO2_7m.txt
 
+# Frontend build artifacts (source tracked, dist rebuilt locally)
+frontend/dist/
+frontend/node_modules/
+
 # Misc
 paraview_export.py
-frontend/
 site/
 ARGO-API-Docs/
+test_viewer.html
