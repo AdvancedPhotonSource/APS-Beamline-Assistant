@@ -27,6 +27,7 @@ What stays in argo_mcp_client.py (unchanged):
 """
 
 import json
+import os
 import re
 import time
 import httpx
@@ -172,7 +173,8 @@ class ArgoProvider:
             headers={"Content-Type": "application/json"},
         )
         elapsed = time.monotonic() - t0
-        print(f"  ⏱ {self.model} responded in {elapsed:.1f}s", flush=True)
+        if os.environ.get("APEXA_SHOW_TIMING"):
+            print(f"  ⏱ {self.model} responded in {elapsed:.1f}s", flush=True)
         response.raise_for_status()
         return self._parse_response(response.json())
 

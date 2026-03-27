@@ -1578,6 +1578,14 @@ class APEXAClient:
                     print(f"\nAvailable tools ({len(tools)}):")
                     for tool in tools:
                         print(f"  - {tool['function']['name']}: {tool['function']['description'][:80]}")
+                elif user_input.lower() == 'timing':
+                    current = os.environ.get("APEXA_SHOW_TIMING")
+                    if current:
+                        del os.environ["APEXA_SHOW_TIMING"]
+                        print("Timing display OFF")
+                    else:
+                        os.environ["APEXA_SHOW_TIMING"] = "1"
+                        print("Timing display ON")
                 elif user_input.lower() == 'help':
                     print("""
 APEXA Smart Commands:
