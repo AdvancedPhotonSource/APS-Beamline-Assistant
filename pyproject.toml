@@ -1,46 +1,46 @@
 [project]
 name = "beamline-assistant"
-version = "0.1.0"
+version = "2.0.0"
 description = "APEXA - Advanced Photon EXperiment Assistant"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    # HTTP & API
+    # Core (required for CLI)
     "httpx>=0.28.1",
+    "mcp>=1.14.1",
+    "python-dotenv>=1.1.1",
+    # Scientific
+    "numpy>=2.3.3",
+    "scipy>=1.16.2",
+    "matplotlib>=3.10.6",
+    "fabio>=2024.9.0",
+    "tifffile>=2024.1.0",
+    "xrayutilities>=1.7.12",
+    "h5py>=3.11.0",
+    "pillow>=11.3.0",
+    "pandas>=2.3.2",
+]
+
+[project.optional-dependencies]
+# Web UI (FastAPI + React frontend)
+web = [
     "fastapi>=0.116.2",
     "uvicorn>=0.35.0",
     "websockets>=15.0.1",
     "python-multipart>=0.0.20",
-    "orjson>=3.11.3",
-    # MCP & AI
-    "mcp>=1.14.1",
-    "python-dotenv>=1.1.1",
-    # UI
+]
+# Gradio chat UI
+gradio = [
     "gradio>=6.3.0",
-    # Scientific / diffraction
-    "fabio>=2024.9.0",
-    "pyfai>=2025.3.0",
-    "tifffile>=2024.1.0",
-    "xrayutilities>=1.7.12",
-    "lmfit>=1.3.4",
-    # Numeric / plotting
-    "numpy>=2.3.3",
-    "scipy>=1.16.2",
-    "matplotlib>=3.10.6",
-    "pandas>=2.3.2",
-    "plotly>=6.3.0",
-    "seaborn>=0.13.2",
-    "scikit-image>=0.25.2",
-    # Data formats
-    "h5py>=3.11.0",
-    "vtk>=9.3.0",
-    "pillow>=11.3.0",
-    # Knowledge base / RAG
+]
+# Knowledge base / RAG (optional, for query_hedm_knowledge)
+knowledge = [
     "chromadb>=0.4.0",
     "sentence-transformers>=2.2.0",
     "pypdf2>=3.0.0",
     "mp-api>=0.41.0",
-    # CLI
-    "rich>=14.1.0",
-    "typer>=0.17.4",
+]
+# Everything
+all = [
+    "beamline-assistant[web,gradio,knowledge]",
 ]

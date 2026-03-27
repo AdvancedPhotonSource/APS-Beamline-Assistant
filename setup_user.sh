@@ -1,130 +1,89 @@
 #!/bin/bash
-# Beamline Assistant - User Setup Script
-# Sets up configuration for a new user
+# APEXA - User Setup Script
+# Creates .env configuration for a new user
 
 set -e
 
-echo "======================================================================="
-echo "  Beamline Assistant - User Setup"
-echo "======================================================================="
+echo ""
+echo "  APEXA - Advanced Photon EXperiment Assistant"
+echo "  User Setup"
 echo ""
 
 # Check if .env already exists
 if [ -f ".env" ]; then
-    echo "⚠️  Warning: .env file already exists"
-    read -p "Do you want to overwrite it? (y/N): " -n 1 -r
+    echo "  .env file already exists."
+    read -p "  Overwrite? (y/N): " -n 1 -r
     echo
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        echo "Setup cancelled. Your existing .env was not modified."
+        echo "  Setup cancelled."
         exit 0
     fi
 fi
 
-# Get ANL username
-echo "Step 1: ANL Authentication"
-echo "-------------------------"
-read -p "Enter your ANL username: " ANL_USERNAME
-
+# Step 1: ANL username
+echo "  1. ANL Username (domain username, not email)"
+read -p "     Username: " ANL_USERNAME
 if [ -z "$ANL_USERNAME" ]; then
-    echo "Error: ANL username cannot be empty"
+    echo "  Error: username cannot be empty"
     exit 1
 fi
 
-# Select AI model
+# Step 2: AI Model
 echo ""
-echo "Step 2: AI Model Selection"
-echo "-------------------------"
-echo "Available models:"
-echo "  1) gpt4o (GPT-4o - Fast, recommended)"
-echo "  2) claudesonnet4 (Claude Sonnet 4)"
-echo "  3) gemini25pro (Gemini 2.5 Pro)"
-echo "  4) gpt4turbo (GPT-4 Turbo)"
-echo ""
-read -p "Select model [1]: " model_choice
+echo "  2. Default AI Model"
+echo "     1) gpt4o       - GPT-4o (fastest, recommended)"
+echo "     2) gpt41mini   - GPT-4.1 Mini (1M context, fast)"
+echo "     3) gpt54       - GPT-5.4 (1M context, most capable)"
+echo "     4) claudesonnet45 - Claude Sonnet 4.5"
+echo "     5) gemini25pro - Gemini 2.5 Pro (1M context)"
+read -p "     Select [1]: " model_choice
 model_choice=${model_choice:-1}
 
 case $model_choice in
     1) ARGO_MODEL="gpt4o" ;;
-    2) ARGO_MODEL="claudesonnet4" ;;
-    3) ARGO_MODEL="gemini25pro" ;;
-    4) ARGO_MODEL="gpt4turbo" ;;
+    2) ARGO_MODEL="gpt41mini" ;;
+    3) ARGO_MODEL="gpt54" ;;
+    4) ARGO_MODEL="claudesonnet45" ;;
+    5) ARGO_MODEL="gemini25pro" ;;
     *) ARGO_MODEL="gpt4o" ;;
 esac
 
-# MIDAS path
+# Step 3: MIDAS path (optional)
 echo ""
-echo "Step 3: MIDAS Installation"
-echo "-------------------------"
-echo "The system will automatically search for MIDAS in this order:"
-echo "  1. ~/Git/MIDAS"
-echo "  2. ~/opt/MIDAS"
-echo "  3. /home/beams/S*USER/opt/MIDAS (beamline systems)"
-echo "  4. ~/MIDAS"
-echo "  5. /opt/MIDAS"
-echo "  6. ~/.MIDAS"
-echo ""
-read -p "Do you want to specify a custom MIDAS path? (y/N): " -n 1 -r
+echo "  3. MIDAS Installation (auto-detected from ~/Git/MIDAS, ~/opt/MIDAS, etc.)"
+read -p "     Custom path? (y/N): " -n 1 -r
 echo
 
-MIDAS_PATH=""
+MIDAS_LINE="# MIDAS_PATH auto-detected"
 if [[ $REPLY =~ ^[Yy]$ ]]; then
-    read -p "Enter MIDAS path: " MIDAS_PATH
-    # Expand ~ to home directory
+    read -p "     Path: " MIDAS_PATH
     MIDAS_PATH="${MIDAS_PATH/#\~/$HOME}"
-
-    # Check if path exists
-    if [ ! -d "$MIDAS_PATH" ]; then
-        echo "⚠️  Warning: Directory $MIDAS_PATH does not exist"
-        read -p "Continue anyway? (y/N): " -n 1 -r
+    if [ -d "$MIDAS_PATH" ]; then
+        MIDAS_LINE="MIDAS_PATH=$MIDAS_PATH"
+    else
+        echo "     Warning: $MIDAS_PATH not found"
+        read -p "     Use anyway? (y/N): " -n 1 -r
         echo
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            echo "Setup cancelled."
-            exit 0
-        fi
+        [[ $REPLY =~ ^[Yy]$ ]] && MIDAS_LINE="MIDAS_PATH=$MIDAS_PATH"
     fi
 fi
 
-# Create .env file
-echo ""
-echo "Creating .env file..."
-
+# Write .env
 cat > .env << EOF
-# Beamline Assistant Configuration
-# Generated: $(date)
-
-# ANL Authentication
 ANL_USERNAME=$ANL_USERNAME
-
-# AI Model
 ARGO_MODEL=$ARGO_MODEL
-
-# MIDAS Installation Path
+$MIDAS_LINE
 EOF
 
-if [ -n "$MIDAS_PATH" ]; then
-    echo "MIDAS_PATH=$MIDAS_PATH" >> .env
-else
-    echo "# MIDAS_PATH will be auto-detected" >> .env
-fi
-
-# Set secure permissions
 chmod 600 .env
 
 echo ""
-echo "✓ Setup complete!"
+echo "  Setup complete!"
+echo "    Username: $ANL_USERNAME"
+echo "    Model:    $ARGO_MODEL"
+echo "    MIDAS:    ${MIDAS_PATH:-auto-detect}"
 echo ""
-echo "Configuration saved to .env:"
-echo "  - ANL Username: $ANL_USERNAME"
-echo "  - AI Model: $ARGO_MODEL"
-if [ -n "$MIDAS_PATH" ]; then
-    echo "  - MIDAS Path: $MIDAS_PATH"
-else
-    echo "  - MIDAS Path: Auto-detect"
-fi
+echo "  Start APEXA:"
+echo "    ./start_beamline_assistant.sh    # CLI"
+echo "    ./start_gradio_ui.sh             # Gradio UI"
 echo ""
-echo "File permissions set to 600 (owner read/write only)"
-echo ""
-echo "To start the assistant, run:"
-echo "  ./start_beamline_assistant.sh"
-echo ""
-echo "======================================================================="
