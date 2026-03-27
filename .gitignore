@@ -26,6 +26,7 @@ conversation_history.json
 *.swp
 *.swo
 *~
+~$*
 .project
 .pydevproject
 
@@ -111,6 +112,42 @@ debug_startup.sh
 startup-mac.sh
 startup.sh
 
-# Test data
+# Test data and test directories
 *.dat
-# ML deployment (separate feature) - REMOVED: Now tracked for ML integration
+test*/
+test-*/
+!tutorials-demo/
+
+# Manuscript (not for public repo)
+manuscript-APEXA/
+
+# MIDAS output artifacts
+*.ge1
+*.ge2
+*.ge3
+*.ge4
+*.ge5
+*.ge1.sum
+*.bin
+*.zip
+*.corr.csv
+*_trace_iter*.csv
+*convergence_history.csv
+*ps.txt
+ps.txt
+ps_init_sim.txt
+refined_MIDAS_params.txt
+refined_MIDAS_params_CeO.txt
+ci_profiles.csv
+autocal.log
+
+# Parameter files (user data)
+Parameters.txt
+Parameters_CeO2_7m.txt
+
+# Misc
+paraview_export.py
+epics_motor_server.py
+frontend/
+site/
+ARGO-API-Docs/
