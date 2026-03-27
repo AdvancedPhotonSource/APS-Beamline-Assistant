@@ -272,7 +272,6 @@ MIDAS_PYTHON_AVAILABLE = False
 try:
     # Core scientific libraries
     import fabio
-    import pyFAI
     from scipy import ndimage
     from scipy.signal import find_peaks, peak_widths
     from scipy.optimize import curve_fit
@@ -283,7 +282,7 @@ try:
     MIDAS_AVAILABLE = True
 except ImportError as e:
     MIDAS_AVAILABLE = False
-    print(f"⚠ MIDAS scientific deps missing: {e}", file=sys.stderr)
+    print(f"⚠ Scientific deps missing: {e}", file=sys.stderr)
 
 # Try to import MIDAS Python workflow modules
 try:
@@ -1857,7 +1856,7 @@ async def validate_midas_installation(
 
         # Check Python dependencies
         required_packages = [
-            "numpy", "scipy", "matplotlib", "fabio", "pyFAI",
+            "numpy", "scipy", "matplotlib", "fabio",
             "h5py", "zarr", "numcodecs", "parsl", "numba"
         ]
 
@@ -3384,6 +3383,4 @@ async def estimate_parameters_from_image(
 # =============================================================================
 
 if __name__ == "__main__":
-    if not MIDAS_AVAILABLE:
-        print("⚠ MIDAS scientific dependencies not available", file=sys.stderr)
     mcp.run(transport='stdio')
