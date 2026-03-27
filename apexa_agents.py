@@ -714,6 +714,8 @@ class OrchestratorAgent:
             "stop motor", "velocity", "speed", "limit switch",
             "soft limit", "hls", "lls", "dmov", "pv", "channel access",
             "20idmotsim", "motorsim",
+            # Common motor names so "where is m1" routes here
+            " m1", " m2", " m3", " m4", " m5", " m6", " m7", " m8",
         },
     }
 
