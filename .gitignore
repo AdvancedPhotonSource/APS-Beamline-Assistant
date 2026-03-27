@@ -147,7 +147,6 @@ Parameters_CeO2_7m.txt
 
 # Misc
 paraview_export.py
-epics_motor_server.py
 frontend/
 site/
 ARGO-API-Docs/
