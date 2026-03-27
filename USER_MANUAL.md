@@ -224,15 +224,28 @@ Switch AI models on the fly:
 
 ```
 APEXA> models                    # list available
-APEXA> model claudesonnet4       # switch
+APEXA> model gpt54               # switch to GPT-5.4
+APEXA> model claudesonnet45      # switch to Claude Sonnet 4.5
 ```
 
-**Available:** gpt4o (default), gpt41, claudesonnet4, claudesonnet45, claudeopus4, gemini25pro, gemini25flash
+**Available:** gpt4o (default, fastest ~0.8s), gpt41, gpt41mini, gpt54, gpt5, claudesonnet45, claudesonnet46, claudeopus46, gemini25pro, gemini25flash
 
 Set default in `.env`:
 ```bash
 ARGO_MODEL=gpt4o
 ```
+
+### Response Timing
+
+Measure API response time to compare models:
+
+```
+APEXA> timing                    # toggle on
+  ⏱ gpt4o responded in 0.8s
+APEXA> timing                    # toggle off
+```
+
+Or set `APEXA_SHOW_TIMING=1` in your environment before launching.
 
 ---
 

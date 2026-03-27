@@ -65,7 +65,8 @@ APEXA> calculate strain for measured d=3.155 and reference d=3.124
 | Command | Description |
 |---------|-------------|
 | `models` | Show available AI models |
-| `model <name>` | Switch model (gpt4o, claudesonnet4, gemini25pro) |
+| `model <name>` | Switch model (gpt4o, gpt54, claudesonnet45, gemini25pro) |
+| `timing` | Toggle API response time display on/off |
 | `tools` | List all analysis tools |
 | `servers` | Show connected servers |
 | `ls <path>` | List directory |

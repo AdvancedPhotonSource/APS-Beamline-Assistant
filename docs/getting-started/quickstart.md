@@ -76,6 +76,7 @@ ARGO_MODEL=gpt4o                    # or claudesonnet4, gemini25pro
 |---------|-------------|
 | `models` | Show available AI models |
 | `model <name>` | Switch AI model |
+| `timing` | Toggle API response time display |
 | `tools` | List all analysis tools |
 | `servers` | Show connected servers |
 | `ls <path>` | List directory |
