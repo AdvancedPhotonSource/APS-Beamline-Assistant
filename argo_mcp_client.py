@@ -24,6 +24,20 @@ from apexa_agents import ArgoProvider, OrchestratorAgent, DEV_ONLY_MODELS
 
 load_dotenv()
 
+
+def clean_markdown(text: str) -> str:
+    """Strip markdown formatting for clean terminal output."""
+    import re
+    # Bold: **text** or __text__
+    text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
+    text = re.sub(r'__(.+?)__', r'\1', text)
+    # Italic: *text* or _text_ (but not inside words like file_name)
+    text = re.sub(r'(?<!\w)\*(.+?)\*(?!\w)', r'\1', text)
+    # Headers: ### text -> text
+    text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
+    return text
+
+
 class ExperimentContext:
     """Smart context manager for APEXA sessions"""
     def __init__(self, session_dir: Path = None):
@@ -1504,7 +1518,7 @@ class APEXAClient:
                     if not plot_type:
                         # Unrecognized plot subcommand — let APEXA handle it naturally
                         response = await self.run_query(user_input)
-                        print(f"\n{response}\n")
+                        print(f"\n{clean_markdown(response)}\n")
                         continue
 
                     # Parse file path(s)
@@ -1702,7 +1716,7 @@ Use ↑/↓ arrows for command history | Tab for completion
                         print("Core server not connected")
                 elif user_input:
                     response = await self.run_query(user_input)
-                    print(f"\n{response}\n")
+                    print(f"\n{clean_markdown(response)}\n")
                     
             except KeyboardInterrupt:
                 print("\nExiting...")
