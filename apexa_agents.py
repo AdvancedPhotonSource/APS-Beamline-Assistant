@@ -28,6 +28,7 @@ What stays in argo_mcp_client.py (unchanged):
 
 import json
 import re
+import time
 import httpx
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional, Callable, Awaitable
@@ -165,10 +166,13 @@ class ArgoProvider:
     async def chat(self, messages: List[Dict],
                    temperature: float = 0.7) -> AgentResponse:
         payload  = self._build_payload(messages, temperature)
+        t0 = time.monotonic()
         response = await self._client.post(
             self.url, json=payload,
             headers={"Content-Type": "application/json"},
         )
+        elapsed = time.monotonic() - t0
+        print(f"  ⏱ {self.model} responded in {elapsed:.1f}s", flush=True)
         response.raise_for_status()
         return self._parse_response(response.json())
 
