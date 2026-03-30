@@ -29,6 +29,7 @@ What stays in argo_mcp_client.py (unchanged):
 import json
 import os
 import re
+import sys
 import time
 import httpx
 from dataclasses import dataclass, field
@@ -166,6 +167,9 @@ class ArgoProvider:
     async def chat(self, messages: List[Dict],
                    temperature: float = 0.7) -> AgentResponse:
         payload  = self._build_payload(messages, temperature)
+        if os.environ.get("APEXA_DEBUG"):
+            debug_payload = {k: v for k, v in payload.items() if k != "messages"}
+            print(f"  [debug] Argo payload: {debug_payload}", file=sys.stderr)
         t0 = time.monotonic()
         response = await self._client.post(
             self.url, json=payload,
@@ -174,7 +178,9 @@ class ArgoProvider:
         elapsed = time.monotonic() - t0
         if os.environ.get("APEXA_SHOW_TIMING"):
             print(f"  ⏱ {self.model} responded in {elapsed:.1f}s", flush=True)
-        response.raise_for_status()
+        if response.status_code != 200:
+            print(f"  Argo API error ({response.status_code}): {response.text[:500]}", file=sys.stderr)
+            response.raise_for_status()
         return self._parse_response(response.json())
 
     async def close(self):
