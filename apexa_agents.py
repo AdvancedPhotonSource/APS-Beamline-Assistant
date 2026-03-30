@@ -358,43 +358,50 @@ VISUALIZATION_AGENT = APEXAAgent(
         "read_file",
         "get_file_info",
         "run_command",
+        "check_environment",
     ],
     instructions = """You are a visualization specialist for HEDM diffraction data at APS.
 
-Match the user's data files to the correct MIDAS viewer script:
+STEP 1: Call check_environment FIRST to get the MIDAS path and Python interpreter.
+  The response contains "midas.path" (e.g. /home/user/opt/MIDAS) and "python_executable".
+  Use these to build commands — NEVER hardcode paths.
 
-| File available | Script to use | Location |
+STEP 2: Match the user's data files to the correct MIDAS viewer script:
+
+| File available | Script | Relative path in MIDAS |
 |---|---|---|
-| Raw 2D image (.tif/.ge/.h5/.zip) | ff_asym_qt.py | ~/Git/MIDAS/gui/ |
-| *_lineout.xy | plot_lineout_results.py or plot_lineout_comparison.py | ~/Git/MIDAS/gui/viewers/ |
-| *_lineout.bin (live GPU) | live_viewer.py | ~/Git/MIDAS/gui/viewers/ |
-| *_caked.hdf.zarr.zip | plot_integrator_peaks.py | ~/Git/MIDAS/gui/viewers/ |
-| *_caked_peaks.h5 | plot_caked_peaks.py | ~/Git/MIDAS/gui/viewers/ |
-| *_corr.csv (calibration) | plot_calibrant_results.py | ~/Git/MIDAS/gui/viewers/ |
-| Grains.csv + SpotMatrix.csv + .zarr | interactiveFFplotting.py (Dash browser) | ~/Git/MIDAS/gui/viewers/ |
-| .mic / .map (NF microstructure) | nf_qt.py | ~/Git/MIDAS/gui/ |
+| Raw 2D image (.tif/.ge/.h5/.zip) | ff_asym_qt.py | gui/ff_asym_qt.py |
+| *_lineout.xy | plot_lineout_results.py | gui/viewers/plot_lineout_results.py |
+| *_lineout.xy (with ring overlay) | plot_lineout_comparison.py | gui/viewers/plot_lineout_comparison.py |
+| *_lineout.bin (live GPU) | live_viewer.py | gui/viewers/live_viewer.py |
+| *_caked.hdf.zarr.zip | plot_integrator_peaks.py | gui/viewers/plot_integrator_peaks.py |
+| *_caked_peaks.h5 | plot_caked_peaks.py | gui/viewers/plot_caked_peaks.py |
+| *_corr.csv (calibration) | plot_calibrant_results.py | gui/viewers/plot_calibrant_results.py |
+| Grains.csv + SpotMatrix.csv + .zarr | interactiveFFplotting.py | gui/viewers/interactiveFFplotting.py |
+| .mic / .map (NF microstructure) | nf_qt.py | gui/nf_qt.py |
 
-Workflow:
-1. Use list_directory to find output files in the result folder
-2. Match file type to viewer from the table above
-3. Build the command, then IMMEDIATELY call run_command to execute it
-4. For ff_asym_qt.py and nf_qt.py: cd to data directory first, then launch with &
-5. For all others: pass explicit file paths as arguments
-6. Always pass --paramFN or --params when refined_MIDAS_params*.txt is available (enables 2θ/Q axes)
+STEP 3: Build the command using the MIDAS path from check_environment:
+  <MIDAS_PYTHON> <MIDAS_PATH>/gui/viewers/<script>.py <args>
 
-⚠️ CRITICAL: ALWAYS call run_command to launch the viewer — NEVER just print the command.
+  Where MIDAS_PYTHON is found by looking for midas_env conda Python. Check these in order:
+  - $CONDA_PREFIX/../midas_env/bin/python
+  - ~/miniconda3/envs/midas_env/bin/python
+  - ~/anaconda3/envs/midas_env/bin/python
+  - python3 (fallback)
+
+  Or use: run_command with "which python3" in the midas_env if unsure.
+
+STEP 4: Call run_command to execute it. NEVER just print the command.
 
 Critical flags:
 - live_viewer.py: --nRBins (capital R, capital B — case sensitive), NOT --n-rbins
-- viz_caking.py: DO NOT USE — requires calcMiso which is not in midas_env; use plot_integrator_peaks.py instead
+- viz_caking.py: DO NOT USE — requires calcMiso; use plot_integrator_peaks.py instead
 - interactiveFFplotting.py: requires BOTH -resultFolder AND -dataFileName (.zarr)
 - plot_caked_peaks.py: run fit_caked_peaks.py first if _caked_peaks.h5 doesn't exist
 - ff_asym_qt.py: auto-detects files from CWD — just cd to data dir and launch
+- Always pass --paramFN when refined_MIDAS_params*.txt is available (enables 2θ/Q axes)
 
-Always use midas_env Python:
-  /Users/b324240/miniconda3/envs/midas_env/bin/python ~/Git/MIDAS/gui/viewers/<script>.py <args>
-
-After launching, report the exact command so the user can re-run it manually if needed.""",
+After launching, report the exact command so the user can re-run it manually.""",
 )
 
 
@@ -435,21 +442,24 @@ ARGUMENTS: {"calculation_type": "energy_to_wavelength", "energy_kev": 61.332}
 
 User: "Show me the lineout for CeO2 integration in test1"
 ✅ CORRECT:
+TOOL_CALL: check_environment
+ARGUMENTS: {}
+[get MIDAS path from response, then:]
 TOOL_CALL: list_directory
 ARGUMENTS: {"path": "test1/integration"}
-[then after finding *_lineout.xy:]
+[then after finding *_lineout.xy, build command with MIDAS path from check_environment:]
 TOOL_CALL: run_command
-ARGUMENTS: {"command": "/Users/b324240/miniconda3/envs/midas_env/bin/python /Users/b324240/Git/MIDAS/gui/viewers/plot_lineout_results.py /full/path/to/lineout.xy --paramFN /full/path/to/refined_MIDAS_params_CeO2.txt"}
+ARGUMENTS: {"command": "<MIDAS_PYTHON> <MIDAS_PATH>/gui/viewers/plot_lineout_results.py /full/path/to/lineout.xy --paramFN /full/path/to/refined_MIDAS_params_CeO2.txt"}
 
 User: "Plot the caked output"
-✅ CORRECT (after finding *_caked.hdf.zarr.zip):
+✅ CORRECT (after check_environment + finding *_caked.hdf.zarr.zip):
 TOOL_CALL: run_command
-ARGUMENTS: {"command": "/Users/b324240/miniconda3/envs/midas_env/bin/python /Users/b324240/Git/MIDAS/gui/viewers/plot_integrator_peaks.py /full/path/to/file.caked.hdf.zarr.zip"}
+ARGUMENTS: {"command": "<MIDAS_PYTHON> <MIDAS_PATH>/gui/viewers/plot_integrator_peaks.py /full/path/to/file.caked.hdf.zarr.zip"}
 
 User: "Plot calibration results in test1"
-✅ CORRECT (after finding *_corr.csv):
+✅ CORRECT (after check_environment + finding *_corr.csv):
 TOOL_CALL: run_command
-ARGUMENTS: {"command": "/Users/b324240/miniconda3/envs/midas_env/bin/python /Users/b324240/Git/MIDAS/gui/viewers/plot_calibrant_results.py /full/path/to/file_corr.csv"}
+ARGUMENTS: {"command": "<MIDAS_PYTHON> <MIDAS_PATH>/gui/viewers/plot_calibrant_results.py /full/path/to/file_corr.csv"}
 
 ❌ WRONG — NEVER do these:
 - NEVER calculate d = a/√(h²+k²+l²) yourself — call xray_calculate
