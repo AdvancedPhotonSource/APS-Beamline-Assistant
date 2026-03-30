@@ -2345,43 +2345,51 @@ async def midas_auto_calibrate(
         if not image_path.exists():
             print(f"⚠ Image file not found at: {image_path}", file=sys.stderr)
 
-            # Search dirs: parent of specified path + subdirs of cwd (e.g. test1/)
-            cwd = Path.cwd()
-            search_dirs = {image_path.parent, cwd}
-            for d in cwd.iterdir():
-                if d.is_dir():
-                    search_dirs.add(d)
+            # Search ONLY in the directory the user specified, not all CWD subdirs.
+            # This prevents picking wrong files from test2/ when user meant test1/.
+            specified_dir = image_path.parent
+            search_dirs = [specified_dir]
+            # Only expand to CWD if specified_dir doesn't exist (user gave bare filename)
+            if not specified_dir.exists() or specified_dir == Path.cwd():
+                search_dirs = [Path.cwd()]
 
-            print(f"  Searching for image in: {', '.join(d.name for d in search_dirs)}", file=sys.stderr)
+            print(f"  Searching in: {', '.join(str(d) for d in search_dirs)}", file=sys.stderr)
 
-            search_patterns = ["*.tif", "*.tiff", "*.ge2", "*.ge3", "*.ge4", "*.ge5", "*.h5", "*.hdf5"]
+            search_patterns = ["*.tif", "*.tiff", "*.ge", "*.ge1", "*.ge2", "*.ge3", "*.ge4", "*.ge5", "*.h5", "*.hdf5", "*.nxs"]
             found_files = []
             for search_dir in search_dirs:
                 if search_dir.exists():
                     for pattern in search_patterns:
                         found_files.extend(search_dir.glob(pattern))
 
-            if found_files:
-                found_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-                print(f"  Found {len(found_files)} image file(s):", file=sys.stderr)
-                for i, f in enumerate(found_files[:5], 1):
-                    print(f"    {i}. {f.parent.name}/{f.name}", file=sys.stderr)
+            # Filter symlinks to avoid duplicates
+            found_files = [f for f in found_files if not f.is_symlink()]
 
-                # Try to match by basename stem first
-                search_basename = image_path.stem.lower()
-                basename_match = next((f for f in found_files if search_basename in f.stem.lower()), None)
-                if basename_match:
-                    image_path = basename_match
-                    print(f"  ✓ Using matched file: {image_path}", file=sys.stderr)
+            if found_files:
+                # Try exact stem match first, then partial match
+                search_stem = image_path.stem.lower()
+                exact_match = next((f for f in found_files if f.stem.lower() == search_stem), None)
+                if exact_match:
+                    image_path = exact_match
+                    print(f"  ✓ Exact match: {image_path}", file=sys.stderr)
                 else:
-                    image_path = found_files[0]
-                    print(f"  ✓ Using most recent file: {image_path}", file=sys.stderr)
+                    partial_match = next((f for f in found_files if search_stem in f.stem.lower()), None)
+                    if partial_match:
+                        image_path = partial_match
+                        print(f"  ✓ Partial match: {image_path}", file=sys.stderr)
+                    else:
+                        # List what was found so the user can pick
+                        file_list = "\n".join(f"  - {f.parent.name}/{f.name}" for f in found_files[:10])
+                        return format_result({
+                            "tool": "midas_auto_calibrate",
+                            "status": "error",
+                            "error": f"File '{image_path.name}' not found. Files in {specified_dir}:\n{file_list}\n\nPlease provide the exact filename."
+                        })
             else:
-                print(f"❌ ERROR: No image files found!", file=sys.stderr)
                 return format_result({
                     "tool": "midas_auto_calibrate",
                     "status": "error",
-                    "error": f"No diffraction images (.tif, .ge, .h5) found in cwd or subdirectories. Please provide the full path."
+                    "error": f"No diffraction images found in {specified_dir}. Please provide the full absolute path to the image file."
                 })
 
         # Auto-search for parameters file if specified but not found
