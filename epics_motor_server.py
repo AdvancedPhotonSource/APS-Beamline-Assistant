@@ -37,6 +37,11 @@ logging.getLogger("fastmcp").setLevel(logging.WARNING)
 
 mcp = FastMCP("epics-motor")
 
+# Default IOC prefix — used when the model omits prefix from tool calls.
+# Override with EPICS_MOTOR_PREFIX env var for different beamlines.
+import os
+DEFAULT_PREFIX = os.environ.get("EPICS_MOTOR_PREFIX", "20idMotSim")
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -114,7 +119,7 @@ def _wait_for_dmov(prefix: str, motor: str,
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
-async def get_motor_position(prefix: str, motor: str) -> str:
+async def get_motor_position(motor: str, prefix: str = DEFAULT_PREFIX) -> str:
     """Read the actual (readback) position of a motor.
 
     Args:
@@ -137,7 +142,7 @@ async def get_motor_position(prefix: str, motor: str) -> str:
 
 
 @mcp.tool()
-async def get_motor_status(prefix: str, motor: str) -> str:
+async def get_motor_status(motor: str, prefix: str = DEFAULT_PREFIX) -> str:
     """Read comprehensive status of a motor record.
 
     Reads: position (RBV/VAL), motion state (DMOV), limit switches (HLS/LLS),
@@ -182,9 +187,9 @@ async def get_motor_status(prefix: str, motor: str) -> str:
 
 @mcp.tool()
 async def move_motor_absolute(
-    prefix: str,
     motor: str,
     position: float,
+    prefix: str = DEFAULT_PREFIX,
     wait: bool = True,
     timeout: int = 60,
     confirm_large_move: bool = False,
@@ -278,9 +283,9 @@ async def move_motor_absolute(
 
 @mcp.tool()
 async def move_motor_relative(
-    prefix: str,
     motor: str,
     delta: float,
+    prefix: str = DEFAULT_PREFIX,
     wait: bool = True,
     timeout: int = 60,
     confirm_large_move: bool = False,
@@ -306,7 +311,6 @@ async def move_motor_relative(
         return _fmt({"error": f"Cannot read current position (RBV) for {_pv(prefix, motor)}"})
 
     target = rbv + delta
-    _, egu = _caget(_pv(prefix, motor, "EGU"))
 
     # Delegate to absolute move (all safety checks happen there)
     result_json = await move_motor_absolute(
@@ -322,7 +326,7 @@ async def move_motor_relative(
 
 
 @mcp.tool()
-async def stop_motor(prefix: str, motor: str) -> str:
+async def stop_motor(motor: str, prefix: str = DEFAULT_PREFIX) -> str:
     """Stop a motor immediately by setting STOP=1.
 
     This is always permitted regardless of limits or move size.
@@ -349,7 +353,7 @@ async def stop_motor(prefix: str, motor: str) -> str:
 
 
 @mcp.tool()
-async def set_motor_velocity(prefix: str, motor: str, velocity: float) -> str:
+async def set_motor_velocity(motor: str, velocity: float, prefix: str = DEFAULT_PREFIX) -> str:
     """Set the motor velocity (VELO field).
 
     Args:
@@ -386,9 +390,9 @@ async def set_motor_velocity(prefix: str, motor: str, velocity: float) -> str:
 
 @mcp.tool()
 async def jog_motor(
-    prefix: str,
     motor: str,
     direction: str,
+    prefix: str = DEFAULT_PREFIX,
     duration_s: float = 1.0,
 ) -> str:
     """Jog a motor forward or reverse for a fixed duration.
@@ -437,7 +441,7 @@ async def jog_motor(
 
 
 @mcp.tool()
-async def tweak_motor(prefix: str, motor: str, direction: str, step: float) -> str:
+async def tweak_motor(motor: str, direction: str, step: float, prefix: str = DEFAULT_PREFIX) -> str:
     """Tweak a motor by a small step using TWV/TWF/TWR fields.
 
     Sets TWV to step size, then fires TWF (forward) or TWR (reverse).
@@ -478,7 +482,7 @@ async def tweak_motor(prefix: str, motor: str, direction: str, step: float) -> s
 
 
 @mcp.tool()
-async def get_motor_limits(prefix: str, motor: str) -> str:
+async def get_motor_limits(motor: str, prefix: str = DEFAULT_PREFIX) -> str:
     """Read all limit-related fields for a motor.
 
     Returns soft limits (HLM/LLM), hard limit switch states (HLS/LLS),
@@ -507,8 +511,8 @@ async def get_motor_limits(prefix: str, motor: str) -> str:
 
 @mcp.tool()
 async def set_motor_limits(
-    prefix: str,
     motor: str,
+    prefix: str = DEFAULT_PREFIX,
     high_limit: Optional[float] = None,
     low_limit: Optional[float] = None,
 ) -> str:
@@ -550,7 +554,7 @@ async def set_motor_limits(
 
 
 @mcp.tool()
-async def list_motors(prefix: str, motor_list: list[str]) -> str:
+async def list_motors(motor_list: list[str], prefix: str = DEFAULT_PREFIX) -> str:
     """Read positions and status for a list of motors under the same IOC prefix.
 
     Args:
@@ -583,7 +587,7 @@ async def list_motors(prefix: str, motor_list: list[str]) -> str:
 
 
 @mcp.tool()
-async def home_motor(prefix: str, motor: str, direction: str = "forward") -> str:
+async def home_motor(motor: str, direction: str = "forward", prefix: str = DEFAULT_PREFIX) -> str:
     """Home a motor using HOMF (forward) or HOMR (reverse).
 
     Waits for homing to complete (DMOV=1).
