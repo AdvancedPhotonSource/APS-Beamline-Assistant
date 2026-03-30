@@ -214,16 +214,18 @@ CALIBRATION_AGENT = APEXAAgent(
     ],
     instructions = """You are a detector calibration specialist for HEDM synchrotron experiments at APS.
 
-Responsibilities:
-- Auto-calibrate detectors using standard powders (CeO2, LaB6, Si, Al2O3)
-- Validate beamline parameters (wavelength, detector distance, beam center)
-- Perform X-ray geometry calculations (Bragg's law, d-spacing, energy↔wavelength)
+Workflow — follow these steps IN ORDER, no confirmations needed:
+1. Call list_directory ONCE to find the calibrant image file
+2. IMMEDIATELY call midas_auto_calibrate with the full path — do NOT ask the user to confirm
+3. parameters_file is OPTIONAL — omit it if not available. AutoCalibrateZarr.py auto-detects
+   calibrant (CeO2/LaB6 from filename), energy (keV in filename), pixel size (from detector shape)
+4. If the user provides energy in keV, call xray_calculate to convert to wavelength first
 
-Always use midas_auto_calibrate — never attempt manual calibration.
-If the user provides energy in keV, first call xray_calculate to convert to wavelength.
+CRITICAL: After listing files, call midas_auto_calibrate IMMEDIATELY.
+Never say "I found the file, shall I proceed?" — just run it.
+Never call list_directory more than once per request.
 
-After calibration report: refined BC (beam center x/y), Lsd (detector distance),
-tilts (tx/ty/tz), and whether convergence was achieved (stopping strain reached).""",
+After calibration report: refined BC, Lsd, tilts, and convergence quality.""",
 )
 
 ANALYSIS_AGENT = APEXAAgent(
@@ -328,27 +330,21 @@ MOTOR_AGENT = APEXAAgent(
     ],
     instructions = """You are a motor control specialist for EPICS-based beamline instruments at APS.
 
-You control motors via EPICS Channel Access using the motor MCP tools.
-The IOC prefix (e.g. "20idMotSim") and motor name (e.g. "m1") identify each motor.
+Default IOC prefix is "20idMotSim". Motor names: "m1" through "m8".
+The prefix parameter defaults automatically — you do NOT need to specify it.
 
-⚠️ CRITICAL: When the user asks to move, read, or check a motor — IMMEDIATELY call the
-appropriate tool. NEVER say "I can move it" or "I'll move it" without actually calling the tool.
+⚠️ CRITICAL — ALWAYS call the tool, NEVER just describe what you would do:
+1. User asks to MOVE → call move_motor_absolute (or move_motor_relative) IMMEDIATELY.
+   The tool checks limits internally — do NOT call get_motor_status first.
+2. User asks POSITION → call get_motor_position.
+3. User asks STATUS → call get_motor_status.
+4. User says STOP → call stop_motor IMMEDIATELY.
+5. For small steps → use tweak_motor or move_motor_relative.
+6. If a move is rejected for limits → call get_motor_limits to show the range.
+7. NEVER say "I can move it" — CALL THE TOOL.
+8. NEVER call get_motor_status before a move — it wastes a round-trip.
 
-Workflow rules:
-1. Before any move, call get_motor_status to know current position, limits, and state.
-2. Use move_motor_absolute for absolute targets; move_motor_relative for +/- steps.
-3. Always wait=True unless the user explicitly asks for a non-blocking move.
-4. For small exploratory moves, use tweak_motor or jog_motor.
-5. If a move is rejected due to limits, call get_motor_limits to show the user the range.
-6. STOP_MOTOR is always safe to call — do it immediately if the user says "stop".
-
-Safety rules (NEVER bypass):
-- Never move a motor that is at a limit switch (HLS=1 or LLS=1).
-- Never set STOP=0 (arming the stop — not your responsibility).
-- Confirm large moves (>50% travel range) with the user before setting confirm_large_move=True.
-- Never home a motor without explicit user instruction.
-
-After each move report: start position, target, final RBV, and units.""",
+After each move report: target, final RBV, and units.""",
 )
 
 VISUALIZATION_AGENT = APEXAAgent(
@@ -635,7 +631,9 @@ class AgentRunner:
 
         messages = [{"role": "system", "content": system_content}]
         if history:
-            messages.extend(history[-10:])   # last 5 exchanges
+            # Motor/viz agents need less history (repetitive commands confuse the model)
+            hist_limit = 4 if agent.name in ("MotorAgent", "VisualizationAgent") else 10
+            messages.extend(history[-hist_limit:])
         messages.append({"role": "user", "content": query})
 
         last_tool_name = None          # track repeated tool calls
@@ -686,12 +684,18 @@ class AgentRunner:
 
                     print(f"  → {tc.name}")
                     result = await self._execute(tc.name, tc.arguments)
+                    # Truncate very long tool results to prevent context overflow
+                    if len(result) > 3000:
+                        result = result[:3000] + "\n... [truncated]"
                     messages.append({
                         "role": "user",
                         "content": (
                             f"[Tool Result for {tc.name}]\n{result}\n\n"
-                            "Now summarise this result for the user. "
-                            "Do NOT call the same tool again unless the user asks for something different."
+                            "Now proceed with the user's original request. "
+                            "If you found the files needed, call the next tool IMMEDIATELY "
+                            "(e.g. midas_auto_calibrate, midas_integrate_2d_to_1d, move_motor_absolute). "
+                            "Do NOT ask for confirmation. Do NOT call list_directory again. "
+                            "Do NOT repeat the same tool."
                         ),
                     })
                 continue
