@@ -2173,7 +2173,7 @@ async def midas_integrate_2d_to_1d(
 @mcp.tool()
 async def midas_auto_calibrate(
     image_file: str,
-    parameters_file: str,
+    parameters_file: str = "",
     dark_file: str = "",
     lsd_guess: float = 1000000.0,
     bc_x_guess: float = 0.0,
@@ -2230,7 +2230,9 @@ async def midas_auto_calibrate(
     Args:
         image_file: EXACT path to calibrant diffraction image (.tif/.tiff, .ge/.ge1-.ge5, .h5/.hdf5/.nxs, .zip Zarr)
                    If file not found, will auto-search parent directory for matching files.
-        parameters_file: EXACT path to MIDAS parameter file containing material properties (SpaceGroup, LatticeParameter, Wavelength, px)
+        parameters_file: OPTIONAL path to MIDAS parameter file. If omitted, AutoCalibrateZarr.py auto-detects
+                        calibrant (CeO2/LaB6 from filename), energy (from keV in filename), distance (from mm in filename),
+                        and pixel size (from detector shape). Only needed if filename lacks these hints.
         dark_file: Optional path to dark field image for background subtraction
         lsd_guess: Initial sample-to-detector distance guess in µm (default: 1000000 = auto-detect from ring ratios)
         bc_x_guess: Initial beam center X coordinate in pixels (default: 0.0 = auto-detect from ring geometry)
@@ -2330,10 +2332,14 @@ async def midas_auto_calibrate(
 
         # Expand paths
         image_path = Path(image_file).expanduser().absolute()
-        param_path = Path(parameters_file).expanduser().absolute()
-
         print(f"✓ Image path: {image_path} (exists: {image_path.exists()})", file=sys.stderr)
-        print(f"✓ Param path: {param_path} (exists: {param_path.exists()})", file=sys.stderr)
+
+        param_path = None
+        if parameters_file:
+            param_path = Path(parameters_file).expanduser().absolute()
+            print(f"✓ Param path: {param_path} (exists: {param_path.exists()})", file=sys.stderr)
+        else:
+            print(f"  No parameter file provided — AutoCalibrateZarr.py will auto-detect from filename", file=sys.stderr)
 
         # Auto-search for image file if not found
         if not image_path.exists():
@@ -2378,17 +2384,13 @@ async def midas_auto_calibrate(
                     "error": f"No diffraction images (.tif, .ge, .h5) found in cwd or subdirectories. Please provide the full path."
                 })
 
-        # Auto-search for parameters file if not found
-        if not param_path.exists():
+        # Auto-search for parameters file if specified but not found
+        if param_path and not param_path.exists():
             print(f"⚠ Parameters file not found at: {param_path}", file=sys.stderr)
 
-            cwd = Path.cwd()
-            search_dirs = {param_path.parent, cwd}
-            for d in cwd.iterdir():
-                if d.is_dir():
-                    search_dirs.add(d)
-
-            param_patterns = ["*arameters*.txt", "*params*.txt", "*Params*.txt", "*.txt"]
+            # Search in image directory and cwd
+            search_dirs = {param_path.parent, image_path.parent, Path.cwd()}
+            param_patterns = ["*arameters*.txt", "*params*.txt", "*Params*.txt", "refined_MIDAS_params*.txt"]
             found_params = []
             for search_dir in search_dirs:
                 if search_dir.exists():
@@ -2400,28 +2402,17 @@ async def midas_auto_calibrate(
 
             if found_params:
                 found_params.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-                print(f"  Found {len(found_params)} parameter file(s):", file=sys.stderr)
-                for i, f in enumerate(found_params[:5], 1):
-                    print(f"    {i}. {f.parent.name}/{f.name}", file=sys.stderr)
-
                 search_basename = param_path.stem.lower()
                 basename_match = next(
                     (f for f in found_params if search_basename in f.stem.lower() or "param" in f.stem.lower()),
                     None
                 )
-                if basename_match:
-                    param_path = basename_match
-                    print(f"  ✓ Using matched file: {param_path}", file=sys.stderr)
-                else:
-                    param_path = found_params[0]
-                    print(f"  ✓ Using: {param_path}", file=sys.stderr)
+                param_path = basename_match if basename_match else found_params[0]
+                print(f"  ✓ Using: {param_path}", file=sys.stderr)
             else:
-                print(f"❌ ERROR: No parameter files found!", file=sys.stderr)
-                return format_result({
-                    "tool": "midas_auto_calibrate",
-                    "status": "error",
-                    "error": f"Parameters file not found. Please provide the full path to the MIDAS parameter file."
-                })
+                # No param file found — let AutoCalibrateZarr.py auto-detect
+                print(f"  No parameter file found — falling back to auto-detection from filename", file=sys.stderr)
+                param_path = None
 
         # Determine file type for ConvertFile flag
         suffix = image_path.suffix.lower()
@@ -2507,7 +2498,10 @@ async def midas_auto_calibrate(
             midas_python,
             str(autocal_script),
             "-dataFN", str(image_path),
-            "-paramFN", str(param_path),
+        ]
+        if param_path:
+            cmd.extend(["-paramFN", str(param_path)])
+        cmd.extend([
             "-ConvertFile", str(convert_file),
             "--n-iterations", str(n_iterations),
             "--tol-shifts", str(tol_shifts),
@@ -2516,7 +2510,7 @@ async def midas_auto_calibrate(
             "-FirstRingNr", str(first_ring_nr),
             "-EtaBinSize", str(eta_bin_size),
             "-MakePlots", str(make_plots)
-        ]
+        ])
 
         # Add optional parameters
         if dark_file:

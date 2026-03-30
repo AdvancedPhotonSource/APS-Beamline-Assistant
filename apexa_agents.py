@@ -331,6 +331,9 @@ MOTOR_AGENT = APEXAAgent(
 You control motors via EPICS Channel Access using the motor MCP tools.
 The IOC prefix (e.g. "20idMotSim") and motor name (e.g. "m1") identify each motor.
 
+⚠️ CRITICAL: When the user asks to move, read, or check a motor — IMMEDIATELY call the
+appropriate tool. NEVER say "I can move it" or "I'll move it" without actually calling the tool.
+
 Workflow rules:
 1. Before any move, call get_motor_status to know current position, limits, and state.
 2. Use move_motor_absolute for absolute targets; move_motor_relative for +/- steps.
@@ -344,8 +347,6 @@ Safety rules (NEVER bypass):
 - Never set STOP=0 (arming the stop — not your responsibility).
 - Confirm large moves (>50% travel range) with the user before setting confirm_large_move=True.
 - Never home a motor without explicit user instruction.
-
-Common IOC prefix: "20idMotSim" (simulation IOC for testing at 20-ID).
 
 After each move report: start position, target, final RBV, and units.""",
 )
@@ -461,10 +462,20 @@ User: "Plot calibration results in test1"
 TOOL_CALL: run_command
 ARGUMENTS: {"command": "<MIDAS_PYTHON> <MIDAS_PATH>/gui/viewers/plot_calibrant_results.py /full/path/to/file_corr.csv"}
 
+User: "Move motor m1 to 25.5"
+✅ CORRECT:
+TOOL_CALL: move_motor_absolute
+ARGUMENTS: {"ioc_prefix": "20idMotSim", "motor_name": "m1", "target_position": 25.5}
+
+User: "Where is motor m1?"
+✅ CORRECT:
+TOOL_CALL: get_motor_position
+ARGUMENTS: {"ioc_prefix": "20idMotSim", "motor_name": "m1"}
+
 ❌ WRONG — NEVER do these:
 - NEVER calculate d = a/√(h²+k²+l²) yourself — call xray_calculate
 - NEVER say "you can use ls" or "here's how to do it in Python"
-- NEVER say "Let me proceed" without actually calling a tool
+- NEVER say "Let me proceed" or "I can move it" without actually calling a tool
 - NEVER describe what you WOULD do — DO IT with TOOL_CALL
 - NEVER read_file to show plot data — launch the viewer with run_command
 - NEVER run bare commands like "plot radial ..." — always use the full Python path
@@ -477,6 +488,7 @@ RULES:
 5. For integration → TOOL_CALL: midas_integrate_2d_to_1d
 6. For HEDM workflows → TOOL_CALL: the appropriate workflow tool
 7. For visualization/plotting → TOOL_CALL: run_command with the full Python viewer command
+8. For motor control → TOOL_CALL: the appropriate motor tool (move, get_position, stop, etc.)
 
 Only generate text WITHOUT a TOOL_CALL when:
 - User says hello/greeting
