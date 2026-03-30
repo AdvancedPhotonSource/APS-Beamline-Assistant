@@ -94,19 +94,18 @@ class ArgoProvider:
             # Haiku 4.5 and Sonnet 4.5/4.6 reject both temperature+top_p
             if self.model not in ("claudesonnet45", "claudesonnet46", "claudehaiku45"):
                 payload["top_p"] = 0.9
-        elif self.model.startswith("gpto") or self.model in ("gpt5", "gpt5mini", "gpt5nano", "gpt51", "gpt52", "gpt54"):
-            # o-series and GPT-5 family: use max_completion_tokens, no temperature/top_p
+        elif self.model.startswith("gpto"):
+            # o-series: use max_completion_tokens, no temperature/top_p
             payload.pop("temperature", None)
             payload["max_completion_tokens"] = 16000
-        elif self.model in ("gpt41", "gpt41mini", "gpt41nano"):
+        elif self.model.startswith("gpt"):
+            # All GPT models (gpt4o, gpt41, gpt5, etc.): max_completion_tokens
             payload["max_completion_tokens"] = 16000
             payload["top_p"] = 0.9
-        elif self.model.startswith("gpt4o"):
+        elif self.model.startswith("gemini"):
             payload["max_tokens"] = 16000
-            payload["top_p"]      = 0.9
         else:
-            payload["max_tokens"] = 4000
-            payload["top_p"]      = 0.9
+            payload["max_completion_tokens"] = 16000
 
         # NOTE: Do NOT pass tools in the API payload.
         # Argo Gateway returns string responses (not dict) which strips
