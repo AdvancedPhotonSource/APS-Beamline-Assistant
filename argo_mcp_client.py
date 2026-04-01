@@ -1592,6 +1592,20 @@ class APEXAClient:
                     print(f"\nAvailable tools ({len(tools)}):")
                     for tool in tools:
                         print(f"  - {tool['function']['name']}: {tool['function']['description'][:80]}")
+                elif user_input.lower() == 'stats':
+                    stats = self.orchestrator.logger.stats()
+                    if stats["total"] == 0:
+                        print("No interactions logged yet.")
+                    else:
+                        print(f"\n  APEXA Interaction Stats ({stats['total']} queries logged)")
+                        print(f"  Success rate: {stats['success_rate']}  |  Loop rate: {stats['loop_rate']}")
+                        print(f"  Avg tool calls: {stats['avg_tool_calls']}  |  Avg iterations: {stats['avg_iterations']}")
+                        if stats.get("agent_counts"):
+                            print(f"\n  Per-agent breakdown:")
+                            for agent, count in stats["agent_counts"].items():
+                                loop_rate = stats["agent_loop_rates"].get(agent, "0%")
+                                print(f"    {agent:20s}: {count:4d} queries, {loop_rate} looped")
+                        print()
                 elif user_input.lower() == 'timing':
                     current = os.environ.get("APEXA_SHOW_TIMING")
                     if current:
@@ -1638,6 +1652,7 @@ APEXA Smart Commands:
   model <name>                         - Switch AI model
   tools                                - List all analysis tools
   servers                              - Show connected servers
+  stats                                - Show interaction log stats
   clear                                - Clear conversation history
   help                                 - Show this help
   quit                                 - Exit APEXA

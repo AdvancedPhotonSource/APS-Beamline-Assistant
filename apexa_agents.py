@@ -34,6 +34,7 @@ import time
 import httpx
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional, Callable, Awaitable
+from interaction_logger import InteractionLogger, InteractionEntry
 
 # ── Constants ───────────────────────────────────────────────────────────────
 
@@ -600,7 +601,8 @@ class AgentRunner:
     async def run(self, agent: APEXAAgent, query: str,
                   provider: ArgoProvider, all_tools: List[Dict],
                   history: Optional[List[Dict]] = None,
-                  max_iterations: int = 10) -> str:
+                  max_iterations: int = 10,
+                  log_entry: Optional[InteractionEntry] = None) -> str:
 
         tools = self._filter_tools(agent.tool_names, all_tools)
 
@@ -647,7 +649,12 @@ class AgentRunner:
                 messages.append(self._assistant_message(response, provider.model))
                 for tc in response.tool_calls:
                     print(f"  → {tc.name}")
+                    t0 = time.monotonic()
                     result = await self._execute(tc.name, tc.arguments)
+                    dur = int((time.monotonic() - t0) * 1000)
+                    ok = "error" not in result.lower()[:100]
+                    if log_entry:
+                        log_entry.add_tool_call(tc.name, tc.arguments, result, ok, dur)
                     messages.append(
                         self._tool_result_message(tc, result, provider.model)
                     )
@@ -683,7 +690,12 @@ class AgentRunner:
                         break
 
                     print(f"  → {tc.name}")
+                    t0 = time.monotonic()
                     result = await self._execute(tc.name, tc.arguments)
+                    dur = int((time.monotonic() - t0) * 1000)
+                    ok = "error" not in result.lower()[:100]
+                    if log_entry:
+                        log_entry.add_tool_call(tc.name, tc.arguments, result, ok, dur)
                     # Truncate very long tool results to prevent context overflow
                     if len(result) > 3000:
                         result = result[:3000] + "\n... [truncated]"
@@ -781,6 +793,7 @@ class OrchestratorAgent:
         self.all_tools = all_tools
         self.context   = context
         self.conversation_history: List[Dict] = []
+        self.logger    = InteractionLogger()
 
     def clear_history(self):
         self.conversation_history = []
@@ -801,9 +814,22 @@ class OrchestratorAgent:
         agent   = self._route(query)
         history = self.conversation_history if use_history else None
 
+        # Start interaction log entry
+        log_entry = self.logger.start(query, model=provider.model)
+        log_entry.set_agent(agent.name)
+
         result = await self.runner.run(
-            agent, query, provider, self.all_tools, history
+            agent, query, provider, self.all_tools, history,
+            log_entry=log_entry,
         )
+
+        # Detect if the agent looped (>3 calls to a single tool = loop)
+        n_calls = len(log_entry.tool_calls)
+        looped = n_calls > 3 and len(set(
+            tc.name for tc in log_entry.tool_calls
+        )) == 1
+        log_entry.finish(result, iterations=len(log_entry.tool_calls), looped=looped)
+        self.logger.save(log_entry)
 
         if use_history:
             self.conversation_history.extend([
