@@ -28,7 +28,7 @@ User (CLI / Gradio / Web UI)
                 |   (9 tools)         |
                 +---------------------+
                 |   midas server      |
-                |   (21 tools)        |
+                |   (24 tools)        |
                 +---------------------+
 ```
 
@@ -49,7 +49,7 @@ All three call `run_query()` as the single entry point.
 | `apexa_agents.py` | Agent definitions, ArgoProvider, AgentRunner, OrchestratorAgent |
 | `argo_mcp_client.py` | MCP client, tool registry, CLI session loop |
 | `beamline_core_server.py` | Core MCP server: file ops, shell commands, X-ray calculations |
-| `midas_comprehensive_server.py` | MIDAS MCP server: 21 tools for HEDM workflows |
+| `midas_comprehensive_server.py` | MIDAS MCP server: 24 tools for HEDM workflows, GSAS-II, CIF |
 | `servers.config` | Server configuration (`name:script_path` pairs) |
 | `.agents/skills/` | Agent Skills: canonical MIDAS workflow reference |
 
@@ -71,7 +71,7 @@ Keyword-score routing to specialist agents:
 | Agent | Keywords | Temperature |
 |---|---|---|
 | CalibrationAgent | calibrat, ceo2, beam center, lsd, detector distance | 0.3 |
-| AnalysisAgent | integrat, hedm, grain, workflow (default fallback) | 0.5 |
+| AnalysisAgent | integrat, hedm, grain, gsas, refine, workflow (default fallback) | 0.5 |
 | KnowledgeAgent | explain, what is, literature, best practice | 0.6 |
 | VisualizationAgent | plot, visualiz, view, show, lineout, caked, heatmap | 0.3 |
 
@@ -84,8 +84,9 @@ System prompt injected into every agent call. Instructs the model to use `TOOL_C
 `list_directory`, `read_file`, `write_file`, `get_file_info`, `run_command`,
 `check_environment`, `xray_calculate`, `validate_beamline_parameters`, `list_common_calibrants`
 
-### MIDAS Server (`midas_comprehensive_server.py`) -- 21 tools
+### MIDAS Server (`midas_comprehensive_server.py`) -- 24 tools
 `midas_auto_calibrate`, `midas_integrate_2d_to_1d`, `midas_batch_integrate`,
+`run_gsas_refinement`, `run_live_analysis`, `fetch_cif_from_mp`,
 `run_ff_hedm_full_workflow`, `run_nf_hedm_reconstruction`, `run_pf_hedm_workflow`,
 `run_ff_calibration`, `match_grains`, `calculate_misorientation`,
 `run_forward_simulation`, `extract_grain_centroids`, `convert_nf_to_dream3d`,
@@ -111,6 +112,7 @@ Canonical MIDAS workflow reference files (agentskills.io format):
 | `midas-calibrate` | AutoCalibrateZarr.py flags, formats, convergence guide |
 | `midas-integrate` | integrator.py (CPU) + integrator_batch_process.py (GPU), v11 flags |
 | `midas-hedm` | FF/NF/PF-HEDM pipeline, GPU flags, resume/checkpoint |
+| `midas-gsasii` | GSAS-II refinement, live analysis pipeline, CIF fetcher |
 | `midas-visualize` | MIDAS viewer scripts table, when to use each |
 
 ## Server Configuration (`servers.config`)

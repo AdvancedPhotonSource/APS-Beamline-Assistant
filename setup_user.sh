@@ -68,11 +68,23 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
     fi
 fi
 
+# Step 4: Materials Project API key (optional)
+echo ""
+echo "  4. Materials Project API Key (optional, for CIF file fetching)"
+echo "     Get one at: https://next-gen.materialsproject.org/api"
+read -p "     API Key (Enter to skip): " MP_API_KEY
+
+MP_LINE="# MP_API_KEY not set (optional, for fetch_cif_from_mp)"
+if [ -n "$MP_API_KEY" ]; then
+    MP_LINE="MP_API_KEY=$MP_API_KEY"
+fi
+
 # Write .env
 cat > .env << EOF
 ANL_USERNAME=$ANL_USERNAME
 ARGO_MODEL=$ARGO_MODEL
 $MIDAS_LINE
+$MP_LINE
 EOF
 
 chmod 600 .env

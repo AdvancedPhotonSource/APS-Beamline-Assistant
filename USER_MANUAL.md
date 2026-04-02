@@ -40,8 +40,8 @@ APEXA uses a multi-agent architecture. Your natural language request is routed b
 | Agent | Handles | Key Tools |
 |---|---|---|
 | **CalibrationAgent** | Calibration, beam center, detector distance | `midas_auto_calibrate`, `xray_calculate` |
-| **AnalysisAgent** | Integration, FF/NF/PF-HEDM workflows | `midas_integrate_2d_to_1d`, `run_ff_hedm_full_workflow` |
-| **KnowledgeAgent** | Explanations, material properties, best practices | `query_hedm_knowledge`, `get_material_properties` |
+| **AnalysisAgent** | Integration, GSAS-II refinement, FF/NF/PF-HEDM workflows | `midas_integrate_2d_to_1d`, `run_gsas_refinement`, `run_live_analysis` |
+| **KnowledgeAgent** | Explanations, material properties, CIF files | `query_hedm_knowledge`, `get_material_properties`, `fetch_cif_from_mp` |
 | **VisualizationAgent** | Plotting, viewing lineouts, caked data | `run_command` (launches MIDAS viewer scripts) |
 
 You don't need to know which agent handles your request -- just ask naturally.
@@ -104,6 +104,43 @@ For live experiments with GPU hardware, use natural language to invoke `integrat
 ```
 APEXA> run GPU streaming integration on /data/scan_01 with dark file
 APEXA> start live streaming integration from PVA detector
+```
+
+---
+
+## GSAS-II Refinement
+
+Rietveld-style peak fitting and lattice parameter refinement on integrated (caked) data.
+
+**Example Prompts:**
+```
+APEXA> refine the caked output with GSAS-II using CeO2.cif
+APEXA> run GSAS-II refinement on test1/integration/CeO2_caked.hdf.zarr.zip
+APEXA> run integration and refinement on the scan data with CeO2 CIF
+APEXA> fetch a CIF file for CeO2 from Materials Project
+```
+
+**What happens:**
+1. For standalone refinement: Takes `.zarr.zip` + CIF files, runs multi-stage Rietveld refinement
+2. For combined pipeline: Integrates raw data first, then refines (batch CPU or GPU streaming)
+3. For CIF fetch: Downloads crystal structures from Materials Project database
+
+**Outputs:**
+
+| Output File | Description |
+|---|---|
+| `refinement_summary.json` | Aggregated Rwp, lattice parameters, success/fail counts |
+| `hist_NNNN.gpx` | Per-histogram GSAS-II project file |
+| `hist_NNNN_<phase>.cif` | Refined crystal structure |
+| `hist_NNNN_data.csv` | 2θ, observed, calculated, difference |
+
+**Typical workflow:**
+```
+APEXA> calibrate CeO2 in test1                         (CalibrationAgent)
+APEXA> integrate the CeO2 image in test1                (AnalysisAgent)
+APEXA> fetch CIF for CeO2                              (KnowledgeAgent)
+APEXA> refine the caked output with GSAS-II using CeO2  (AnalysisAgent)
+APEXA> show the caked peaks                             (VisualizationAgent)
 ```
 
 ---

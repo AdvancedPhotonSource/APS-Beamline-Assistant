@@ -42,7 +42,7 @@ User (natural language)
                              |
                   +----------+----------+
                   |   core (9 tools)    |
-                  |   midas (21 tools)  |
+                  |   midas (24 tools)  |
                   +---------------------+
 ```
 
@@ -50,7 +50,7 @@ User (natural language)
 | Agent | Routes when |
 |---|---|
 | CalibrationAgent | calibrate, CeO2, beam center, Lsd, detector distance |
-| AnalysisAgent | integrate, HEDM, grain, workflow, batch (default) |
+| AnalysisAgent | integrate, HEDM, grain, GSAS-II, refine, workflow (default) |
 | KnowledgeAgent | explain, what is, literature, best practice |
 | VisualizationAgent | plot, visualize, lineout, caked, heatmap, show |
 
@@ -58,13 +58,14 @@ User (natural language)
 | Server | File | Tools |
 |---|---|---|
 | core | `beamline_core_server.py` | 9 tools: file ops, shell commands, X-ray calculations |
-| midas | `midas_comprehensive_server.py` | 21 tools: FF/NF/PF-HEDM, calibration, integration |
+| midas | `midas_comprehensive_server.py` | 24 tools: FF/NF/PF-HEDM, calibration, integration, GSAS-II refinement, CIF fetcher |
 
 ### Agent Skills (`.agents/skills/`)
 Canonical MIDAS workflow reference — correct v11 flags, scripts, output files:
 - `midas-calibrate` — AutoCalibrateZarr.py workflow
 - `midas-integrate` — integrator.py (CPU) and integrator_batch_process.py (GPU)
 - `midas-hedm` — FF/NF/PF-HEDM full pipeline
+- `midas-gsasii` — GSAS-II refinement, live analysis pipeline, CIF fetcher
 - `midas-visualize` — MIDAS viewer scripts for lineouts, caked, grains
 
 ---

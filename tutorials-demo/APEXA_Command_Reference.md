@@ -42,6 +42,23 @@
 
 ---
 
+## GSAS-II Refinement & Live Analysis
+
+| What you want | What to type |
+|---|---|
+| Refine caked output | `Refine the caked output in test5/integration with GSAS-II using CeO2.cif` |
+| Refine with custom params | `Run GSAS-II refinement on test5/CeO2_caked.hdf.zarr.zip with 8 background terms and 2-theta limits 2 to 15 degrees` |
+| Combined integrate + refine (CPU) | `Run integration and refinement on test5 data using CeO2 CIF with batch backend` |
+| Combined integrate + refine (GPU) | `Run live analysis on /data/scan_01 with stream backend and CeO2.cif` |
+| Live PVA + refine | `Run live analysis with PVA streaming from 10.54.105.139 using CeO2.cif` |
+| Refine existing zarr | `Refine test5/CeO2_caked.hdf.zarr.zip with GSAS-II — skip integration` |
+| Integrate only (no GSAS-II) | `Run integration only on test5 with stream backend, skip refinement` |
+| Fetch CIF file | `Fetch a CIF file for CeO2` |
+| Fetch CIF for alloy | `Download CIF for Ti from Materials Project` |
+| Multi-phase refinement | `Refine the caked output with both CeO2.cif and LaB6.cif` |
+
+---
+
 ## Grain Analysis & Post-Processing
 
 | What you want | What to type |
@@ -136,6 +153,8 @@
 APEXA> Calibrate the CeO2 data in test5 at 61.332 keV
 APEXA> Now integrate that data
 APEXA> Show me the lineout
+APEXA> Fetch a CIF file for CeO2
+APEXA> Refine the caked output with GSAS-II using the CeO2 CIF
 APEXA> What phases match these peaks?
 APEXA> Run FF-HEDM on this data
 APEXA> How many grains were found?
