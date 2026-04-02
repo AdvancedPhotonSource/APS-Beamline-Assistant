@@ -305,10 +305,10 @@ async def read_file(file_path: str, encoding: str = "utf-8", max_size: int = 102
         JSON with file contents
     """
     try:
-        path = Path(file_path).expanduser()
+        path = Path(file_path).expanduser().resolve()
 
         if not path.exists():
-            return format_result({"error": f"File does not exist: {file_path}"})
+            return format_result({"error": f"File does not exist: {path}"})
 
         if not path.is_file():
             return format_result({"error": f"Path is not a file: {file_path}"})
@@ -354,7 +354,7 @@ async def write_file(file_path: str, content: str, encoding: str = "utf-8", appe
         JSON with operation status
     """
     try:
-        path = Path(file_path).expanduser()
+        path = Path(file_path).expanduser().resolve()
         mode = 'a' if append else 'w'
 
         with open(path, mode, encoding=encoding) as f:
