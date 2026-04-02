@@ -349,19 +349,33 @@ async def shutdown_event():
     if mcp_client:
         await mcp_client.cleanup()
 
+# Mount React frontend static assets if build exists
+_frontend_dist = Path("frontend/dist")
+if (_frontend_dist / "assets").exists():
+    app.mount("/assets", StaticFiles(directory=_frontend_dist / "assets"), name="frontend_assets")
+if _frontend_dist.exists():
+    @app.get("/favicon.svg")
+    async def serve_favicon():
+        fav = _frontend_dist / "favicon.svg"
+        if fav.exists():
+            return FileResponse(fav, media_type="image/svg+xml")
+        raise HTTPException(404)
+
 @app.get("/", response_class=HTMLResponse)
 async def serve_web_ui():
-    """Serve the main web UI"""
+    """Serve the React app (or fall back to legacy HTML)"""
+    react_index = Path("frontend/dist/index.html")
+    if react_index.exists():
+        return FileResponse(react_index)
     html_file = Path("beamline_web_ui.html")
     if html_file.exists():
         return FileResponse(html_file)
-    else:
-        return HTMLResponse("""
-        <html><body>
-        <h1>Beamline Assistant</h1>
-        <p>Web UI file not found. Please ensure beamline_web_ui.html is in the current directory.</p>
-        </body></html>
-        """)
+    return HTMLResponse("""
+    <html><body>
+    <h1>APEXA</h1>
+    <p>No frontend found. Run <code>cd frontend && npm run build</code> first.</p>
+    </body></html>
+    """)
 
 @app.get("/test_viewer.html", response_class=HTMLResponse)
 async def serve_test_viewer():
@@ -744,6 +758,13 @@ async def get_status():
         "available_models": list(mcp_client.available_models.keys()) if mcp_client else []
     }
 
+@app.get("/api/models")
+async def get_available_models():
+    """Get available AI models for the frontend model selector"""
+    if mcp_client:
+        return {"models": mcp_client.available_models, "selected": mcp_client.selected_model}
+    return {"models": {}, "selected": "gpt4o"}
+
 @app.get("/api/files")
 async def list_uploaded_files():
     """List uploaded files"""
@@ -759,6 +780,139 @@ async def list_uploaded_files():
                 "extension": file_path.suffix
             })
     return {"files": files}
+
+@app.get("/api/browse")
+async def browse_directory(path: str = ".", show_hidden: bool = False):
+    """Browse directories for the file browser UI"""
+    try:
+        dir_path = Path(path).expanduser().resolve()
+        if not dir_path.exists():
+            raise HTTPException(status_code=404, detail=f"Path not found: {path}")
+        if not dir_path.is_dir():
+            raise HTTPException(status_code=400, detail=f"Not a directory: {path}")
+
+        entries = []
+        try:
+            items = sorted(dir_path.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
+        except PermissionError:
+            raise HTTPException(status_code=403, detail="Permission denied")
+
+        # Limit to prevent large directory listings
+        DIFFRACTION_EXTS = {'.tif', '.tiff', '.ge', '.ge2', '.ge3', '.ge4', '.ge5',
+                           '.h5', '.hdf5', '.nxs', '.zip', '.csv', '.dat', '.xy',
+                           '.txt', '.bin', '.npy', '.mic', '.map'}
+
+        for item in items[:500]:
+            if not show_hidden and item.name.startswith('.'):
+                continue
+            try:
+                stat = item.stat()
+                entry = {
+                    "name": item.name,
+                    "path": str(item),
+                    "is_dir": item.is_dir(),
+                    "size": stat.st_size if item.is_file() else None,
+                    "modified": stat.st_mtime,
+                }
+                if item.is_file():
+                    entry["ext"] = item.suffix.lower()
+                    entry["is_diffraction"] = item.suffix.lower() in DIFFRACTION_EXTS
+                entries.append(entry)
+            except (PermissionError, OSError):
+                continue
+
+        return {
+            "path": str(dir_path),
+            "parent": str(dir_path.parent) if dir_path != dir_path.parent else None,
+            "entries": entries,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/data/csv")
+async def read_csv_data(path: str, max_rows: int = 100000):
+    """Read CSV/DAT/XY file and return as JSON for Plotly rendering"""
+    import pandas as pd
+    try:
+        file_path = Path(path).expanduser().resolve()
+        if not file_path.exists():
+            raise HTTPException(status_code=404, detail=f"File not found: {path}")
+
+        ext = file_path.suffix.lower()
+
+        # Try to detect separator
+        if ext in ['.csv']:
+            # Check first line for separator
+            with open(file_path) as f:
+                first_lines = [f.readline() for _ in range(5)]
+            # Skip comment lines
+            header_lines = [l for l in first_lines if not l.startswith('%') and not l.startswith('#')]
+            if header_lines and '\t' in header_lines[0]:
+                sep = '\t'
+            elif header_lines and ',' in header_lines[0]:
+                sep = ','
+            else:
+                sep = r'\s+'
+            df = pd.read_csv(file_path, sep=sep, comment='%', nrows=max_rows, on_bad_lines='skip')
+        elif ext in ['.dat', '.xy', '.txt']:
+            df = pd.read_csv(file_path, sep=r'\s+', comment='#', header=None, nrows=max_rows, on_bad_lines='skip')
+            # Try to name columns sensibly
+            if len(df.columns) == 2:
+                df.columns = ['x', 'y']
+            elif len(df.columns) == 3:
+                df.columns = ['x', 'y', 'z']
+        else:
+            df = pd.read_csv(file_path, nrows=max_rows, on_bad_lines='skip')
+
+        return {
+            "columns": list(df.columns),
+            "data": {col: df[col].tolist() for col in df.columns},
+            "rows": len(df),
+            "file": str(file_path),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read CSV: {str(e)}")
+
+@app.post("/api/viewer/load_path")
+async def load_viewer_image_by_path(path: str = Form(...)):
+    """Load an image from a filesystem path (for file browser integration)"""
+    try:
+        file_path = Path(path).expanduser().resolve()
+        if not file_path.exists():
+            raise HTTPException(status_code=404, detail=f"File not found: {path}")
+
+        img = load_diffraction_image(str(file_path))
+        file_id = f"browse_{file_path.stem}_{uuid.uuid4().hex[:6]}"
+        image_cache[file_id] = img
+        image_paths[file_id] = str(file_path)
+
+        # Generate preview
+        preview = apply_contrast(img)
+        preview_colored = apply_colormap(preview, 'viridis')
+        preview_b64 = image_to_base64(preview_colored)
+
+        return {
+            "success": True,
+            "file_id": file_id,
+            "filename": file_path.name,
+            "stats": {
+                "shape": list(img.shape),
+                "dtype": str(img.dtype),
+                "min": float(np.min(img)),
+                "max": float(np.max(img)),
+                "mean": float(np.mean(img)),
+                "std": float(np.std(img)),
+            },
+            "preview": preview_b64,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load image: {str(e)}")
 
 @app.get("/api/viewer/status")
 async def get_viewer_status():

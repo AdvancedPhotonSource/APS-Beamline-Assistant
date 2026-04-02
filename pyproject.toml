@@ -26,6 +26,11 @@ dependencies = [
     "h5py>=3.11.0",
     "pillow>=11.3.0",
     "pandas>=2.3.2",
+    # Trame Web UI
+    "trame>=3.6.0",
+    "trame-vuetify>=2.7.0",
+    "trame-plotly>=3.0.0",
+    "trame-components>=2.4.0",
     # Knowledge base / RAG
     "chromadb>=0.4.0",
     "sentence-transformers>=2.2.0",
@@ -42,6 +47,7 @@ extra = [
     "pyfai>=2025.3.0",
     "lmfit>=1.3.4",
     "vtk>=9.3.0",
+    "trame-vtk>=2.8.0",
     "rich>=14.1.0",
     "typer>=0.17.4",
     "orjson>=3.11.3",
