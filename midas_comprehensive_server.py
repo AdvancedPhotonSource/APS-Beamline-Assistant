@@ -3381,6 +3381,463 @@ async def estimate_parameters_from_image(
 
 
 # =============================================================================
+# GSAS-II REFINEMENT & LIVE ANALYSIS
+# =============================================================================
+
+@mcp.tool()
+async def run_gsas_refinement(
+    data_file: str,
+    cif_files: List[str],
+    output_dir: str = "refinement",
+    bkg_terms: int = 6,
+    two_theta_limits: Optional[List[float]] = None,
+    no_atoms: bool = False,
+    no_export: bool = False,
+    n_cpus: int = 1,
+    instprm_file: Optional[str] = None,
+) -> str:
+    """Run GSAS-II peak fitting and lattice refinement on MIDAS caked output.
+
+    Takes a .zarr.zip file produced by integration (midas_integrate_2d_to_1d or
+    midas_batch_integrate) and performs multi-stage Rietveld-style refinement:
+      Stage 1: Background + Scale
+      Stage 2: Unit Cell (lattice parameters)
+      Stage 3: Peak Profile (U, V, W, X, Y, SH/L)
+      Stage 4: Atomic positions + thermal (optional, skipped with no_atoms)
+
+    Prerequisites:
+    - GSAS-II installed (conda install gsas2pkg -c briantoby)
+    - zarr==2.18.3 in midas_env
+
+    Args:
+        data_file: Path to MIDAS .zarr.zip caked output file
+        cif_files: One or more CIF files defining crystallographic phase(s)
+        output_dir: Output directory for .gpx projects and exports (default: refinement/)
+        bkg_terms: Number of Chebyshev background coefficients (default: 6)
+        two_theta_limits: Optional 2θ limits in degrees as [LOW, HIGH] (default: full range)
+        no_atoms: Skip atomic position / thermal parameter refinement (default: False)
+        no_export: Skip CIF and CSV exports after refinement (default: False)
+        n_cpus: Number of parallel workers for histogram refinement (default: 1)
+        instprm_file: Optional .instprm file for GSAS-II instrument parameters
+
+    Returns:
+        JSON with refinement summary: Rwp values, lattice parameters, output file paths
+    """
+    try:
+        data_path = Path(data_file).expanduser().absolute()
+        if not data_path.exists():
+            return format_result({"tool": "run_gsas_refinement", "status": "error",
+                                  "error": f"Data file not found: {data_path}"})
+
+        if not str(data_path).endswith(".zarr.zip"):
+            return format_result({"tool": "run_gsas_refinement", "status": "error",
+                                  "error": f"Expected .zarr.zip file, got: {data_path.name}"})
+
+        # Validate CIF files
+        resolved_cifs = []
+        for cif in cif_files:
+            cif_path = Path(cif).expanduser().absolute()
+            if not cif_path.exists():
+                return format_result({"tool": "run_gsas_refinement", "status": "error",
+                                      "error": f"CIF file not found: {cif_path}"})
+            resolved_cifs.append(str(cif_path))
+
+        # Find the refinement script
+        refine_script = MIDAS_ROOT / "utils" / "gsas_ii_refine.py"
+        if not refine_script.exists():
+            return format_result({"tool": "run_gsas_refinement", "status": "error",
+                                  "error": f"gsas_ii_refine.py not found at {refine_script}. "
+                                           "Requires MIDAS v11+."})
+
+        out_path = Path(output_dir).expanduser().absolute()
+        out_path.mkdir(parents=True, exist_ok=True)
+
+        midas_python = find_midas_python()
+        cmd = [
+            midas_python, str(refine_script),
+            "--data", str(data_path),
+            "--cif", *resolved_cifs,
+            "--out", str(out_path),
+            "--bkg-terms", str(bkg_terms),
+            "--nCPUs", str(n_cpus),
+        ]
+
+        if two_theta_limits and len(two_theta_limits) == 2:
+            cmd.extend(["--limits", str(two_theta_limits[0]), str(two_theta_limits[1])])
+        if no_atoms:
+            cmd.append("--no-atoms")
+        if no_export:
+            cmd.append("--no-export")
+        if instprm_file:
+            instprm_path = Path(instprm_file).expanduser().absolute()
+            if instprm_path.exists():
+                cmd.extend(["--instprm", str(instprm_path)])
+
+        env = get_midas_env()
+
+        print(f"  Running GSAS-II refinement: {data_path.name} → {out_path}", file=sys.stderr)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600, env=env)
+
+        if result.returncode != 0:
+            return format_result({
+                "tool": "run_gsas_refinement",
+                "status": "error",
+                "error": f"gsas_ii_refine.py failed (exit {result.returncode})",
+                "stderr": result.stderr[-1000:] if result.stderr else "",
+                "command": " ".join(cmd),
+            })
+
+        # Read refinement summary if produced
+        summary_file = out_path / "refinement_summary.json"
+        summary = {}
+        if summary_file.exists():
+            with open(summary_file) as f:
+                summary = json.load(f)
+
+        # List output files
+        output_files = [str(p) for p in out_path.iterdir() if p.is_file()]
+
+        return format_result({
+            "tool": "run_gsas_refinement",
+            "status": "success",
+            "data_file": str(data_path),
+            "cif_files": resolved_cifs,
+            "output_dir": str(out_path),
+            "output_files": output_files[:20],
+            "summary": summary,
+            "stdout": result.stdout[-500:] if result.stdout else "",
+        })
+
+    except subprocess.TimeoutExpired:
+        return format_result({"tool": "run_gsas_refinement", "status": "error",
+                              "error": "Refinement timed out after 600s"})
+    except Exception as e:
+        return format_result({"tool": "run_gsas_refinement", "status": "error",
+                              "error": str(e), "traceback": traceback.format_exc()})
+
+
+@mcp.tool()
+async def run_live_analysis(
+    backend: str,
+    cif_files: List[str],
+    param_file: str,
+    data_file: Optional[str] = None,
+    folder: Optional[str] = None,
+    pva: bool = False,
+    pva_ip: Optional[str] = None,
+    output_dir: str = "refinement",
+    dark_file: Optional[str] = None,
+    n_cpus: int = 4,
+    bkg_terms: int = 6,
+    two_theta_limits: Optional[List[float]] = None,
+    no_atoms: bool = False,
+    skip_integration: bool = False,
+    zarr_file: Optional[str] = None,
+    skip_refinement: bool = False,
+    output_h5: Optional[str] = None,
+    data_location: str = "exchange/data",
+    dark_location: str = "exchange/dark",
+) -> str:
+    """Run combined MIDAS integration + GSAS-II refinement pipeline.
+
+    Two-stage pipeline:
+      Stage 1: Integration (batch CPU or GPU streaming) → .zarr.zip
+      Stage 2: GSAS-II refinement on the caked output → .gpx + summary
+
+    Backends:
+    - "batch": CPU-based integrator.py (requires data_file + param_file)
+    - "stream": GPU-based integrator_batch_process.py (requires folder or pva + param_file)
+
+    Use --skip-integration with --zarr-file to refine an existing .zarr.zip.
+    Use --skip-refinement to only integrate without GSAS-II fitting.
+
+    Args:
+        backend: Integration backend: "batch" (CPU) or "stream" (GPU)
+        cif_files: CIF file(s) for the crystallographic phase(s)
+        param_file: MIDAS parameter file (refined_MIDAS_params*.txt)
+        data_file: Path to first data file (batch backend, HDF5 or image)
+        folder: Source folder of images (stream backend)
+        pva: Enable PVA live-streaming mode (stream backend)
+        pva_ip: PVA server IP address (stream backend)
+        output_dir: Output directory for refinement results (default: refinement/)
+        dark_file: Dark field file for background subtraction
+        n_cpus: Number of CPUs for integration and refinement (default: 4)
+        bkg_terms: Chebyshev background terms for GSAS-II (default: 6)
+        two_theta_limits: Optional 2θ limits as [LOW, HIGH]
+        no_atoms: Skip atomic position refinement (default: False)
+        skip_integration: Skip Stage 1, use existing zarr_file (default: False)
+        zarr_file: Path to existing .zarr.zip (use with skip_integration)
+        skip_refinement: Run only Stage 1, no GSAS-II (default: False)
+        output_h5: HDF5 output filename for stream backend
+        data_location: HDF5 dataset path for batch backend (default: exchange/data)
+        dark_location: HDF5 dark dataset path (default: exchange/dark)
+
+    Returns:
+        JSON with pipeline results: integration output, refinement summary, file paths
+    """
+    try:
+        # Validate backend
+        if backend not in ("batch", "stream"):
+            return format_result({"tool": "run_live_analysis", "status": "error",
+                                  "error": f"Invalid backend '{backend}'. Use 'batch' or 'stream'."})
+
+        # Find the pipeline script
+        pipeline_script = MIDAS_ROOT / "FF_HEDM" / "workflows" / "integrate_and_refine.py"
+        if not pipeline_script.exists():
+            return format_result({"tool": "run_live_analysis", "status": "error",
+                                  "error": f"integrate_and_refine.py not found at {pipeline_script}. "
+                                           "Requires MIDAS v11+."})
+
+        # Validate param file
+        param_path = Path(param_file).expanduser().absolute()
+        if not skip_integration and not param_path.exists():
+            return format_result({"tool": "run_live_analysis", "status": "error",
+                                  "error": f"Parameter file not found: {param_path}"})
+
+        # Validate CIF files
+        resolved_cifs = []
+        if not skip_refinement:
+            for cif in cif_files:
+                cif_path = Path(cif).expanduser().absolute()
+                if not cif_path.exists():
+                    return format_result({"tool": "run_live_analysis", "status": "error",
+                                          "error": f"CIF file not found: {cif_path}"})
+                resolved_cifs.append(str(cif_path))
+
+        out_path = Path(output_dir).expanduser().absolute()
+        out_path.mkdir(parents=True, exist_ok=True)
+
+        midas_python = find_midas_python()
+        cmd = [
+            midas_python, str(pipeline_script),
+            "--backend", backend,
+            "-nCPUs", str(n_cpus),
+        ]
+
+        # Backend-specific args
+        if backend == "batch":
+            if not skip_integration:
+                if not data_file:
+                    return format_result({"tool": "run_live_analysis", "status": "error",
+                                          "error": "batch backend requires data_file"})
+                data_path = Path(data_file).expanduser().absolute()
+                if not data_path.exists():
+                    return format_result({"tool": "run_live_analysis", "status": "error",
+                                          "error": f"Data file not found: {data_path}"})
+                cmd.extend(["-paramFN", str(param_path), "-dataFN", str(data_path)])
+                cmd.extend(["-dataLoc", data_location, "-darkLoc", dark_location])
+        elif backend == "stream":
+            if not skip_integration:
+                cmd.extend(["--param-file", str(param_path)])
+                if pva:
+                    cmd.append("--pva")
+                    if pva_ip:
+                        cmd.extend(["--pva-ip", pva_ip])
+                elif folder:
+                    folder_path = Path(folder).expanduser().absolute()
+                    if not folder_path.exists():
+                        return format_result({"tool": "run_live_analysis", "status": "error",
+                                              "error": f"Folder not found: {folder_path}"})
+                    cmd.extend(["--folder", str(folder_path)])
+                else:
+                    return format_result({"tool": "run_live_analysis", "status": "error",
+                                          "error": "stream backend requires --folder or --pva"})
+                if output_h5:
+                    cmd.extend(["--output-h5", output_h5])
+
+        # Refinement args
+        if not skip_refinement and resolved_cifs:
+            cmd.extend(["--cif", *resolved_cifs])
+            cmd.extend(["--out", str(out_path)])
+            cmd.extend(["--bkg-terms", str(bkg_terms)])
+            if two_theta_limits and len(two_theta_limits) == 2:
+                cmd.extend(["--limits", str(two_theta_limits[0]), str(two_theta_limits[1])])
+            if no_atoms:
+                cmd.append("--no-atoms")
+
+        # Dark file
+        if dark_file:
+            dark_path = Path(dark_file).expanduser().absolute()
+            if dark_path.exists():
+                if backend == "batch":
+                    cmd.extend(["-darkFN", str(dark_path)])
+                else:
+                    cmd.extend(["--dark", str(dark_path)])
+
+        # Pipeline control flags
+        if skip_integration:
+            cmd.append("--skip-integration")
+            if zarr_file:
+                zarr_path = Path(zarr_file).expanduser().absolute()
+                if not zarr_path.exists():
+                    return format_result({"tool": "run_live_analysis", "status": "error",
+                                          "error": f"Zarr file not found: {zarr_path}"})
+                cmd.extend(["--zarr-file", str(zarr_path)])
+        if skip_refinement:
+            cmd.append("--skip-refinement")
+
+        env = get_midas_env()
+
+        mode_desc = "skip→refine" if skip_integration else f"{backend}→refine"
+        if skip_refinement:
+            mode_desc = f"{backend}→integrate-only"
+        print(f"  Running live analysis ({mode_desc}): {param_path.name}", file=sys.stderr)
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800, env=env)
+
+        if result.returncode != 0:
+            return format_result({
+                "tool": "run_live_analysis",
+                "status": "error",
+                "error": f"Pipeline failed (exit {result.returncode})",
+                "stderr": result.stderr[-1500:] if result.stderr else "",
+                "command": " ".join(cmd),
+            })
+
+        # Collect outputs
+        summary_file = out_path / "refinement_summary.json"
+        summary = {}
+        if summary_file.exists():
+            with open(summary_file) as f:
+                summary = json.load(f)
+
+        output_files = [str(p) for p in out_path.iterdir() if p.is_file()] if out_path.exists() else []
+
+        return format_result({
+            "tool": "run_live_analysis",
+            "status": "success",
+            "backend": backend,
+            "param_file": str(param_path),
+            "output_dir": str(out_path),
+            "output_files": output_files[:20],
+            "refinement_summary": summary,
+            "stdout": result.stdout[-500:] if result.stdout else "",
+        })
+
+    except subprocess.TimeoutExpired:
+        return format_result({"tool": "run_live_analysis", "status": "error",
+                              "error": "Pipeline timed out after 1800s"})
+    except Exception as e:
+        return format_result({"tool": "run_live_analysis", "status": "error",
+                              "error": str(e), "traceback": traceback.format_exc()})
+
+
+# =============================================================================
+# CIF FILE FETCHER (MATERIALS PROJECT)
+# =============================================================================
+
+@mcp.tool()
+async def fetch_cif_from_mp(
+    formula: str,
+    output_dir: str = ".",
+    mp_api_key: Optional[str] = None,
+) -> str:
+    """Fetch CIF files from the Materials Project database for a given chemical formula.
+
+    Uses the Materials Project REST API (mp-api) to download crystallographic
+    information files (CIF) for use with GSAS-II refinement or MIDAS workflows.
+
+    The API key is read from (in order): mp_api_key parameter, MP_API_KEY env var,
+    or ~/.config/.pmgrc.yaml (set by `pmg init`).
+
+    Args:
+        formula: Chemical formula (e.g., "CeO2", "LaB6", "Fe", "Ti-6Al-4V" → "Ti")
+        output_dir: Directory to save CIF files (default: current directory)
+        mp_api_key: Materials Project API key (optional if set in env or config)
+
+    Returns:
+        JSON with downloaded CIF file paths and material metadata
+    """
+    try:
+        # Try importing mp_api
+        try:
+            from mp_api.client import MPRester
+        except ImportError:
+            return format_result({
+                "tool": "fetch_cif_from_mp",
+                "status": "error",
+                "error": "mp-api not installed. Install with: uv pip install mp-api",
+                "suggestion": "Run: uv sync --extra extra"
+            })
+
+        out_path = Path(output_dir).expanduser().absolute()
+        out_path.mkdir(parents=True, exist_ok=True)
+
+        # Resolve API key
+        api_key = mp_api_key or os.environ.get("MP_API_KEY")
+
+        if not api_key:
+            return format_result({
+                "tool": "fetch_cif_from_mp",
+                "status": "error",
+                "error": "No Materials Project API key provided.",
+                "suggestion": "Set MP_API_KEY in .env or pass mp_api_key parameter. "
+                              "Get a key at https://next-gen.materialsproject.org/api"
+            })
+
+        # Set env var so MPRester always finds it (some versions ignore the kwarg)
+        os.environ["MP_API_KEY"] = api_key
+
+        results = []
+        with MPRester(api_key) as mpr:
+            # Query for structures matching the formula
+            docs = mpr.materials.summary.search(
+                formula=formula,
+                fields=["material_id", "formula_pretty", "structure",
+                         "symmetry", "energy_above_hull", "is_stable"]
+            )
+
+            if not docs:
+                return format_result({
+                    "tool": "fetch_cif_from_mp",
+                    "status": "not_found",
+                    "formula": formula,
+                    "error": f"No structures found for '{formula}' in Materials Project"
+                })
+
+            # Sort: stable structures first, then by energy above hull
+            docs_sorted = sorted(docs, key=lambda d: (
+                0 if d.is_stable else 1,
+                d.energy_above_hull or 999
+            ))
+            for doc in docs_sorted[:3]:
+                cif_str = doc.structure.to(fmt="cif")
+                mp_id = doc.material_id
+                cif_filename = f"{doc.formula_pretty}_{mp_id}.cif"
+                cif_path = out_path / cif_filename
+
+                with open(cif_path, "w") as f:
+                    f.write(cif_str)
+
+                results.append({
+                    "material_id": str(mp_id),
+                    "formula": doc.formula_pretty,
+                    "space_group": doc.symmetry.symbol if doc.symmetry else "unknown",
+                    "crystal_system": doc.symmetry.crystal_system if doc.symmetry else "unknown",
+                    "energy_above_hull_eV": doc.energy_above_hull,
+                    "is_stable": doc.is_stable,
+                    "cif_file": str(cif_path),
+                })
+
+        return format_result({
+            "tool": "fetch_cif_from_mp",
+            "status": "success",
+            "formula": formula,
+            "structures_found": len(docs),
+            "downloaded": len(results),
+            "files": results,
+        })
+
+    except Exception as e:
+        return format_result({
+            "tool": "fetch_cif_from_mp",
+            "status": "error",
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        })
+
+
+# =============================================================================
 # SERVER MAIN
 # =============================================================================
 
