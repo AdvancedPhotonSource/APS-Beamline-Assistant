@@ -2477,8 +2477,8 @@ async def midas_auto_calibrate(
                     print(f"  Symlink target: {real_target.name}", file=sys.stderr)
                     # Rebuild the symlink to point to the real file
                     image_path.unlink()
-                    image_path.symlink_to(real_target.name)
-                    print(f"  ✓ Refreshed symlink: {image_path.name} -> {real_target.name}", file=sys.stderr)
+                    image_path.symlink_to(real_target)
+                    print(f"  ✓ Refreshed symlink: {image_path.name} -> {real_target}", file=sys.stderr)
             else:
                 # Remove old symlink if it exists
                 if midas_friendly_path.is_symlink():
@@ -2492,8 +2492,8 @@ async def midas_auto_calibrate(
 
                 # Create symlink
                 try:
-                    midas_friendly_path.symlink_to(image_path.name)  # Relative symlink
-                    print(f"✓ Created MIDAS-friendly symlink: {midas_friendly_name} -> {image_path.name}", file=sys.stderr)
+                    midas_friendly_path.symlink_to(image_path.resolve())  # Absolute symlink
+                    print(f"✓ Created MIDAS-friendly symlink: {midas_friendly_name} -> {image_path.resolve()}", file=sys.stderr)
                     image_path = midas_friendly_path
                 except Exception as e:
                     print(f"⚠ Could not create symlink: {e}. Using original filename.", file=sys.stderr)

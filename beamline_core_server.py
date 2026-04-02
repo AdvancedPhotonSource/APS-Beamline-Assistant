@@ -382,10 +382,10 @@ async def get_file_info(file_path: str) -> str:
         JSON with detailed file information
     """
     try:
-        path = Path(file_path).expanduser()
+        path = Path(file_path).expanduser().resolve()
 
         if not path.exists():
-            return format_result({"error": f"Path does not exist: {file_path}"})
+            return format_result({"error": f"Path does not exist: {path}"})
 
         info = format_file_info(path)
         info["tool"] = "get_file_info"
