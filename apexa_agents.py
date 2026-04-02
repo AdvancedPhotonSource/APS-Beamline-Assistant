@@ -754,8 +754,10 @@ class AgentRunner:
                     if tc.name == "list_directory":
                         followup = (
                             "You have the file listing above. "
-                            "If you have all the information needed, call the analysis/calibration/refinement tool now. "
-                            "Do NOT call list_directory again."
+                            "Present the results to the user. Only call another tool if "
+                            "the user's ORIGINAL request requires it (e.g. 'calibrate', "
+                            "'integrate', 'refine'). If they just asked to list/show files, "
+                            "summarize what you found. Do NOT call list_directory again."
                         )
                     elif tc.name == "fetch_cif_from_mp":
                         followup = (
