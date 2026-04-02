@@ -230,10 +230,10 @@ async def list_directory(path: str = ".", show_hidden: bool = False, details: bo
         JSON with directory contents
     """
     try:
-        dir_path = Path(path).expanduser()
+        dir_path = Path(path).expanduser().resolve()
 
         if not dir_path.exists():
-            return format_result({"error": f"Directory does not exist: {path}"})
+            return format_result({"error": f"Directory does not exist: {dir_path}"})
 
         if not dir_path.is_dir():
             return format_result({"error": f"Path is not a directory: {path}"})
@@ -400,13 +400,13 @@ async def get_file_info(file_path: str) -> str:
 # =============================================================================
 
 @mcp.tool()
-async def run_command(command: str, working_dir: str = None, timeout: int = 30) -> str:
+async def run_command(command: str, working_dir: str = None, timeout: int = 120) -> str:
     """Execute a system command safely.
 
     Args:
         command: Command to execute (must be in allowed list)
         working_dir: Working directory for command execution
-        timeout: Maximum execution time in seconds (default: 30)
+        timeout: Maximum execution time in seconds (default: 120)
 
     Returns:
         JSON with command output and status

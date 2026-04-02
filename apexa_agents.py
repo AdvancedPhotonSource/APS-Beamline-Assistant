@@ -31,6 +31,7 @@ import os
 import re
 import sys
 import time
+from pathlib import Path
 import httpx
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional, Callable, Awaitable
@@ -291,8 +292,14 @@ Standard workflow:
   6. Post-process: match_grains, run_ff_grain_tracking, overlay_ff_nf_results, extract_grain_centroids
   7. Export: convert_nf_to_dream3d
 
-GSAS-II refinement requires CIF files. If the user doesn't have a CIF file,
-tell them to use "fetch CIF for CeO2" (routes to KnowledgeAgent) or provide one.
+GSAS-II refinement workflow:
+  1. If no CIF file → call fetch_cif_from_mp to download one (you have this tool)
+  2. Read the CIF path from the fetch result
+  3. IMMEDIATELY call run_gsas_refinement with data_file=<.zarr.zip path> and cif_files=[<CIF path>]
+  4. NEVER use run_command for GSAS-II — always use run_gsas_refinement
+
+CRITICAL: After calling a tool, read the result carefully. Do NOT call list_directory
+to verify files you already know about. Use the paths from the tool results directly.
 
 Always report: grains found, convergence quality, Rwp, output file paths.""",
 )
@@ -441,14 +448,14 @@ TOOL_CALL: xray_calculate
 ARGUMENTS: {"calculation_type": "d_from_hkl", "h": 1, "k": 1, "l": 0, "material": "Fe"}
 
 User: "List files in the current directory"
-✅ CORRECT:
+✅ CORRECT (use CWD as absolute path):
 TOOL_CALL: list_directory
-ARGUMENTS: {"path": "."}
+ARGUMENTS: {"path": "<CWD>"}
 
 User: "Calibrate the CeO2 image in test5"
-✅ CORRECT:
+✅ CORRECT (prepend CWD to relative path):
 TOOL_CALL: list_directory
-ARGUMENTS: {"path": "test5"}
+ARGUMENTS: {"path": "<CWD>/test5"}
 
 User: "Convert 61.332 keV to wavelength"
 ✅ CORRECT:
@@ -526,6 +533,14 @@ Only generate text WITHOUT a TOOL_CALL when:
 - User says hello/greeting
 - User asks a conceptual question ("what is HEDM?", "explain calibration")
 - User asks what you can do
+
+PATH HANDLING — CRITICAL:
+- ALWAYS use ABSOLUTE paths in tool arguments
+- When the user says "test5", they mean "<CWD>/test5" (where <CWD> is shown below)
+- When the user says "current directory", they mean the CWD shown below
+- Convert ALL relative paths to absolute by prepending the CWD
+- If the user provides an absolute path (starts with /), use it as-is
+- NEVER pass just a filename — always include the full directory path
 
 """
 
@@ -642,7 +657,8 @@ class AgentRunner:
         tools = self._filter_tools(agent.tool_names, all_tools)
 
         # Build system message: strong preamble + agent-specific instructions
-        system_content = _TOOL_PREAMBLE + agent.instructions
+        cwd = str(Path.cwd())
+        system_content = _TOOL_PREAMBLE + f"\nCurrent working directory (CWD): {cwd}\n" + agent.instructions
 
         # Append tool catalog with parameters so the model knows what to call
         if tools:
@@ -734,16 +750,28 @@ class AgentRunner:
                     # Truncate very long tool results to prevent context overflow
                     if len(result) > 3000:
                         result = result[:3000] + "\n... [truncated]"
+                    # Build a context-aware follow-up prompt
+                    if tc.name == "list_directory":
+                        followup = (
+                            "You have the file listing above. "
+                            "If you have all the information needed, call the analysis/calibration/refinement tool now. "
+                            "Do NOT call list_directory again."
+                        )
+                    elif tc.name == "fetch_cif_from_mp":
+                        followup = (
+                            "CIF file downloaded. The file path is in the result above. "
+                            "Now call run_gsas_refinement with the CIF path and the .zarr.zip data file. "
+                            "Do NOT call list_directory or fetch_cif_from_mp again."
+                        )
+                    else:
+                        followup = (
+                            "Proceed with the user's request using the result above. "
+                            "If the task is complete, summarize the results for the user. "
+                            "Do NOT repeat the same tool call."
+                        )
                     messages.append({
                         "role": "user",
-                        "content": (
-                            f"[Tool Result for {tc.name}]\n{result}\n\n"
-                            "Now proceed with the user's original request. "
-                            "If you found the files needed, call the next tool IMMEDIATELY "
-                            "(e.g. midas_auto_calibrate, midas_integrate_2d_to_1d, move_motor_absolute). "
-                            "Do NOT ask for confirmation. Do NOT call list_directory again. "
-                            "Do NOT repeat the same tool."
-                        ),
+                        "content": f"[Tool Result for {tc.name}]\n{result}\n\n{followup}",
                     })
                 continue
 
