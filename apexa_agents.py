@@ -236,6 +236,10 @@ ANALYSIS_AGENT = APEXAAgent(
         # Integration
         "midas_integrate_2d_to_1d",
         "midas_batch_integrate",
+        # GSAS-II refinement & live analysis
+        "run_gsas_refinement",
+        "run_live_analysis",
+        "fetch_cif_from_mp",
         # FF/NF/PF-HEDM workflows
         "run_ff_hedm_full_workflow",
         "run_nf_hedm_reconstruction",
@@ -262,11 +266,13 @@ ANALYSIS_AGENT = APEXAAgent(
     ],
     instructions = """You are a HEDM data analysis specialist at APS.
 
-When the user asks to integrate, reconstruct, track grains, or run any workflow,
+When the user asks to integrate, reconstruct, refine, track grains, or run any workflow,
 you MUST call the appropriate tool. Never describe steps in text — execute them.
 
 Capabilities (use the matching tool for each):
 - 2D → 1D integration: midas_integrate_2d_to_1d or midas_batch_integrate
+- GSAS-II refinement: run_gsas_refinement (takes .zarr.zip + CIF files)
+- Integration + refinement pipeline: run_live_analysis (batch or stream backend)
 - FF-HEDM reconstruction: run_ff_hedm_full_workflow
 - NF-HEDM mapping: run_nf_hedm_reconstruction
 - PF-HEDM pole figures: run_pf_hedm_workflow
@@ -278,12 +284,17 @@ Capabilities (use the matching tool for each):
 
 Standard workflow:
   1. list_directory to find data files
-  2. midas_integrate_2d_to_1d for 2D → 1D
-  3. run_ff_hedm_full_workflow or run_nf_hedm_reconstruction
-  4. Post-process: match_grains, run_ff_grain_tracking, overlay_ff_nf_results, extract_grain_centroids
-  5. Export: convert_nf_to_dream3d
+  2. midas_integrate_2d_to_1d for 2D → 1D (produces .zarr.zip)
+  3. run_gsas_refinement for peak fitting / lattice refinement on .zarr.zip
+  4. Or run_live_analysis for combined integration + refinement in one step
+  5. run_ff_hedm_full_workflow or run_nf_hedm_reconstruction
+  6. Post-process: match_grains, run_ff_grain_tracking, overlay_ff_nf_results, extract_grain_centroids
+  7. Export: convert_nf_to_dream3d
 
-Always report: grains found, convergence quality, output file paths.""",
+GSAS-II refinement requires CIF files. If the user doesn't have a CIF file,
+tell them to use "fetch CIF for CeO2" (routes to KnowledgeAgent) or provide one.
+
+Always report: grains found, convergence quality, Rwp, output file paths.""",
 )
 
 KNOWLEDGE_AGENT = APEXAAgent(
@@ -296,6 +307,7 @@ KNOWLEDGE_AGENT = APEXAAgent(
         "estimate_parameters_from_image",
         "list_common_calibrants",
         "xray_calculate",
+        "fetch_cif_from_mp",
     ],
     instructions = """You are an HEDM knowledge expert with access to scientific literature,
 experimental logbooks, and crystallographic databases.
@@ -307,6 +319,11 @@ When the user asks about materials, parameters, or HEDM methodology, use your to
 - estimate_parameters_from_image to estimate beam parameters from diffraction images
 - list_common_calibrants for calibrant materials
 - xray_calculate for ANY calculation (NEVER compute manually)
+- fetch_cif_from_mp to download CIF files from Materials Project for any material
+
+When the user asks for a CIF file, call fetch_cif_from_mp IMMEDIATELY with the formula.
+The tool downloads the most stable structures and saves .cif files locally.
+Report: formula, space group, crystal system, stability, and file path.
 
 Always cite your source: paper title, logbook entry, or database name.
 Prefer tool results over your own knowledge — the tools have verified data.""",
@@ -459,6 +476,21 @@ User: "Plot calibration results in test1"
 TOOL_CALL: run_command
 ARGUMENTS: {"command": "<MIDAS_PYTHON> <MIDAS_PATH>/gui/viewers/plot_calibrant_results.py /full/path/to/file_corr.csv"}
 
+User: "Refine the caked output with GSAS-II using the CeO2 CIF"
+✅ CORRECT:
+TOOL_CALL: run_gsas_refinement
+ARGUMENTS: {"data_file": "/path/to/CeO2_caked.hdf.zarr.zip", "cif_files": ["/path/to/CeO2.cif"]}
+
+User: "Fetch a CIF file for CeO2"
+✅ CORRECT:
+TOOL_CALL: fetch_cif_from_mp
+ARGUMENTS: {"formula": "CeO2"}
+
+User: "Run integration and refinement on the scan data"
+✅ CORRECT:
+TOOL_CALL: run_live_analysis
+ARGUMENTS: {"backend": "batch", "param_file": "/path/to/params.txt", "data_file": "/path/to/data.h5", "cif_files": ["/path/to/phase.cif"]}
+
 User: "Move motor m1 to 25.5"
 ✅ CORRECT:
 TOOL_CALL: move_motor_absolute
@@ -483,9 +515,12 @@ RULES:
 3. For reading files → TOOL_CALL: read_file
 4. For calibration → TOOL_CALL: midas_auto_calibrate
 5. For integration → TOOL_CALL: midas_integrate_2d_to_1d
-6. For HEDM workflows → TOOL_CALL: the appropriate workflow tool
-7. For visualization/plotting → TOOL_CALL: run_command with the full Python viewer command
-8. For motor control → TOOL_CALL: the appropriate motor tool (move, get_position, stop, etc.)
+6. For GSAS-II refinement → TOOL_CALL: run_gsas_refinement (needs .zarr.zip + CIF)
+7. For combined integration + refinement → TOOL_CALL: run_live_analysis
+8. For fetching CIF files → TOOL_CALL: fetch_cif_from_mp
+9. For HEDM workflows → TOOL_CALL: the appropriate workflow tool
+10. For visualization/plotting → TOOL_CALL: run_command with the full Python viewer command
+11. For motor control → TOOL_CALL: the appropriate motor tool (move, get_position, stop, etc.)
 
 Only generate text WITHOUT a TOOL_CALL when:
 - User says hello/greeting
@@ -762,12 +797,16 @@ class OrchestratorAgent:
             "energy", "bragg", "convert", "list file", "list dir",
             "show file", "current directory", "files here",
             "misorientation", "dream3d", "forward simulation",
+            "gsas", "refine", "refinement", "rietveld", "rwp",
+            "lattice param", "peak fit", "live analysis",
         },
         "knowledge": {
             "explain", "what is", "what are", "how does", "how do",
             "tell me", "describe", "typical", "literature", "paper",
             "best practice", "recommend", "suggest", "look up",
             "material propert", "search", "parameter range",
+            "cif file", "cif", "fetch cif", "download cif", "materials project",
+            "crystal structure",
         },
         "visualization": {
             "plot", "visualiz", "view", "show", "display", "see",
@@ -794,9 +833,11 @@ class OrchestratorAgent:
         self.context   = context
         self.conversation_history: List[Dict] = []
         self.logger    = InteractionLogger()
+        self._last_agent: Optional[APEXAAgent] = None
 
     def clear_history(self):
         self.conversation_history = []
+        self._last_agent = None
 
     def _route(self, query: str) -> APEXAAgent:
         q = query.lower()
@@ -805,13 +846,21 @@ class OrchestratorAgent:
             for domain, keywords in self._KEYWORDS.items()
         }
         best = max(scores, key=scores.get)
-        if scores[best] == 0:
-            return ANALYSIS_AGENT   # sensible default for HEDM context
-        return self._ROUTES[best]
+
+        if scores[best] > 0:
+            return self._ROUTES[best]      # strong keyword match → switch agent
+
+        # No keywords matched — stay with current agent if we have one
+        # This handles follow-ups like "yes", "ok", "fetch one for Ceria"
+        if self._last_agent is not None:
+            return self._last_agent
+
+        return ANALYSIS_AGENT              # first query, no context → default
 
     async def process(self, query: str, provider: ArgoProvider,
                       use_history: bool = True) -> str:
         agent   = self._route(query)
+        self._last_agent = agent
         history = self.conversation_history if use_history else None
 
         # Start interaction log entry
