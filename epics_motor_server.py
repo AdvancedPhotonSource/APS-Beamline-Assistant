@@ -42,7 +42,6 @@ mcp = FastMCP("epics-motor")
 # Override with EPICS_MOTOR_PREFIX env var for different beamlines.
 import os
 DEFAULT_PREFIX = os.environ.get("EPICS_MOTOR_PREFIX", "20idMotSim")
-MAX_MOTOR_NUM = int(os.environ.get("EPICS_MOTOR_COUNT", "100"))
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -116,12 +115,29 @@ def _wait_for_dmov(prefix: str, motor: str,
     return False
 
 
+def _discover_motors(prefix: str) -> list[str]:
+    """Discover all motor PV names by scanning m1, m2, ... until 4 consecutive failures."""
+    motors = []
+    consecutive_fails = 0
+    i = 1
+    while consecutive_fails < 4:
+        name = f"m{i}"
+        ok, _ = _caget(_pv(prefix, name, "RBV"), timeout=1)
+        if ok:
+            motors.append(name)
+            consecutive_fails = 0
+        else:
+            consecutive_fails += 1
+        i += 1
+    return motors
+
+
 def _resolve_motor(prefix: str, motor: str) -> str:
     """Resolve motor name from DESC field if not a standard PV name.
 
     Allows users to reference motors by description (e.g. "SamX")
-    instead of PV name (e.g. "m1"). Scans m1..mN DESC fields where
-    N = EPICS_MOTOR_COUNT env var (default 100).
+    instead of PV name (e.g. "m1"). Dynamically discovers motors
+    from the IOC by scanning until consecutive failures.
 
     Returns the PV name (e.g. "m3") or the original string if no match.
     """
@@ -131,14 +147,13 @@ def _resolve_motor(prefix: str, motor: str) -> str:
 
     motor_lower = motor.lower().strip()
 
-    # Single pass: read all DESC fields, check exact then substring
-    descs = {}  # name -> desc string
-    for i in range(1, MAX_MOTOR_NUM + 1):
-        name = f"m{i}"
+    # Discover all motors from IOC, then read their DESC fields
+    motor_names = _discover_motors(prefix)
+    descs = {}
+    for name in motor_names:
         ok, desc = _caget(_pv(prefix, name, "DESC"), timeout=1)
-        if not ok:
-            continue  # Motor doesn't exist, skip
-        descs[name] = desc.strip()
+        if ok:
+            descs[name] = desc.strip()
 
     # Exact match (case-insensitive)
     for name, desc in descs.items():
@@ -634,16 +649,20 @@ async def set_motor_description(motor: str, description: str, prefix: str = DEFA
 
 
 @mcp.tool()
-async def list_motors(motor_list: list[str], prefix: str = DEFAULT_PREFIX) -> str:
-    """Read positions and status for a list of motors under the same IOC prefix.
+async def list_motors(motor_list: list[str] = None, prefix: str = DEFAULT_PREFIX) -> str:
+    """Read positions and status for motors under the same IOC prefix.
+
+    If motor_list is empty or omitted, auto-discovers all motors from the IOC.
 
     Args:
         prefix:     IOC prefix, e.g. "20idMotSim"
-        motor_list: List of motor names, e.g. ["m1", "m2", "m3"]
+        motor_list: List of motor names, e.g. ["m1", "m2", "m3"]. Omit to list all.
 
     Returns:
         JSON with position, units, and motion state for each motor
     """
+    if not motor_list:
+        motor_list = _discover_motors(prefix)
     motors = {}
     for m in motor_list:
         ok_rbv, rbv  = _get_float(prefix, m, "RBV")
