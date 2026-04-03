@@ -679,6 +679,7 @@ class AgentRunner:
         messages.append({"role": "user", "content": query})
 
         last_tool_name = None          # track repeated tool calls
+        _last_tool_args = None         # track repeated tool arguments
         repeat_count   = 0
 
         for _ in range(max_iterations):
@@ -712,18 +713,22 @@ class AgentRunner:
 
                 for tc in text_calls:
                     # Detect repeated identical tool calls (loop bug)
-                    if tc.name == last_tool_name:
+                    # Compare both name AND arguments — same tool with different args
+                    # is legitimate (e.g. moving 3 different motors)
+                    tc_args_str = json.dumps(tc.arguments, sort_keys=True)
+                    if tc.name == last_tool_name and tc_args_str == _last_tool_args:
                         repeat_count += 1
                     else:
                         last_tool_name = tc.name
+                        _last_tool_args = tc_args_str
                         repeat_count = 0
 
                     if repeat_count >= 2:
-                        # Model is looping — force it to summarise
+                        # Model is looping with identical calls — force it to summarise
                         messages.append({
                             "role": "user",
                             "content": (
-                                f"You already called {tc.name} and got the result above. "
+                                f"You already called {tc.name} with the same arguments and got the result above. "
                                 "Do NOT call it again. Summarise the result for the user now."
                             ),
                         })
