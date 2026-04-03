@@ -13,6 +13,7 @@ import sys
 import os
 from pathlib import Path
 import numpy as np
+import re
 import subprocess
 import asyncio
 import logging
@@ -2492,6 +2493,11 @@ async def midas_auto_calibrate(
                 "error": f"Unsupported file format: {suffix}. Supported: .zip (Zarr), .h5/.hdf5 (HDF5), .ge/.ge1-.ge5 (GE binary), .tif/.tiff (TIFF)"
             })
 
+        # Save original filename before symlink creation (for energy extraction)
+        original_filename = image_path.name
+        if image_path.is_symlink():
+            original_filename = image_path.resolve().name
+
         # WORKAROUND for MIDAS filename parsing bug:
         # MIDAS ffGenerateZipRefactor.py has trouble when TIF files have complex names
         # because it converts filename.tif -> filename.tif.ge, then tries to parse
@@ -2504,7 +2510,6 @@ async def midas_auto_calibrate(
         # Always create a simple symlink for TIFF files to avoid parsing issues
         if suffix in ['.tif', '.tiff']:
             # Extract just the first part of filename before any numbers
-            import re
             # Find the first meaningful word (usually material name)
             # Preserve material name including trailing digit (e.g. CeO2, LaB6)
             # so AutoCalibrateZarr.py can auto-detect calibrant from symlink name
@@ -2550,6 +2555,22 @@ async def midas_auto_calibrate(
                     print(f"⚠ Could not create symlink: {e}. Using original filename.", file=sys.stderr)
                     # Continue with original filename
 
+        # Extract energy/wavelength from original filename if symlink lost it
+        # Filename patterns: 61p332keV, 71p676keV, etc.
+        _energy_from_filename = None
+        energy_match = re.search(r'(\d+)p(\d+)\s*keV', original_filename, re.IGNORECASE)
+        if energy_match:
+            energy_kev = float(f"{energy_match.group(1)}.{energy_match.group(2)}")
+            # Convert keV to Angstroms: λ = 12.398 / E(keV)
+            _energy_from_filename = 12.398 / energy_kev
+            print(f"✓ Extracted energy from original filename: {energy_kev} keV → λ = {_energy_from_filename:.6f} Å", file=sys.stderr)
+
+        # Extract Lsd guess from original filename if present (e.g. 650mm)
+        lsd_match = re.search(r'(\d+)\s*mm', original_filename, re.IGNORECASE)
+        if lsd_match and lsd_guess >= 1000000:  # Only if user didn't provide one
+            lsd_from_filename = int(lsd_match.group(1)) * 1000  # mm → µm
+            print(f"✓ Extracted Lsd from original filename: {lsd_match.group(1)} mm → {lsd_from_filename} µm", file=sys.stderr)
+
         # Build command with all parameters according to MIDAS manual
         # Use MIDAS Python (conda midas_env) instead of current Python (UV)
         midas_python = find_midas_python()
@@ -2560,6 +2581,15 @@ async def midas_auto_calibrate(
         ]
         if param_path:
             cmd.extend(["-paramFN", str(param_path)])
+
+        # Pass wavelength extracted from original filename if no param file
+        if _energy_from_filename and not param_path:
+            cmd.extend(["-Wavelength", f"{_energy_from_filename:.6f}"])
+
+        # Pass Lsd from original filename if no user-provided guess
+        if lsd_match and lsd_guess >= 1000000 and not param_path:
+            cmd.extend(["-LsdGuess", str(lsd_from_filename)])
+
         cmd.extend([
             "-ConvertFile", str(convert_file),
             "--n-iterations", str(n_iterations),
