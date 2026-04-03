@@ -473,7 +473,7 @@ async def check_environment() -> str:
             }
         }
 
-        # Check for MIDAS installation
+        # Check for MIDAS installation (same search as midas server)
         midas_path = os.environ.get("MIDAS_PATH")
         if midas_path and Path(midas_path).exists():
             info["midas"] = {
@@ -481,10 +481,27 @@ async def check_environment() -> str:
                 "path": midas_path
             }
         else:
-            info["midas"] = {
-                "installed": False,
-                "message": "Set MIDAS_PATH environment variable"
-            }
+            # Search common locations (mirrors find_midas_installation in midas server)
+            found = None
+            for subdir in ["Git", "git", "src", "opt", ""]:
+                for name in ["MIDAS", "midas"]:
+                    candidate = Path.home() / subdir / name if subdir else Path.home() / name
+                    autocal = candidate / "utils" / "AutoCalibrateZarr.py"
+                    if candidate.exists() and autocal.exists():
+                        found = str(candidate)
+                        break
+                if found:
+                    break
+            if found:
+                info["midas"] = {
+                    "installed": True,
+                    "path": found
+                }
+            else:
+                info["midas"] = {
+                    "installed": False,
+                    "message": "Set MIDAS_PATH environment variable"
+                }
 
         return format_result(info)
 
