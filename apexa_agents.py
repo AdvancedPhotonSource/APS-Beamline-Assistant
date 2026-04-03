@@ -378,13 +378,13 @@ VISUALIZATION_AGENT = APEXAAgent(
     tool_names  = [
         "run_midas_viewer",
         "list_directory",
-        "read_file",
         "get_file_info",
     ],
     instructions = """You are a visualization specialist for HEDM diffraction data at APS.
 
 USE run_midas_viewer for ALL plotting. It handles MIDAS paths and Python automatically.
 Do NOT use run_command or check_environment — run_midas_viewer does everything.
+Do NOT read data files — the viewer GUI displays the data. Your job is to LAUNCH the viewer, not analyze data.
 
 STEP 1: Find the data file. Call list_directory if needed.
 STEP 2: Match the file to the correct viewer name:
@@ -414,7 +414,7 @@ Notes:
 - viz_caking.py: DO NOT USE — use plot_integrator_peaks instead
 - Always pass --paramFN when refined_MIDAS_params*.txt is available (enables 2θ/Q axes)
 
-After launching, report the exact command so the user can re-run it manually.""",
+After launching, report ONE line: which viewer was launched and which file. Do NOT read or summarize the data — the GUI shows it.""",
 )
 
 
@@ -753,6 +753,12 @@ class AgentRunner:
                             "CIF file downloaded. The file path is in the result above. "
                             "Now call run_gsas_refinement with the CIF path and the .zarr.zip data file. "
                             "Do NOT call list_directory or fetch_cif_from_mp again."
+                        )
+                    elif tc.name == "run_midas_viewer":
+                        followup = (
+                            "Viewer launched. Report ONE line: which viewer + which file. "
+                            "Do NOT read the data file. Do NOT analyze or summarize data. "
+                            "Do NOT call any more tools. The GUI window is open — the user will look at it."
                         )
                     else:
                         followup = (
