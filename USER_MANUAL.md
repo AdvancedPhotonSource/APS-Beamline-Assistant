@@ -42,7 +42,7 @@ APEXA uses a multi-agent architecture. Your natural language request is routed b
 | **CalibrationAgent** | Calibration, beam center, detector distance | `midas_auto_calibrate`, `xray_calculate` |
 | **AnalysisAgent** | Integration, GSAS-II refinement, FF/NF/PF-HEDM workflows | `midas_integrate_2d_to_1d`, `run_gsas_refinement`, `run_live_analysis` |
 | **KnowledgeAgent** | Explanations, material properties, CIF files | `query_hedm_knowledge`, `get_material_properties`, `fetch_cif_from_mp` |
-| **VisualizationAgent** | Plotting, viewing lineouts, caked data | `run_command` (launches MIDAS viewer scripts) |
+| **VisualizationAgent** | Plotting, viewing lineouts, caked data | `run_midas_viewer` (launches MIDAS viewer scripts) |
 
 You don't need to know which agent handles your request -- just ask naturally.
 

@@ -42,7 +42,7 @@ User (natural language)
                              |
                   +----------+----------+
                   |   core (9 tools)    |
-                  |   midas (24 tools)  |
+                  |   midas (25 tools)  |
                   +---------------------+
 ```
 
@@ -58,7 +58,7 @@ User (natural language)
 | Server | File | Tools |
 |---|---|---|
 | core | `beamline_core_server.py` | 9 tools: file ops, shell commands, X-ray calculations |
-| midas | `midas_comprehensive_server.py` | 24 tools: FF/NF/PF-HEDM, calibration, integration, GSAS-II refinement, CIF fetcher |
+| midas | `midas_comprehensive_server.py` | 25 tools: FF/NF/PF-HEDM, calibration, integration, GSAS-II refinement, CIF fetcher, visualization |
 
 ### Agent Skills (`.agents/skills/`)
 Canonical MIDAS workflow reference — correct v11 flags, scripts, output files:
