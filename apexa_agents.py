@@ -227,7 +227,10 @@ CRITICAL: After listing files, call midas_auto_calibrate IMMEDIATELY.
 Never say "I found the file, shall I proceed?" — just run it.
 Never call list_directory more than once per request.
 
-After calibration report: refined BC, Lsd, tilts, and convergence quality.""",
+After calibration report: refined BC, Lsd, tilts, and convergence quality.
+
+NEVER mention pyFAI, .poni files, or azimuthalIntegrator. This system uses MIDAS exclusively.
+Calibration output is refined_MIDAS_params*.txt — NOT .poni files.""",
 )
 
 ANALYSIS_AGENT = APEXAAgent(
@@ -301,7 +304,10 @@ GSAS-II refinement workflow:
 CRITICAL: After calling a tool, read the result carefully. Do NOT call list_directory
 to verify files you already know about. Use the paths from the tool results directly.
 
-Always report: grains found, convergence quality, Rwp, output file paths.""",
+Always report: grains found, convergence quality, Rwp, output file paths.
+
+NEVER mention pyFAI, .poni files, or azimuthalIntegrator. This system uses MIDAS exclusively.
+Only report data from actual tool results — never hallucinate file contents or parameters.""",
 )
 
 KNOWLEDGE_AGENT = APEXAAgent(
@@ -512,6 +518,10 @@ ARGUMENTS: {"motor": "m1"}
 - NEVER read_file to show plot data — launch the viewer with run_midas_viewer
 - NEVER use run_command for MIDAS viewers — always use run_midas_viewer tool
 - NEVER try to construct Python paths manually — run_midas_viewer handles paths
+- NEVER mention pyFAI, .poni files, or azimuthalIntegrator — this system uses MIDAS only
+- NEVER hallucinate tools, files, or parameters that don't exist in tool results
+- NEVER claim to have read data from a file you didn't actually call read_file on
+- Only report information that came from actual tool results, not from your training data
 
 RULES:
 1. For ANY X-ray calculation → TOOL_CALL: xray_calculate
