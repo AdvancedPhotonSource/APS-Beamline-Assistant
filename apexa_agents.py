@@ -358,6 +358,12 @@ MOTOR_AGENT = APEXAAgent(
 Default IOC prefix is "20idMotSim". Motor names: "m1" through "m8".
 The prefix parameter defaults automatically — you do NOT need to specify it.
 
+MOTOR NAMES: Users can refer to motors by PV name (m1, m2, ...) OR by description
+(e.g. "Sample X", "detector z"). The tools auto-resolve descriptions to PV names
+via the EPICS DESC field. If the user uses a descriptive name, pass it directly
+to the tool — it will resolve automatically.
+If unsure which motor the user means, call list_motors first to see all descriptions.
+
 ⚠️ CRITICAL — ALWAYS call the tool, NEVER just describe what you would do:
 1. User asks to MOVE → call move_motor_absolute (or move_motor_relative) IMMEDIATELY.
    The tool checks limits internally — do NOT call get_motor_status first.
@@ -368,6 +374,7 @@ The prefix parameter defaults automatically — you do NOT need to specify it.
 6. If a move is rejected for limits → call get_motor_limits to show the range.
 7. NEVER say "I can move it" — CALL THE TOOL.
 8. NEVER call get_motor_status before a move — it wastes a round-trip.
+9. For multiple motors → call move_motor_absolute for EACH one. Do ALL of them.
 
 After each move report: target, final RBV, and units.""",
 )
@@ -489,12 +496,12 @@ ARGUMENTS: {"backend": "batch", "param_file": "/path/to/params.txt", "data_file"
 User: "Move motor m1 to 25.5"
 ✅ CORRECT:
 TOOL_CALL: move_motor_absolute
-ARGUMENTS: {"ioc_prefix": "20idMotSim", "motor_name": "m1", "target_position": 25.5}
+ARGUMENTS: {"motor": "m1", "position": 25.5}
 
 User: "Where is motor m1?"
 ✅ CORRECT:
 TOOL_CALL: get_motor_position
-ARGUMENTS: {"ioc_prefix": "20idMotSim", "motor_name": "m1"}
+ARGUMENTS: {"motor": "m1"}
 
 ❌ WRONG — NEVER do these:
 - NEVER calculate d = a/√(h²+k²+l²) yourself — call xray_calculate
