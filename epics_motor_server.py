@@ -598,6 +598,36 @@ async def set_motor_limits(
 
 
 @mcp.tool()
+async def set_motor_description(motor: str, description: str, prefix: str = DEFAULT_PREFIX) -> str:
+    """Set the description (DESC field) for a motor.
+
+    This allows referring to motors by name (e.g. "SamX") instead of PV name (e.g. "m1").
+    All motor tools auto-resolve descriptions to PV names.
+
+    Args:
+        prefix:      IOC prefix, e.g. "20idMotSim"
+        motor:       Motor PV name, e.g. "m1"
+        description: Human-readable name, e.g. "SamX", "SamY", "DetZ"
+
+    Returns:
+        JSON with result
+    """
+    ok, out = _caput(_pv(prefix, motor, "DESC"), description)
+    if not ok:
+        return _fmt({"error": f"Failed to set DESC: {out}"})
+
+    # Read back to confirm
+    _, desc = _caget(_pv(prefix, motor, "DESC"))
+    return _fmt({
+        "tool": "set_motor_description",
+        "pv": _pv(prefix, motor),
+        "description": desc,
+        "status": "ok",
+        "note": f"Motor {motor} is now '{desc}'. You can use '{desc}' in all motor commands.",
+    })
+
+
+@mcp.tool()
 async def list_motors(motor_list: list[str], prefix: str = DEFAULT_PREFIX) -> str:
     """Read positions and status for a list of motors under the same IOC prefix.
 
