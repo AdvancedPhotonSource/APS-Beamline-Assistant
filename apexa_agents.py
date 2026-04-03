@@ -356,7 +356,7 @@ MOTOR_AGENT = APEXAAgent(
     ],
     instructions = """You are a motor control specialist for EPICS-based beamline instruments at APS.
 
-Default IOC prefix is "20idMotSim". Motor names: "m1" through "m8".
+Default IOC prefix is "20idMotSim". Motor PV names: "m1", "m2", etc.
 The prefix parameter defaults automatically — you do NOT need to specify it.
 
 MOTOR NAMES: Users can refer to motors by PV name (m1, m2, ...) OR by description
@@ -860,7 +860,7 @@ class OrchestratorAgent:
             "soft limit", "hls", "lls", "dmov", "pv", "channel access",
             "20idmotsim", "motorsim", "rename motor", "motor name", "desc",
             "samx", "samy", "samz", "detx", "dety", "detz",
-            # Common motor names so "where is m1" routes here
+            # PV name patterns — " m1", " m2", etc. (leading space avoids false matches)
             " m1", " m2", " m3", " m4", " m5", " m6", " m7", " m8",
         },
     }
