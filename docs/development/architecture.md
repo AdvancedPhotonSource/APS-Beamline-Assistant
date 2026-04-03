@@ -28,7 +28,7 @@ User (CLI / Gradio / Web UI)
                 |   (9 tools)         |
                 +---------------------+
                 |   midas server      |
-                |   (24 tools)        |
+                |   (25 tools)        |
                 +---------------------+
 ```
 
@@ -49,7 +49,7 @@ All three call `run_query()` as the single entry point.
 | `apexa_agents.py` | Agent definitions, ArgoProvider, AgentRunner, OrchestratorAgent |
 | `argo_mcp_client.py` | MCP client, tool registry, CLI session loop |
 | `beamline_core_server.py` | Core MCP server: file ops, shell commands, X-ray calculations |
-| `midas_comprehensive_server.py` | MIDAS MCP server: 24 tools for HEDM workflows, GSAS-II, CIF |
+| `midas_comprehensive_server.py` | MIDAS MCP server: 25 tools for HEDM workflows, GSAS-II, CIF |
 | `servers.config` | Server configuration (`name:script_path` pairs) |
 | `.agents/skills/` | Agent Skills: canonical MIDAS workflow reference |
 
@@ -84,7 +84,7 @@ System prompt injected into every agent call. Instructs the model to use `TOOL_C
 `list_directory`, `read_file`, `write_file`, `get_file_info`, `run_command`,
 `check_environment`, `xray_calculate`, `validate_beamline_parameters`, `list_common_calibrants`
 
-### MIDAS Server (`midas_comprehensive_server.py`) -- 24 tools
+### MIDAS Server (`midas_comprehensive_server.py`) -- 25 tools
 `midas_auto_calibrate`, `midas_integrate_2d_to_1d`, `midas_batch_integrate`,
 `run_gsas_refinement`, `run_live_analysis`, `fetch_cif_from_mp`,
 `run_ff_hedm_full_workflow`, `run_nf_hedm_reconstruction`, `run_pf_hedm_workflow`,
@@ -92,6 +92,7 @@ System prompt injected into every agent call. Instructs the model to use `TOOL_C
 `run_forward_simulation`, `extract_grain_centroids`, `convert_nf_to_dream3d`,
 `overlay_ff_nf_results`, `batch_convert_ge_to_tiff`,
 `create_midas_parameter_file`, `validate_midas_installation`, `get_midas_workflow_status`,
+`run_midas_viewer`,
 `query_hedm_knowledge`, `get_material_properties`, `get_typical_hedm_parameters`,
 `estimate_parameters_from_image`
 

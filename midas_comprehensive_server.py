@@ -3381,6 +3381,128 @@ async def estimate_parameters_from_image(
 
 
 # =============================================================================
+# MIDAS VIEWER LAUNCHER
+# =============================================================================
+
+# Map of viewer short names → relative paths in MIDAS repo
+_VIEWER_SCRIPTS = {
+    "plot_calibrant_results":   "gui/viewers/plot_calibrant_results.py",
+    "plot_lineout_results":     "gui/viewers/plot_lineout_results.py",
+    "plot_lineout_comparison":  "gui/viewers/plot_lineout_comparison.py",
+    "plot_integrator_peaks":    "gui/viewers/plot_integrator_peaks.py",
+    "plot_caked_peaks":         "gui/viewers/plot_caked_peaks.py",
+    "live_viewer":              "gui/viewers/live_viewer.py",
+    "interactiveFFplotting":    "gui/viewers/interactiveFFplotting.py",
+    "ff_asym_qt":               "gui/ff_asym_qt.py",
+    "nf_qt":                    "gui/nf_qt.py",
+}
+
+@mcp.tool()
+async def run_midas_viewer(
+    viewer: str,
+    data_file: str,
+    param_file: str = "",
+    extra_args: str = "",
+) -> str:
+    """Launch a MIDAS viewer/plotting script on a data file.
+
+    Handles all path resolution internally — finds MIDAS installation,
+    midas_env Python, and builds the full command automatically.
+
+    Available viewers:
+    - plot_calibrant_results: Plot calibration fit (*_corr.csv)
+    - plot_lineout_results: Plot 1D lineout (*_lineout.xy)
+    - plot_lineout_comparison: Compare lineouts with ring overlay
+    - plot_integrator_peaks: Interactive caked data viewer (*_caked.hdf.zarr.zip)
+    - plot_caked_peaks: Peak fitting viewer (*_caked_peaks.h5)
+    - live_viewer: Real-time GPU streaming viewer (*_lineout.bin)
+    - interactiveFFplotting: FF-HEDM grain viewer (Grains.csv + .zarr)
+    - ff_asym_qt: Raw 2D diffraction image viewer
+    - nf_qt: NF-HEDM microstructure viewer (.mic/.map)
+
+    Args:
+        viewer: Viewer name (e.g. "plot_calibrant_results", "plot_lineout_results")
+        data_file: Path to the data file to visualize
+        param_file: Optional parameter file (enables 2θ/Q axes in lineout viewers)
+        extra_args: Optional extra command-line arguments (e.g. "--nRBins 2000")
+
+    Returns:
+        JSON with command executed, stdout/stderr, and status
+    """
+    try:
+        # Resolve viewer script
+        rel_path = _VIEWER_SCRIPTS.get(viewer)
+        if not rel_path:
+            return format_result({
+                "tool": "run_midas_viewer",
+                "status": "error",
+                "error": f"Unknown viewer: '{viewer}'",
+                "available_viewers": list(_VIEWER_SCRIPTS.keys()),
+            })
+
+        script_path = MIDAS_ROOT / rel_path
+        if not script_path.exists():
+            return format_result({
+                "tool": "run_midas_viewer",
+                "status": "error",
+                "error": f"Viewer script not found: {script_path}",
+            })
+
+        # Resolve data file
+        data_path = Path(data_file).expanduser().absolute()
+        if not data_path.exists():
+            return format_result({
+                "tool": "run_midas_viewer",
+                "status": "error",
+                "error": f"Data file not found: {data_path}",
+            })
+
+        # Find the right Python (midas_env conda Python)
+        midas_python = find_midas_python()
+
+        # Build command
+        cmd = [midas_python, str(script_path), str(data_path)]
+
+        if param_file:
+            param_path = Path(param_file).expanduser().absolute()
+            if param_path.exists():
+                cmd.extend(["--paramFN", str(param_path)])
+
+        if extra_args:
+            cmd.extend(extra_args.split())
+
+        env = get_midas_env()
+
+        print(f"  Launching viewer: {viewer} → {data_path.name}", file=sys.stderr)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120, env=env)
+
+        return format_result({
+            "tool": "run_midas_viewer",
+            "status": "success" if result.returncode == 0 else "error",
+            "viewer": viewer,
+            "data_file": str(data_path),
+            "command": " ".join(cmd),
+            "return_code": result.returncode,
+            "stdout": result.stdout[-500:] if result.stdout else "",
+            "stderr": result.stderr[-500:] if result.stderr else "",
+        })
+
+    except subprocess.TimeoutExpired:
+        return format_result({
+            "tool": "run_midas_viewer",
+            "status": "error",
+            "error": "Viewer timed out after 120s",
+        })
+    except Exception as e:
+        return format_result({
+            "tool": "run_midas_viewer",
+            "status": "error",
+            "error": str(e),
+            "traceback": traceback.format_exc(),
+        })
+
+
+# =============================================================================
 # GSAS-II REFINEMENT & LIVE ANALYSIS
 # =============================================================================
 

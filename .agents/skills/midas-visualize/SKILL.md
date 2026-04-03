@@ -11,6 +11,22 @@ metadata:
 
 ## Visualization Workflows (MIDAS v11)
 
+### APEXA Agent Usage
+
+When running through APEXA, use the `run_midas_viewer` MCP tool instead of constructing
+manual Python commands. The tool handles MIDAS path resolution and Python environment
+automatically.
+
+Available viewer names: `plot_calibrant_results`, `plot_lineout_results`,
+`plot_lineout_comparison`, `plot_integrator_peaks`, `plot_caked_peaks`, `live_viewer`,
+`interactiveFFplotting`, `ff_asym_qt`, `nf_qt`
+
+Example:
+```
+TOOL_CALL: run_midas_viewer
+ARGUMENTS: {"viewer": "plot_lineout_results", "data_file": "/path/to/lineout.xy", "param_file": "/path/to/params.txt"}
+```
+
 ---
 
 ## Input file → correct viewer

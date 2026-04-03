@@ -66,7 +66,7 @@ APEXA> integrate CeO2 in test1 using the refined params
   Output: CeO2_000001.tif.analysis.MIDAS_lineout.xy
 
 APEXA> show me the lineout
-  -> run_command (plot_lineout_results.py)
+  -> run_midas_viewer (plot_lineout_results)
   [viewer window opens]
 
 APEXA> run FF-HEDM workflow on /data/experiment
