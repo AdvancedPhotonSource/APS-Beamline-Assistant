@@ -993,7 +993,7 @@ class APEXAClient:
 
         # Determine environment based on model (dev models require dev endpoint)
         self.anl_username = os.getenv("ANL_USERNAME")
-        self.selected_model = os.getenv("ARGO_MODEL", "gpt4olatest")
+        self.selected_model = os.getenv("ARGO_MODEL", "gpt41mini")
 
         # All current models on PROD (March 2026 Argo update)
         # Future beta models: add to DEV_ONLY_MODELS in apexa_agents.py
@@ -1125,6 +1125,19 @@ class APEXAClient:
 
         if server_name not in self.sessions:
             return f"Error: Server '{server_name}' not connected"
+
+        # Normalize path-like arguments to absolute paths
+        path_arg_names = {"path", "file_path", "image_file", "calibration_file",
+                          "parameters_file", "result_folder", "dark_file",
+                          "working_dir", "param_file", "data_file"}
+        for key in list(arguments.keys()):
+            if key in path_arg_names and isinstance(arguments[key], str):
+                val = arguments[key]
+                if val and val not in (".", "~") and not val.startswith("http"):
+                    resolved = str(Path(val).expanduser().resolve())
+                    if resolved != val:
+                        print(f"  Path resolved: {val} -> {resolved}", file=sys.stderr)
+                    arguments[key] = resolved
 
         try:
             session = self.sessions[server_name]
