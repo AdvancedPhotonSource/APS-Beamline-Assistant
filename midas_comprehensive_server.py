@@ -2556,20 +2556,29 @@ async def midas_auto_calibrate(
                     # Continue with original filename
 
         # Extract energy/wavelength from original filename if symlink lost it
-        # Filename patterns: 61p332keV, 71p676keV, etc.
+        # Uses same regex as MIDAS AutoCalibrateZarr.py (handles 61p332keV, 61.332keV, 30keV)
         _energy_from_filename = None
-        energy_match = re.search(r'(\d+)p(\d+)\s*keV', original_filename, re.IGNORECASE)
+        original_stem = Path(original_filename).stem
+        energy_match = re.search(
+            r'(?:^|[_\-])([\d]+(?:[p.][\d]+)?)keV(?:[_\-.]|$)',
+            original_stem, re.IGNORECASE
+        )
         if energy_match:
-            energy_kev = float(f"{energy_match.group(1)}.{energy_match.group(2)}")
-            # Convert keV to Angstroms: λ = 12.398 / E(keV)
-            _energy_from_filename = 12.398 / energy_kev
-            print(f"✓ Extracted energy from original filename: {energy_kev} keV → λ = {_energy_from_filename:.6f} Å", file=sys.stderr)
+            energy_kev = float(energy_match.group(1).replace('p', '.'))
+            if energy_kev > 0:
+                # Convert keV to Angstroms: λ = 12.398 / E(keV)
+                _energy_from_filename = 12.398 / energy_kev
+                print(f"✓ Extracted energy from original filename: {energy_kev} keV → λ = {_energy_from_filename:.6f} Å", file=sys.stderr)
 
-        # Extract Lsd guess from original filename if present (e.g. 650mm)
-        lsd_match = re.search(r'(\d+)\s*mm', original_filename, re.IGNORECASE)
+        # Extract Lsd guess from original filename if present (e.g. 650mm, 210mm)
+        lsd_match = re.search(
+            r'(?:^|[_\-])([\d]+(?:[p.][\d]+)?)mm(?:[_\-.]|$)',
+            original_stem, re.IGNORECASE
+        )
         if lsd_match and lsd_guess >= 1000000:  # Only if user didn't provide one
-            lsd_from_filename = int(lsd_match.group(1)) * 1000  # mm → µm
-            print(f"✓ Extracted Lsd from original filename: {lsd_match.group(1)} mm → {lsd_from_filename} µm", file=sys.stderr)
+            dist_mm = float(lsd_match.group(1).replace('p', '.'))
+            lsd_from_filename = int(dist_mm * 1000)  # mm → µm
+            print(f"✓ Extracted Lsd from original filename: {dist_mm} mm → {lsd_from_filename} µm", file=sys.stderr)
 
         # Build command with all parameters according to MIDAS manual
         # Use MIDAS Python (conda midas_env) instead of current Python (UV)
@@ -2584,7 +2593,7 @@ async def midas_auto_calibrate(
 
         # Pass wavelength extracted from original filename if no param file
         if _energy_from_filename and not param_path:
-            cmd.extend(["-Wavelength", f"{_energy_from_filename:.6f}"])
+            cmd.extend(["--wavelength", f"{_energy_from_filename:.6f}"])
 
         # Pass Lsd from original filename if no user-provided guess
         if lsd_match and lsd_guess >= 1000000 and not param_path:
