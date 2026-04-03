@@ -42,6 +42,7 @@ mcp = FastMCP("epics-motor")
 # Override with EPICS_MOTOR_PREFIX env var for different beamlines.
 import os
 DEFAULT_PREFIX = os.environ.get("EPICS_MOTOR_PREFIX", "20idMotSim")
+MAX_MOTOR_NUM = int(os.environ.get("EPICS_MOTOR_COUNT", "100"))
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -118,8 +119,9 @@ def _wait_for_dmov(prefix: str, motor: str,
 def _resolve_motor(prefix: str, motor: str) -> str:
     """Resolve motor name from DESC field if not a standard PV name.
 
-    Allows users to reference motors by description (e.g. "Sample X")
-    instead of PV name (e.g. "m1"). Scans m1..m8 DESC fields.
+    Allows users to reference motors by description (e.g. "SamX")
+    instead of PV name (e.g. "m1"). Scans m1..mN DESC fields where
+    N = EPICS_MOTOR_COUNT env var (default 100).
 
     Returns the PV name (e.g. "m3") or the original string if no match.
     """
@@ -129,21 +131,25 @@ def _resolve_motor(prefix: str, motor: str) -> str:
 
     motor_lower = motor.lower().strip()
 
-    # Pass 1: exact match on DESC (case-insensitive)
-    for i in range(1, 9):
+    # Single pass: read all DESC fields, check exact then substring
+    descs = {}  # name -> desc string
+    for i in range(1, MAX_MOTOR_NUM + 1):
         name = f"m{i}"
-        ok, desc = _caget(_pv(prefix, name, "DESC"), timeout=2)
-        if ok and desc.strip().lower() == motor_lower:
+        ok, desc = _caget(_pv(prefix, name, "DESC"), timeout=1)
+        if not ok:
+            continue  # Motor doesn't exist, skip
+        descs[name] = desc.strip()
+
+    # Exact match (case-insensitive)
+    for name, desc in descs.items():
+        if desc.lower() == motor_lower:
             return name
 
-    # Pass 2: substring match (user string in DESC or DESC in user string)
-    for i in range(1, 9):
-        name = f"m{i}"
-        ok, desc = _caget(_pv(prefix, name, "DESC"), timeout=2)
-        if ok:
-            d = desc.strip().lower()
-            if d and (motor_lower in d or d in motor_lower):
-                return name
+    # Substring match
+    for name, desc in descs.items():
+        d = desc.lower()
+        if d and (motor_lower in d or d in motor_lower):
+            return name
 
     return motor  # No match — return as-is, let caget give a clear error
 
