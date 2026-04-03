@@ -24,6 +24,7 @@ Organization: Argonne National Laboratory
 """
 
 import json
+import re
 import subprocess
 import sys
 import time
@@ -114,6 +115,39 @@ def _wait_for_dmov(prefix: str, motor: str,
     return False
 
 
+def _resolve_motor(prefix: str, motor: str) -> str:
+    """Resolve motor name from DESC field if not a standard PV name.
+
+    Allows users to reference motors by description (e.g. "Sample X")
+    instead of PV name (e.g. "m1"). Scans m1..m8 DESC fields.
+
+    Returns the PV name (e.g. "m3") or the original string if no match.
+    """
+    # Already a PV name like m1, m2, ..., m99
+    if re.match(r'^m\d+$', motor, re.IGNORECASE):
+        return motor
+
+    motor_lower = motor.lower().strip()
+
+    # Pass 1: exact match on DESC (case-insensitive)
+    for i in range(1, 9):
+        name = f"m{i}"
+        ok, desc = _caget(_pv(prefix, name, "DESC"), timeout=2)
+        if ok and desc.strip().lower() == motor_lower:
+            return name
+
+    # Pass 2: substring match (user string in DESC or DESC in user string)
+    for i in range(1, 9):
+        name = f"m{i}"
+        ok, desc = _caget(_pv(prefix, name, "DESC"), timeout=2)
+        if ok:
+            d = desc.strip().lower()
+            if d and (motor_lower in d or d in motor_lower):
+                return name
+
+    return motor  # No match — return as-is, let caget give a clear error
+
+
 # ---------------------------------------------------------------------------
 # Tools
 # ---------------------------------------------------------------------------
@@ -129,6 +163,7 @@ async def get_motor_position(motor: str, prefix: str = DEFAULT_PREFIX) -> str:
     Returns:
         JSON with RBV (readback), VAL (setpoint), and EGU (engineering units)
     """
+    motor = _resolve_motor(prefix, motor)
     results = {}
     for field, label in [("RBV", "readback"), ("VAL", "setpoint"), ("EGU", "units")]:
         ok, val = _caget(_pv(prefix, motor, field))
@@ -155,6 +190,7 @@ async def get_motor_status(motor: str, prefix: str = DEFAULT_PREFIX) -> str:
     Returns:
         JSON with all status fields
     """
+    motor = _resolve_motor(prefix, motor)
     fields = {
         "RBV":  "readback_position",
         "VAL":  "setpoint_position",
@@ -211,6 +247,7 @@ async def move_motor_absolute(
     Returns:
         JSON with motion result and final readback position
     """
+    motor = _resolve_motor(prefix, motor)
     # --- Read current state ---
     ok_rbv, rbv      = _get_float(prefix, motor, "RBV")
     ok_hlm, hlm      = _get_float(prefix, motor, "HLM")
@@ -306,6 +343,7 @@ async def move_motor_relative(
     Returns:
         JSON with motion result
     """
+    motor = _resolve_motor(prefix, motor)
     ok, rbv = _get_float(prefix, motor, "RBV")
     if not ok:
         return _fmt({"error": f"Cannot read current position (RBV) for {_pv(prefix, motor)}"})
@@ -338,6 +376,7 @@ async def stop_motor(motor: str, prefix: str = DEFAULT_PREFIX) -> str:
     Returns:
         JSON with stop command result
     """
+    motor = _resolve_motor(prefix, motor)
     ok, out = _caput(_pv(prefix, motor, "STOP"), 1)
     _, rbv  = _caget(_pv(prefix, motor, "RBV"))
     _, egu  = _caget(_pv(prefix, motor, "EGU"))
@@ -364,6 +403,7 @@ async def set_motor_velocity(motor: str, velocity: float, prefix: str = DEFAULT_
     Returns:
         JSON with result
     """
+    motor = _resolve_motor(prefix, motor)
     if velocity <= 0:
         return _fmt({"error": "velocity must be > 0"})
 
@@ -408,6 +448,7 @@ async def jog_motor(
     Returns:
         JSON with start/end positions
     """
+    motor = _resolve_motor(prefix, motor)
     if direction not in ("forward", "reverse"):
         return _fmt({"error": "direction must be 'forward' or 'reverse'"})
     if duration_s <= 0 or duration_s > 30:
@@ -455,6 +496,7 @@ async def tweak_motor(motor: str, direction: str, step: float, prefix: str = DEF
     Returns:
         JSON with before/after positions
     """
+    motor = _resolve_motor(prefix, motor)
     if direction not in ("forward", "reverse"):
         return _fmt({"error": "direction must be 'forward' or 'reverse'"})
     if step <= 0:
@@ -495,6 +537,7 @@ async def get_motor_limits(motor: str, prefix: str = DEFAULT_PREFIX) -> str:
     Returns:
         JSON with all limit fields
     """
+    motor = _resolve_motor(prefix, motor)
     fields = ["HLM", "LLM", "DHLM", "DLLM", "HLS", "LLS", "EGU"]
     result = {}
     for f in fields:
@@ -527,6 +570,7 @@ async def set_motor_limits(
     Returns:
         JSON with updated limit values
     """
+    motor = _resolve_motor(prefix, motor)
     if high_limit is None and low_limit is None:
         return _fmt({"error": "Provide at least one of high_limit or low_limit"})
 
@@ -600,6 +644,7 @@ async def home_motor(motor: str, direction: str = "forward", prefix: str = DEFAU
     Returns:
         JSON with homing result and final position
     """
+    motor = _resolve_motor(prefix, motor)
     if direction not in ("forward", "reverse"):
         return _fmt({"error": "direction must be 'forward' or 'reverse'"})
 
