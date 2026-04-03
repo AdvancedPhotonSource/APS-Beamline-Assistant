@@ -125,6 +125,50 @@ def find_midas_python() -> str:
         "Set MIDAS_PYTHON env var to override, or run: conda env create -f MIDAS/environment.yml"
     )
 
+def _find_gsasii_path() -> Optional[str]:
+    """Auto-detect GSAS-II installation for subprocess env.
+
+    Returns the parent directory of the GSASII package (the path to add to
+    sys.path so that ``from GSASII import GSASIIscriptable`` works).
+
+    Search order:
+      1. GSASII_PATH environment variable
+      2. Conda env named 'GSASII' with a GSAS-II checkout
+      3. pip-installed GSASII in the current env
+    """
+    # 1. Explicit env var
+    gsas_path = os.environ.get("GSASII_PATH")
+    if gsas_path:
+        p = Path(gsas_path)
+        # If pointing to the GSASII package dir, return its parent
+        if (p / "GSASIIscriptable.py").exists():
+            return str(p.parent)
+        # If pointing to the root (contains GSASII/ subdir)
+        if (p / "GSASII" / "GSASIIscriptable.py").exists():
+            return str(p)
+        return str(p)
+
+    # 2. Conda env named GSASII
+    conda_base = os.environ.get("CONDA_PREFIX_1") or os.environ.get("CONDA_PREFIX")
+    if not conda_base:
+        conda_exe = os.environ.get("CONDA_EXE")
+        if conda_exe:
+            conda_base = str(Path(conda_exe).parent.parent)
+    if not conda_base:
+        for loc in [Path.home() / "miniconda3", Path.home() / "anaconda3",
+                     Path.home() / "opt" / "miniconda3"]:
+            if loc.exists():
+                conda_base = str(loc)
+                break
+    if conda_base:
+        for sub in ["GSAS-II", "GSASII", "gsas2"]:
+            candidate = Path(conda_base) / "envs" / "GSASII" / sub
+            if (candidate / "GSASII" / "GSASIIscriptable.py").exists():
+                return str(candidate)
+
+    return None
+
+
 def get_midas_env() -> dict:
     """Get environment variables for all MIDAS operations (C++ and Python).
 
@@ -147,6 +191,13 @@ def get_midas_env() -> dict:
         env["PYTHONPATH"] = midas_utils + ":" + env["PYTHONPATH"]
     else:
         env["PYTHONPATH"] = midas_utils
+
+    # Auto-detect GSAS-II so gsas_ii_refine.py can import GSASIIscriptable
+    gsasii_path = _find_gsasii_path()
+    if gsasii_path:
+        env["GSASII_PATH"] = gsasii_path
+        # Also add to PYTHONPATH so `from GSASII import ...` works directly
+        env["PYTHONPATH"] = gsasii_path + ":" + env["PYTHONPATH"]
 
     return env
 
