@@ -350,6 +350,7 @@ MOTOR_AGENT = APEXAAgent(
         "tweak_motor",
         "get_motor_limits",
         "set_motor_limits",
+        "set_motor_description",
         "list_motors",
         "home_motor",
     ],
@@ -857,7 +858,8 @@ class OrchestratorAgent:
             "ioc", "rbv", "readback", "jog", "tweak", "home motor",
             "stop motor", "velocity", "speed", "limit switch",
             "soft limit", "hls", "lls", "dmov", "pv", "channel access",
-            "20idmotsim", "motorsim",
+            "20idmotsim", "motorsim", "rename motor", "motor name", "desc",
+            "samx", "samy", "samz", "detx", "dety", "detz",
             # Common motor names so "where is m1" routes here
             " m1", " m2", " m3", " m4", " m5", " m6", " m7", " m8",
         },
