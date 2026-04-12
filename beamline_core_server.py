@@ -23,6 +23,7 @@ from pathlib import Path
 # Suppress noisy third-party library startup messages
 logging.getLogger("numexpr").setLevel(logging.WARNING)
 logging.getLogger("numexpr.utils").setLevel(logging.WARNING)
+import shlex
 import subprocess
 import stat
 import time
@@ -204,8 +205,16 @@ def format_file_info(path: Path) -> dict:
         return {"error": str(e)}
 
 def is_command_allowed(command: str) -> bool:
-    """Check if command is in allowed list"""
-    cmd_parts = command.strip().split()
+    """Check if command is in allowed list.
+
+    Validates the base command name (first token) against ALLOWED_COMMANDS.
+    Accepts bare names ('python3') or full paths ('/usr/bin/python3').
+    """
+    try:
+        cmd_parts = shlex.split(command)
+    except ValueError:
+        # Malformed quoting
+        return False
     if not cmd_parts:
         return False
     # Accept bare name ("python") or full path ("/usr/bin/python", "/opt/.../bin/python3")
@@ -421,9 +430,16 @@ async def run_command(command: str, working_dir: str = None, timeout: int = 120)
 
         cwd = working_dir if working_dir and Path(working_dir).exists() else None
 
+        # Parse command into argument list — prevents shell injection
+        # (pipes, semicolons, $() etc. are treated as literal strings)
+        try:
+            cmd_args = shlex.split(command)
+        except ValueError as e:
+            return format_result({"error": f"Invalid command syntax: {e}"})
+
         result = subprocess.run(
-            command,
-            shell=True,
+            cmd_args,
+            shell=False,
             capture_output=True,
             text=True,
             timeout=timeout,
