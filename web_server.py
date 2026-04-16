@@ -1551,12 +1551,160 @@ Please use the AutoCalibrateZarr tool and return the refined parameters."""
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ---------------------------------------------------------------------------
+# Visualization API — server-side Plotly rendering of MIDAS analysis outputs
+# ---------------------------------------------------------------------------
+
+from viz_api import (
+    lineout_to_plotly,
+    calibrant_to_plotly,
+    caked_to_plotly,
+    integrator_peaks_to_plotly,
+    discover_viz_files,
+    grains_to_plotly,
+    spot_matrix_to_plotly,
+    microstructure_to_plotly,
+    lineout_comparison_to_plotly,
+    caked_peaks_to_plotly,
+)
+
+
+@app.post("/api/viz/lineout")
+async def viz_lineout(
+    file: str = Form(...),
+    peaks_csv: Optional[str] = Form(None),
+    show_raw: bool = Form(True),
+    show_bg: bool = Form(True),
+    log_y: bool = Form(False),
+):
+    """Render MIDAS lineout XY file as interactive Plotly chart."""
+    result = lineout_to_plotly(file, peaks_csv, show_raw, show_bg, log_y)
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+@app.post("/api/viz/calibrant")
+async def viz_calibrant(
+    file: str = Form(...),
+    x_axis: str = Form("Eta"),
+    y_axis: str = Form("Strain"),
+    color_by: str = Form("RingNr"),
+    filter_outliers: bool = Form(True),
+):
+    """Render calibrant _corr.csv as interactive Plotly scatter."""
+    result = calibrant_to_plotly(file, x_axis, y_axis, color_by, filter_outliers)
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+@app.post("/api/viz/caked")
+async def viz_caked(
+    file: str = Form(...),
+    frame: int = Form(-1),
+    colorscale: str = Form("Viridis"),
+    log_intensity: bool = Form(False),
+):
+    """Render caked zarr as interactive Plotly 2D heatmap."""
+    result = caked_to_plotly(file, frame, colorscale, log_intensity)
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+@app.post("/api/viz/integrator_peaks")
+async def viz_integrator_peaks(
+    file: str = Form(...),
+    corr_csv: Optional[str] = Form(None),
+    frame: int = Form(-1),
+):
+    """Render integrator peak analysis as Plotly scatter."""
+    result = integrator_peaks_to_plotly(file, corr_csv, frame)
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+@app.post("/api/viz/grains")
+async def viz_grains(
+    file: str = Form(...),
+    color_by: str = Form("confidence"),
+):
+    """Render Grains.csv as 3D grain centroid scatter."""
+    result = grains_to_plotly(file, color_by)
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+@app.post("/api/viz/spots")
+async def viz_spots(
+    file: str = Form(...),
+    color_by: str = Form("ringNr"),
+):
+    """Render SpotMatrix.csv as 2D diffraction spot scatter."""
+    result = spot_matrix_to_plotly(file, color_by)
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+@app.post("/api/viz/microstructure")
+async def viz_microstructure(
+    file: str = Form(...),
+    color_by: str = Form("confidence"),
+    min_confidence: float = Form(0.0),
+):
+    """Render .mic/.map NF orientation map as 2D scatter."""
+    result = microstructure_to_plotly(file, color_by, min_confidence)
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+@app.post("/api/viz/lineout_comparison")
+async def viz_lineout_comparison(
+    files: str = Form(...),
+    param_file: Optional[str] = Form(None),
+    log_y: bool = Form(False),
+):
+    """Overlay multiple lineout XY files on a single plot."""
+    file_list = [f.strip() for f in files.split(',') if f.strip()]
+    result = lineout_comparison_to_plotly(file_list, param_file, log_y)
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+@app.post("/api/viz/caked_peaks")
+async def viz_caked_peaks(
+    file: str = Form(...),
+    zarr_file: Optional[str] = Form(None),
+    frame: int = Form(-1),
+):
+    """Render _caked_peaks.h5 with fitted peak overlay."""
+    result = caked_peaks_to_plotly(file, zarr_file, frame)
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+@app.get("/api/viz/discover")
+async def viz_discover(path: str):
+    """Discover MIDAS analysis output files in a directory."""
+    result = discover_viz_files(path)
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
 if __name__ == "__main__":
     print("- .env file with ANL_USERNAME and ARGO_MODEL")
     print("")
     print("Dependencies should be installed with uv:")
     print("  uv add fastapi uvicorn websockets python-multipart")
-    
+
     uvicorn.run(
         "web_server:app",
         host="0.0.0.0",
