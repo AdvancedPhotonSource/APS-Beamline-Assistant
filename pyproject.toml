@@ -24,6 +24,7 @@ dependencies = [
     "tifffile>=2024.1.0",
     "xrayutilities>=1.7.12",
     "h5py>=3.11.0",
+    "zarr>=2.18.0,<3",
     "pillow>=11.3.0",
     "pandas>=2.3.2",
     # Trame Web UI

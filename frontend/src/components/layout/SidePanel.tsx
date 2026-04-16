@@ -2,6 +2,7 @@ import type { RailView } from './IconRail'
 import { FileBrowser } from '@/components/files/FileBrowser'
 import { WorkflowPanel } from '@/components/workflows/WorkflowPanel'
 import { MotorDashboard } from '@/components/motors/MotorDashboard'
+import { VizLauncher } from '@/components/viz/VizLauncher'
 
 interface SidePanelProps {
   view: RailView
@@ -11,6 +12,7 @@ const TITLES: Record<string, string> = {
   files: 'File Browser',
   workflows: 'Workflows',
   motors: 'Motor Control',
+  viewers: 'MIDAS Viewers',
 }
 
 export function SidePanel({ view }: SidePanelProps) {
@@ -28,6 +30,7 @@ export function SidePanel({ view }: SidePanelProps) {
         {view === 'files' && <FileBrowser />}
         {view === 'workflows' && <WorkflowPanel />}
         {view === 'motors' && <MotorDashboard />}
+        {view === 'viewers' && <VizLauncher />}
       </div>
     </div>
   )

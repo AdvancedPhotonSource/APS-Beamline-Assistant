@@ -128,6 +128,30 @@ export function extractArtifacts(results: ToolResult[], messageId: string): VizA
         sourceMessageId: messageId,
       })
     }
+
+    // Viz API results (plotly data from /api/viz/* endpoints or run_midas_viewer)
+    if (result.data.plotly && typeof result.data.plotly === 'object') {
+      artifacts.push({
+        id: `viz-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        type: 'plotly',
+        title: (result.data.title as string) ?? 'MIDAS Visualization',
+        data: result.data.plotly,
+        sourceMessageId: messageId,
+      })
+      // Also add any tables from the viz result
+      const tables = result.data.tables as Array<{ title: string; data: unknown }> | undefined
+      if (tables) {
+        for (const tbl of tables) {
+          artifacts.push({
+            id: `viztbl-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            type: 'table',
+            title: tbl.title,
+            data: tbl.data,
+            sourceMessageId: messageId,
+          })
+        }
+      }
+    }
   }
 
   return artifacts
