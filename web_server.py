@@ -361,6 +361,25 @@ if _frontend_dist.exists():
             return FileResponse(fav, media_type="image/svg+xml")
         raise HTTPException(404)
 
+@app.get("/debug", response_class=HTMLResponse)
+async def serve_debug():
+    """Minimal diagnostic page to verify server works"""
+    return HTMLResponse("""<!DOCTYPE html>
+<html><head><title>APEXA Debug</title></head>
+<body style="background:#18181b;color:#fafafa;font-family:system-ui;padding:40px">
+<h1>APEXA Server OK</h1>
+<p>If you see this, the server is working. The React app may have a JS error.</p>
+<p>Check browser Console (F12) on the main page for red errors.</p>
+<pre id="out"></pre>
+<script>
+fetch('/api/status').then(r=>r.json()).then(d=>{
+  document.getElementById('out').textContent = JSON.stringify(d, null, 2);
+}).catch(e=>{
+  document.getElementById('out').textContent = 'API error: ' + e.message;
+});
+</script>
+</body></html>""")
+
 @app.get("/", response_class=HTMLResponse)
 async def serve_web_ui():
     """Serve the React app (or fall back to legacy HTML)"""
