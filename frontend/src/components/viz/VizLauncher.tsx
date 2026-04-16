@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useCallback } from 'react'
 import { useVizStore } from '@/stores/vizStore'
 
 interface VizFile {
@@ -25,12 +25,6 @@ interface VizResult {
 
 const API = '/api/viz'
 
-const VIEWER_TYPES = [
-  { key: 'lineout', label: 'Lineout Results', icon: 'M3 12h4l3-9 4 18 3-9h4', endpoint: 'lineout' },
-  { key: 'calibrant', label: 'Calibrant QC', icon: 'M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5', endpoint: 'calibrant' },
-  { key: 'caked', label: 'Caked Heatmap', icon: 'M3 3h18v18H3V3zm3 3v12h12V6H6z', endpoint: 'caked' },
-] as const
-
 function basename(path: string): string {
   return path.split('/').pop() || path
 }
@@ -41,7 +35,6 @@ export function VizLauncher() {
   const [loading, setLoading] = useState(false)
   const [vizLoading, setVizLoading] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const addArtifact = useVizStore((s) => s.addArtifact)
   const addArtifacts = useVizStore((s) => s.addArtifacts)
 
   const discover = useCallback(async (path: string) => {
