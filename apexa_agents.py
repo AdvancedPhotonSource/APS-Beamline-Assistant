@@ -554,6 +554,7 @@ PATH HANDLING — CRITICAL:
 # ── Agent Runner ─────────────────────────────────────────────────────────────
 
 ExecuteToolFn = Callable[[str, Dict], Awaitable[str]]
+OnToolResultFn = Optional[Callable[[str, Dict, str], Awaitable[None]]]
 
 
 class AgentRunner:
@@ -659,7 +660,8 @@ class AgentRunner:
                   provider: ArgoProvider, all_tools: List[Dict],
                   history: Optional[List[Dict]] = None,
                   max_iterations: int = 10,
-                  log_entry: Optional[InteractionEntry] = None) -> str:
+                  log_entry: Optional[InteractionEntry] = None,
+                  on_tool_result: OnToolResultFn = None) -> str:
 
         tools = self._filter_tools(agent.tool_names, all_tools)
 
@@ -714,6 +716,11 @@ class AgentRunner:
                     ok = "error" not in result.lower()[:100]
                     if log_entry:
                         log_entry.add_tool_call(tc.name, tc.arguments, result, ok, dur)
+                    if on_tool_result:
+                        try:
+                            await on_tool_result(tc.name, tc.arguments, result)
+                        except Exception:
+                            pass
                     if tc.name == "list_directory":
                         try:
                             r = json.loads(result)
@@ -767,7 +774,11 @@ class AgentRunner:
                     ok = "error" not in result.lower()[:100]
                     if log_entry:
                         log_entry.add_tool_call(tc.name, tc.arguments, result, ok, dur)
-                    # Print list_directory results directly to terminal with ANSI colors
+                    if on_tool_result:
+                        try:
+                            await on_tool_result(tc.name, tc.arguments, result)
+                        except Exception:
+                            pass
                     if tc.name == "list_directory":
                         try:
                             r = json.loads(result)
@@ -777,9 +788,8 @@ class AgentRunner:
                         except (json.JSONDecodeError, KeyError):
                             pass
 
-                    # Truncate very long tool results to prevent context overflow
-                    if len(result) > 3000:
-                        result = result[:3000] + "\n... [truncated]"
+                    if len(result) > 8000:
+                        result = result[:8000] + "\n... [truncated]"
                     # Build a context-aware follow-up prompt
                     if tc.name == "list_directory":
                         followup = (
@@ -924,18 +934,19 @@ class OrchestratorAgent:
         return ANALYSIS_AGENT              # first query, no context → default
 
     async def process(self, query: str, provider: ArgoProvider,
-                      use_history: bool = True) -> str:
+                      use_history: bool = True,
+                      on_tool_result: OnToolResultFn = None) -> str:
         agent   = self._route(query)
         self._last_agent = agent
         history = self.conversation_history if use_history else None
 
-        # Start interaction log entry
         log_entry = self.logger.start(query, model=provider.model)
         log_entry.set_agent(agent.name)
 
         result = await self.runner.run(
             agent, query, provider, self.all_tools, history,
             log_entry=log_entry,
+            on_tool_result=on_tool_result,
         )
 
         # Detect if the agent looped (>3 calls to a single tool = loop)

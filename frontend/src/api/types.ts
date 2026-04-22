@@ -32,11 +32,13 @@ export interface WsOutgoing {
 }
 
 export interface WsIncoming {
-  type: 'chat_response' | 'error' | 'analysis_progress' | 'model_changed'
+  type: 'chat_response' | 'error' | 'analysis_progress' | 'model_changed' | 'tool_result'
   message?: string
   step?: string
   progress?: number
   model?: string
+  tool?: string
+  result?: string
 }
 
 export interface ServerStatus {

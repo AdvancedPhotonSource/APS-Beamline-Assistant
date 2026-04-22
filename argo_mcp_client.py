@@ -1399,12 +1399,14 @@ class APEXAClient:
             print(f"✗ {error_msg}")
             return error_msg
 
-    async def run_query(self, query: str, use_history: bool = True) -> str:
+    async def run_query(self, query: str, use_history: bool = True,
+                        on_tool_result=None) -> str:
         """Route query through the multi-agent orchestrator (Phase 2 entry point)."""
         if not self.orchestrator:
             return "Error: Not connected to any MCP servers."
         provider = ArgoProvider(self.anl_username, self.selected_model)
-        return await self.orchestrator.process(query, provider, use_history)
+        return await self.orchestrator.process(query, provider, use_history,
+                                               on_tool_result=on_tool_result)
 
 
     def show_available_models(self):

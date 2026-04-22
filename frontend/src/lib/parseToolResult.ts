@@ -92,6 +92,20 @@ function extractCalibrationFromText(text: string): Record<string, unknown> | nul
   return { calibrated_parameters: params }
 }
 
+export function parseDirectToolResult(tool: string, resultJson: string): ToolResult | null {
+  try {
+    const parsed = JSON.parse(resultJson)
+    if (parsed && typeof parsed === 'object') {
+      return { tool, status: inferStatus(parsed), data: parsed }
+    }
+  } catch {
+    if (resultJson && resultJson.trim().length > 0) {
+      return { tool, status: 'success', data: { text_result: resultJson } }
+    }
+  }
+  return null
+}
+
 export function extractArtifacts(results: ToolResult[], messageId: string): VizArtifact[] {
   const artifacts: VizArtifact[] = []
 
