@@ -1928,13 +1928,28 @@ class APEXAClient:
                             print(f"\n{result}\n")
                         else:
                             print("Core server not connected")
+                elif user_input == 'ls' or (user_input.startswith('ls ') and not user_input[3:].lstrip().startswith('-')):
+                    path = user_input[2:].strip() or "."
+                    if "core" in self.sessions:
+                        result = await self.execute_tool_call("list_directory", {"path": path})
+                        try:
+                            r = json.loads(result)
+                            listing = r.get("listing", "")
+                            if listing:
+                                print(f"\n{listing}\n")
+                            else:
+                                print(f"\n{result}\n")
+                        except (json.JSONDecodeError, TypeError):
+                            print(f"\n{result}\n")
+                    else:
+                        print(f"  {C.RED}✗{C.RESET} Core server not connected")
+
                 elif _is_shell_command(user_input):
                     if "core" in self.sessions:
                         cmd = user_input
                         parts = cmd.split()
                         if parts[0] == 'ls':
-                            has_format = any(f in parts for f in ['-1', '-C', '-m', '-x'])
-                            if not has_format:
+                            if not any(f in parts for f in ['-1', '-C', '-m', '-x']):
                                 parts.insert(1, '-C')
                             parts.insert(1, '--color=always')
                             cmd = ' '.join(parts)
