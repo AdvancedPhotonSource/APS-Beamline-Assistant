@@ -8,6 +8,7 @@ Enhanced with image viewer capabilities for TIFF/GE diffraction images
 import asyncio
 import json
 import os
+import re
 import tempfile
 import io
 import base64
@@ -737,12 +738,15 @@ async def websocket_endpoint(websocket: WebSocket):
 
                         print(f"Sending to AI with context: {user_message[:500]}...")  # Debug log
 
+                        _ansi_re = re.compile(r'\x1b\[[0-9;]*m')
+
                         async def _on_tool_result(tool_name: str, arguments: dict, result: str):
                             try:
+                                clean = _ansi_re.sub('', result)
                                 await manager.send_personal_message({
                                     "type": "tool_result",
                                     "tool": tool_name,
-                                    "result": result,
+                                    "result": clean,
                                 }, websocket)
                             except Exception as e:
                                 print(f"Warning: tool_result WS send failed: {e}")
@@ -750,9 +754,10 @@ async def websocket_endpoint(websocket: WebSocket):
                         response = await mcp_client.run_query(
                             user_message, on_tool_result=_on_tool_result
                         )
+                        clean_response = _ansi_re.sub('', response)
                         await manager.send_personal_message({
                             "type": "chat_response",
-                            "message": response
+                            "message": clean_response
                         }, websocket)
                     except Exception as e:
                         await manager.send_personal_message({

@@ -27,19 +27,19 @@
 /* ====== Light theme ====== */
 [data-theme="light"] {
   --apexa-surface: #ffffff;
-  --apexa-surface-2: #f0f1f4;
-  --apexa-surface-3: #e2e4e9;
-  --apexa-border: #c5c9d2;
-  --apexa-border-hover: #8b90a0;
-  --apexa-text: #0a0a12;
-  --apexa-text-2: #2d3040;
-  --apexa-text-muted: #5c6070;
-  --apexa-chat-user: #d4e5ff;
-  --apexa-chat-assistant: #eef0f4;
-  --apexa-panel-bg: #f5f6f8;
+  --apexa-surface-2: #f4f5f7;
+  --apexa-surface-3: #e8eaef;
+  --apexa-border: #d0d5dd;
+  --apexa-border-hover: #98a2b3;
+  --apexa-text: #101828;
+  --apexa-text-2: #344054;
+  --apexa-text-muted: #667085;
+  --apexa-chat-user: #eff8ff;
+  --apexa-chat-assistant: #f9fafb;
+  --apexa-panel-bg: #f2f4f7;
   --apexa-image-bg: #1a1d2e;
-  --apexa-rail-bg: #eceef2;
-  --apexa-rail-active: #dcdfe6;
+  --apexa-rail-bg: #eaecf0;
+  --apexa-rail-active: #d0d5dd;
   color-scheme: light;
 }
 
