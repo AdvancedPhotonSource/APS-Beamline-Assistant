@@ -229,6 +229,12 @@ def _print_help():
     _cmd("clear", "Clear conversation history")
     _cmd("quit", "Exit APEXA")
 
+    _sec("Shell Commands (direct, no prefix needed)")
+    _cmd("pwd, cd, cat, head, tail, grep ...", "Standard Unix commands")
+    _cmd("git, python, uv, conda ...", "Dev tools")
+    _cmd("caget, caput, camonitor ...", "EPICS commands")
+    _cmd("./script.sh, /path/to/binary", "Run executables directly")
+
     _sec("Natural Language Examples")
     _ex('"Integrate data.ge5 with dark.ge5 using calib.txt"')
     _ex('"What are the peaks at 12.5, 18.2, 25.8 degrees?"')
@@ -237,6 +243,36 @@ def _print_help():
     _ex('"Show motor positions"')
 
     print(f"\n  {C.DIM}↑/↓ command history  •  Enter to send  •  Ctrl+C to exit{C.RESET}\n")
+
+
+# Shell commands recognized for direct execution (no 'run' prefix needed)
+_SHELL_COMMANDS = {
+    'ls', 'pwd', 'cat', 'head', 'tail', 'less', 'more',
+    'cp', 'mv', 'mkdir', 'rmdir', 'touch', 'chmod',
+    'grep', 'find', 'wc', 'sort', 'uniq', 'diff', 'sed', 'awk',
+    'du', 'df', 'free', 'ps', 'which', 'whoami',
+    'echo', 'date', 'hostname', 'uname', 'env',
+    'tar', 'gzip', 'gunzip', 'zip', 'unzip',
+    'curl', 'wget', 'ssh', 'scp', 'rsync',
+    'git', 'python', 'python3', 'pip', 'uv', 'conda',
+    'make', 'cmake', 'gcc', 'g++',
+    'tree', 'file', 'stat', 'ln', 'readlink',
+    'nproc', 'lscpu', 'uptime',
+    'caget', 'caput', 'camonitor', 'cainfo',
+}
+
+def _is_shell_command(user_input: str) -> bool:
+    """Check if input looks like a direct shell command."""
+    if not user_input:
+        return False
+    first_word = user_input.split()[0].rstrip(';')
+    # Exact match against known commands
+    if first_word in _SHELL_COMMANDS:
+        return True
+    # Paths to executables: ./script.sh, /usr/bin/something, ~/bin/tool
+    if first_word.startswith(('./','/',  '~/')):
+        return True
+    return False
 
 
 class ExperimentContext:
@@ -1879,21 +1915,27 @@ class APEXAClient:
                             print(f"\n{result}\n")
                         else:
                             print("Core server not connected")
-                elif user_input.startswith('ls') and (len(user_input) == 2 or user_input[2] == ' '):
-                    path = user_input[2:].strip() or "."
+                elif _is_shell_command(user_input):
                     if "core" in self.sessions:
-                        result = await self.execute_tool_call("list_directory", {"path": path})
+                        cmd_name = user_input.split()[0]
+                        print(f"  {C.DIM}$ {user_input}{C.RESET}")
+                        result = await self.execute_tool_call("run_command", {"command": user_input})
                         try:
                             r = json.loads(result)
-                            listing = r.get("listing", "")
-                            if listing:
-                                print(f"\n{listing}\n")
-                            else:
-                                print(f"\n{result}\n")
+                            stdout = r.get("stdout", "")
+                            stderr = r.get("stderr", "")
+                            exit_code = r.get("exit_code", r.get("returncode", None))
+                            if stdout:
+                                print(stdout.rstrip())
+                            if stderr:
+                                print(f"{C.RED}{stderr.rstrip()}{C.RESET}")
+                            if exit_code and exit_code != 0:
+                                print(f"  {C.RED}exit {exit_code}{C.RESET}")
                         except (json.JSONDecodeError, TypeError):
-                            print(f"\n{result}\n")
+                            print(result)
                     else:
                         print(f"  {C.RED}✗{C.RESET} Core server not connected")
+
                 elif user_input:
                     response = await self.run_query(user_input)
                     print(f"\n{clean_markdown(response)}\n")

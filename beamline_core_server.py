@@ -67,10 +67,16 @@ except ImportError:
 
 ALLOWED_COMMANDS = {
     # Basic system commands
-    'ls', 'pwd', 'cat', 'head', 'tail', 'grep', 'find',
-    'python', 'python3', 'pip', 'pip3', 'uv', 'git',
-    'ps', 'df', 'du', 'whoami', 'env', 'echo', 'date',
-    'which', 'file', 'wc', 'sort', 'uniq',
+    'ls', 'pwd', 'cat', 'head', 'tail', 'less', 'more',
+    'grep', 'find', 'wc', 'sort', 'uniq', 'diff', 'sed', 'awk',
+    'cp', 'mv', 'mkdir', 'rmdir', 'touch', 'chmod', 'ln', 'readlink',
+    'echo', 'date', 'hostname', 'uname', 'whoami', 'env', 'which',
+    'file', 'stat', 'tree', 'du', 'df', 'free', 'ps', 'nproc', 'lscpu', 'uptime',
+    'tar', 'gzip', 'gunzip', 'zip', 'unzip',
+    'curl', 'wget', 'ssh', 'scp', 'rsync',
+    'python', 'python3', 'pip', 'pip3', 'uv', 'conda', 'git',
+    'make', 'cmake', 'gcc', 'g++',
+    'caget', 'caput', 'camonitor', 'cainfo',
 
     # ── FF-HEDM CPU executables ──────────────────────────────────────────────
     'GetHKLListZarr',
