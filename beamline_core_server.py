@@ -264,7 +264,6 @@ async def list_directory(path: str = ".", show_hidden: bool = False, details: bo
         DIM = "\033[2m"
         RESET = "\033[0m"
 
-        # File extension color mapping
         ext_colors = {
             '.py': GREEN, '.sh': GREEN, '.js': GREEN, '.ts': GREEN, '.tsx': GREEN,
             '.csv': YELLOW, '.dat': YELLOW, '.xy': YELLOW, '.txt': YELLOW,
@@ -276,10 +275,11 @@ async def list_directory(path: str = ".", show_hidden: bool = False, details: bo
             '.pdf': "\033[31m",
         }
 
-        dirs = []
-        files = []
-        symlinks = []
+        dir_names = []
+        file_entries = []   # (name, colored_name) for column layout
+        symlink_lines = []
         hidden_count = 0
+        terminal_width = 80
 
         for item in sorted(dir_path.iterdir(), key=lambda p: p.name.lower()):
             if item.name.startswith('.'):
@@ -291,35 +291,58 @@ async def list_directory(path: str = ".", show_hidden: bool = False, details: bo
                     target = os.readlink(item)
                     resolved = item.resolve()
                     if resolved.is_dir():
-                        symlinks.append(f"  {CYAN}{item.name}/{RESET} {DIM}-> {target}{RESET}")
+                        symlink_lines.append(f"{CYAN}{item.name}/{RESET} {DIM}-> {target}{RESET}")
                     else:
-                        sz = human_size(item.stat().st_size)
-                        symlinks.append(f"  {item.name:<45}  {DIM}{sz:>6}  -> {target}{RESET}")
+                        symlink_lines.append(f"{item.name} {DIM}-> {target}{RESET}")
                 except OSError:
-                    symlinks.append(f"  {item.name:<45}  {DIM}[broken symlink]{RESET}")
+                    symlink_lines.append(f"{item.name} {DIM}[broken]{RESET}")
             elif item.is_dir():
-                dirs.append(f"  {BLUE}{BOLD}{item.name}/{RESET}")
+                dir_names.append(item.name + "/")
             else:
-                try:
-                    sz = human_size(item.stat().st_size)
-                except OSError:
-                    sz = "?"
                 ext = item.suffix.lower()
                 color = ext_colors.get(ext, "")
                 reset = RESET if color else ""
-                files.append(f"  {color}{item.name:<45}{reset}  {DIM}{sz:>6}{RESET}")
+                file_entries.append((item.name, f"{color}{item.name}{reset}"))
+
+        def _render_columns(items, colored_items, indent=2):
+            """Render items in multi-column layout like ls."""
+            if not items:
+                return ""
+            max_len = max(len(name) for name in items) + 2
+            cols = max(1, (terminal_width - indent) // max_len)
+            rows = []
+            for i in range(0, len(items), cols):
+                row_items = []
+                for j in range(i, min(i + cols, len(items))):
+                    plain_name = items[j]
+                    colored = colored_items[j]
+                    padding = max_len - len(plain_name)
+                    row_items.append(colored + " " * padding)
+                rows.append(" " * indent + "".join(row_items).rstrip())
+            return "\n".join(rows)
 
         output = f"{BOLD}{str(dir_path.absolute())}{RESET}\n"
-        if dirs:
-            output += "\n".join(dirs) + "\n"
-        if symlinks:
-            output += "\n".join(symlinks) + "\n"
-        if files:
-            if dirs or symlinks:
+
+        if dir_names:
+            colored_dirs = [f"{BLUE}{BOLD}{name}{RESET}" for name in dir_names]
+            output += _render_columns(dir_names, colored_dirs) + "\n"
+
+        if symlink_lines:
+            for sl in symlink_lines:
+                output += f"  {sl}\n"
+
+        if file_entries:
+            if dir_names or symlink_lines:
                 output += "\n"
-            output += "\n".join(files)
+            plain_names = [e[0] for e in file_entries]
+            colored_names = [e[1] for e in file_entries]
+            output += _render_columns(plain_names, colored_names)
+
         if hidden_count:
             output += f"\n  {DIM}({hidden_count} hidden items — use show_hidden=True){RESET}"
+
+        total = len(dir_names) + len(file_entries) + len(symlink_lines)
+        output += f"\n  {DIM}{len(dir_names)} directories, {len(file_entries)} files{RESET}"
 
         return format_result({
             "tool": "list_directory",
