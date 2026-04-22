@@ -1,4 +1,4 @@
-import { useState, useCallback, Component, type ReactNode, type ErrorInfo } from 'react'
+import { useState, useCallback, useRef, Component, type ReactNode, type ErrorInfo } from 'react'
 import Plot from '@/lib/plotly'
 import { useVizStore } from '@/stores/vizStore'
 import { useImageStore } from '@/stores/imageStore'
@@ -23,23 +23,29 @@ export function Dashboard() {
   const addArtifact = useVizStore((s) => s.addArtifact)
   const loadImage = useImageStore((s) => s.loadImage)
   const [isDragOver, setIsDragOver] = useState(false)
+  const [status, setStatus] = useState<{ msg: string; type: 'info' | 'error' } | null>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
 
-  const handleDrop = useCallback(async (e: React.DragEvent) => {
-    e.preventDefault()
-    setIsDragOver(false)
-    const files = Array.from(e.dataTransfer.files)
+  const processFiles = useCallback(async (files: File[]) => {
     for (const file of files) {
       const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
       if (['tif','tiff','ge','ge2','ge3','ge4','ge5'].includes(ext)) {
+        setStatus({ msg: `Loading ${file.name}...`, type: 'info' })
         const form = new FormData()
         form.append('file', file)
         try {
           const res = await fetch('/api/upload', { method: 'POST', body: form })
           if (!res.ok) throw new Error(`Upload failed: ${res.status}`)
           const data = await res.json()
-          if (data.saved_path) await loadImage(data.saved_path)
-        } catch (err) { console.error('Upload failed:', err) }
+          if (data.saved_path) {
+            await loadImage(data.saved_path)
+            setStatus(null)
+          }
+        } catch (err) {
+          setStatus({ msg: `Failed to load ${file.name}: ${err}`, type: 'error' })
+        }
       } else if (['csv','dat','xy','txt'].includes(ext)) {
+        setStatus({ msg: `Loading ${file.name}...`, type: 'info' })
         const form = new FormData()
         form.append('file', file)
         try {
@@ -57,11 +63,26 @@ export function Dashboard() {
               },
               sourceMessageId: '',
             })
+            setStatus(null)
           }
-        } catch (err) { console.error('CSV failed:', err) }
+        } catch (err) {
+          setStatus({ msg: `Failed to load ${file.name}: ${err}`, type: 'error' })
+        }
+      } else {
+        setStatus({ msg: `Unsupported file type: .${ext}`, type: 'error' })
       }
     }
   }, [addArtifact, loadImage])
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDragOver(false)
+    processFiles(Array.from(e.dataTransfer.files))
+  }, [processFiles])
+
+  const handleFileInput = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files) processFiles(Array.from(e.target.files))
+  }, [processFiles])
 
   const card: React.CSSProperties = {
     borderRadius: 12, border: '1px solid var(--apexa-border)',
@@ -74,6 +95,18 @@ export function Dashboard() {
         <h2 style={{ fontSize: 16, fontWeight: 700, color: 'var(--apexa-text)', marginBottom: 4 }}>Data Workspace</h2>
         <p style={{ fontSize: 12, color: 'var(--apexa-text-muted)' }}>Interactive visualizations, drag-and-drop data, live analysis results</p>
       </div>
+
+      {status && (
+        <div style={{
+          marginBottom: 12, padding: '8px 14px', borderRadius: 8,
+          fontSize: 12,
+          background: status.type === 'error' ? 'rgba(239,68,68,0.1)' : 'rgba(59,130,246,0.1)',
+          color: status.type === 'error' ? '#ef4444' : '#3b82f6',
+          border: `1px solid ${status.type === 'error' ? 'rgba(239,68,68,0.2)' : 'rgba(59,130,246,0.2)'}`,
+        }}>
+          {status.msg}
+        </div>
+      )}
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
         {/* Sample XRD */}
@@ -107,10 +140,19 @@ export function Dashboard() {
         </div>
 
         {/* Drop zone */}
+        <input
+          ref={fileRef}
+          type="file"
+          multiple
+          accept=".tif,.tiff,.ge,.ge2,.ge3,.ge4,.ge5,.csv,.dat,.xy,.txt"
+          onChange={handleFileInput}
+          style={{ display: 'none' }}
+        />
         <div
           onDragOver={(e) => { e.preventDefault(); setIsDragOver(true) }}
           onDragLeave={() => setIsDragOver(false)}
           onDrop={handleDrop}
+          onClick={() => fileRef.current?.click()}
           style={{
             borderRadius: 12, minHeight: 150,
             border: isDragOver ? '2px dashed #3b82f6' : '2px dashed var(--apexa-border)',
@@ -123,7 +165,7 @@ export function Dashboard() {
           <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke={isDragOver ? '#3b82f6' : 'var(--apexa-text-muted)'} strokeWidth="1.5" style={{ marginBottom: 10 }}>
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" />
           </svg>
-          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--apexa-text)', marginBottom: 4 }}>Drop Files Here</div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--apexa-text)', marginBottom: 4 }}>Drop Files or Click to Browse</div>
           <div style={{ fontSize: 11, color: 'var(--apexa-text-muted)' }}>.tif .ge .csv .dat .xy</div>
         </div>
 
