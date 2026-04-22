@@ -2,13 +2,14 @@ import { create } from 'zustand'
 import type { ChatMessage, ToolResult, VizArtifact } from '@/api/types'
 import { wsManager } from '@/api/websocket'
 import { sendChatHttp } from '@/api/endpoints'
-import { parseToolResults, extractArtifacts } from '@/lib/parseToolResult'
+import { parseToolResults, extractArtifacts, parseDirectToolResult } from '@/lib/parseToolResult'
 import { useVizStore } from './vizStore'
 
 interface ChatState {
   messages: ChatMessage[]
   isLoading: boolean
   progress: { step: string; percent: number } | null
+  _pendingToolResults: ToolResult[]
 
   sendMessage: (content: string) => void
   addAssistantMessage: (content: string, toolResults: ToolResult[], artifacts: VizArtifact[]) => void
@@ -26,7 +27,6 @@ function genId() {
 function processResponse(text: string, msgId: string) {
   const toolResults = parseToolResults(text)
   const artifacts = extractArtifacts(toolResults, msgId)
-  // Only push real data artifacts (plots, tables, images) — NOT plain text
   if (artifacts.length > 0) {
     useVizStore.getState().addArtifacts(artifacts)
   }
@@ -37,15 +37,39 @@ export const useChatStore = create<ChatState>((set, get) => ({
   messages: [],
   isLoading: false,
   progress: null,
+  _pendingToolResults: [],
 
   init: () => {
     wsManager.onMessage((data) => {
       switch (data.type) {
+        case 'tool_result': {
+          const toolResult = parseDirectToolResult(
+            data.tool ?? 'unknown',
+            data.result ?? '{}'
+          )
+          if (toolResult) {
+            set((s) => ({
+              _pendingToolResults: [...s._pendingToolResults, toolResult],
+            }))
+            const tempId = genId()
+            const artifacts = extractArtifacts([toolResult], tempId)
+            if (artifacts.length > 0) {
+              useVizStore.getState().addArtifacts(artifacts)
+            }
+          }
+          break
+        }
         case 'chat_response': {
           const msgId = genId()
           const text = data.message ?? ''
-          const { toolResults, artifacts } = processResponse(text, msgId)
-          get().addAssistantMessage(text, toolResults, artifacts)
+          const pending = get()._pendingToolResults
+          const { toolResults: textResults, artifacts: textArtifacts } = processResponse(text, msgId)
+          const allToolResults = [...pending, ...textResults]
+          if (textArtifacts.length > 0) {
+            useVizStore.getState().addArtifacts(textArtifacts)
+          }
+          get().addAssistantMessage(text, allToolResults, [])
+          set({ _pendingToolResults: [] })
           break
         }
         case 'analysis_progress':
@@ -53,6 +77,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           break
         case 'error':
           get().addAssistantMessage(`Error: ${data.message ?? 'Unknown error'}`, [], [])
+          set({ _pendingToolResults: [] })
           break
       }
     })
@@ -65,7 +90,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       content,
       timestamp: Date.now(),
     }
-    set((s) => ({ messages: [...s.messages, userMsg], isLoading: true, progress: null }))
+    set((s) => ({ messages: [...s.messages, userMsg], isLoading: true, progress: null, _pendingToolResults: [] }))
 
     if (wsManager.connected) {
       wsManager.send({ type: 'chat', message: content })
@@ -98,7 +123,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set({ progress: { step, percent } })
   },
 
-  clearHistory: () => set({ messages: [], isLoading: false, progress: null }),
+  clearHistory: () => set({ messages: [], isLoading: false, progress: null, _pendingToolResults: [] }),
 
   pushToPanel: (messageId: string) => {
     const msg = get().messages.find((m) => m.id === messageId)

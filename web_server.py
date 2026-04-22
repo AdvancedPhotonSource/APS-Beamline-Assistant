@@ -737,7 +737,19 @@ async def websocket_endpoint(websocket: WebSocket):
 
                         print(f"Sending to AI with context: {user_message[:500]}...")  # Debug log
 
-                        response = await mcp_client.run_query(user_message)
+                        async def _on_tool_result(tool_name: str, arguments: dict, result: str):
+                            try:
+                                await manager.send_personal_message({
+                                    "type": "tool_result",
+                                    "tool": tool_name,
+                                    "result": result,
+                                }, websocket)
+                            except Exception as e:
+                                print(f"Warning: tool_result WS send failed: {e}")
+
+                        response = await mcp_client.run_query(
+                            user_message, on_tool_result=_on_tool_result
+                        )
                         await manager.send_personal_message({
                             "type": "chat_response",
                             "message": response
