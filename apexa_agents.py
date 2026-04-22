@@ -26,6 +26,7 @@ What stays in argo_mcp_client.py (unchanged):
   - interactive_analysis_session() CLI loop
 """
 
+import asyncio
 import json
 import os
 import re
@@ -172,17 +173,35 @@ class ArgoProvider:
         if os.environ.get("APEXA_DEBUG"):
             debug_payload = {k: v for k, v in payload.items() if k != "messages"}
             print(f"  [debug] Argo payload: {debug_payload}", file=sys.stderr)
-        t0 = time.monotonic()
-        response = await self._client.post(
-            self.url, json=payload,
-            headers={"Content-Type": "application/json"},
-        )
-        elapsed = time.monotonic() - t0
-        if os.environ.get("APEXA_SHOW_TIMING"):
-            print(f"  \033[2m⏱ {self.model} responded in {elapsed:.1f}s\033[0m", flush=True)
-        if response.status_code != 200:
-            print(f"  Argo API error ({response.status_code}): {response.text[:500]}", file=sys.stderr)
-            response.raise_for_status()
+
+        retries = 3
+        for attempt in range(retries):
+            try:
+                t0 = time.monotonic()
+                response = await self._client.post(
+                    self.url, json=payload,
+                    headers={"Content-Type": "application/json"},
+                )
+                elapsed = time.monotonic() - t0
+                if os.environ.get("APEXA_SHOW_TIMING"):
+                    print(f"  \033[2m⏱ {self.model} responded in {elapsed:.1f}s\033[0m", flush=True)
+                if response.status_code in (502, 503, 429):
+                    wait = 2 ** attempt
+                    print(f"  \033[33m⚠ Argo {response.status_code}, retrying in {wait}s ({attempt+1}/{retries})\033[0m")
+                    await asyncio.sleep(wait)
+                    continue
+                if response.status_code != 200:
+                    print(f"  Argo API error ({response.status_code}): {response.text[:500]}", file=sys.stderr)
+                    response.raise_for_status()
+                return self._parse_response(response.json())
+            except httpx.TimeoutException:
+                if attempt < retries - 1:
+                    wait = 2 ** attempt
+                    print(f"  \033[33m⚠ Argo timeout, retrying in {wait}s ({attempt+1}/{retries})\033[0m")
+                    await asyncio.sleep(wait)
+                else:
+                    raise
+        response.raise_for_status()
         return self._parse_response(response.json())
 
     async def close(self):

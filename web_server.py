@@ -760,9 +760,16 @@ async def websocket_endpoint(websocket: WebSocket):
                             "message": clean_response
                         }, websocket)
                     except Exception as e:
+                        err = str(e)
+                        if "502" in err or "503" in err:
+                            msg = "Argo API gateway is temporarily unavailable. Please try again in a moment."
+                        elif "timeout" in err.lower():
+                            msg = "Request timed out. The AI model may be under heavy load — please retry."
+                        else:
+                            msg = f"Chat processing failed: {err}"
                         await manager.send_personal_message({
-                            "type": "error", 
-                            "message": f"Chat processing failed: {str(e)}"
+                            "type": "error",
+                            "message": msg
                         }, websocket)
                 else:
                     await manager.send_personal_message({
