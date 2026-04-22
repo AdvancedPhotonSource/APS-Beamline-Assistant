@@ -285,7 +285,10 @@ async def list_directory(path: str = ".", show_hidden: bool = False, details: bo
         file_entries = []   # (name, colored_name) for column layout
         symlink_lines = []
         hidden_count = 0
-        terminal_width = 80
+        try:
+            terminal_width = os.get_terminal_size().columns
+        except OSError:
+            terminal_width = 120
 
         for item in sorted(dir_path.iterdir(), key=lambda p: p.name.lower()):
             if item.name.startswith('.'):
