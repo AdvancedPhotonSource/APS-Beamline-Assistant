@@ -80,19 +80,27 @@ def clean_markdown(text: str) -> str:
             out.append(f"  {C.CYAN}{line}{C.RESET}")
             continue
 
-        # Headers
+        # Headers: # / ## / ###
         m = re.match(r'^(#{1,6})\s+(.+)$', line)
         if m:
             level = len(m.group(1))
-            content = m.group(2)
+            content = _inline_format(m.group(2))
             if level == 1:
                 out.append(f"\n{C.BOLD}{C.BBLUE}{content.upper()}{C.RESET}")
-                out.append(f"{C.DIM}{'━' * min(len(content) + 4, 50)}{C.RESET}")
+                out.append(f"{C.BBLUE}{'━' * min(len(m.group(2)) + 4, 50)}{C.RESET}")
             elif level == 2:
-                out.append(f"\n{C.BOLD}{C.WHITE}{content}{C.RESET}")
-                out.append(f"{C.DIM}{'─' * min(len(content) + 2, 40)}{C.RESET}")
+                out.append(f"\n{C.BOLD}{C.BCYAN}{content}{C.RESET}")
+                out.append(f"{C.DIM}{'─' * min(len(m.group(2)) + 2, 40)}{C.RESET}")
             else:
-                out.append(f"\n{C.BOLD}{content}{C.RESET}")
+                out.append(f"\n  {C.BOLD}{C.WHITE}{content}{C.RESET}")
+            continue
+
+        # Numbered section headers: "1) Title" or "1. Title" at top level (no indent)
+        m = re.match(r'^(\d+)[.)]\s+(.+)$', line)
+        if m:
+            num = m.group(1)
+            content = _inline_format(m.group(2))
+            out.append(f"\n{C.BOLD}{C.BCYAN}{num}.{C.RESET} {C.BOLD}{C.WHITE}{content}{C.RESET}")
             continue
 
         # Horizontal rules
@@ -104,24 +112,30 @@ def clean_markdown(text: str) -> str:
         if line.startswith('>'):
             content = line.lstrip('>').strip()
             content = _inline_format(content)
-            out.append(f"  {C.DIM}│{C.RESET} {C.ITALIC}{content}{C.RESET}")
+            out.append(f"  {C.CYAN}│{C.RESET} {C.ITALIC}{content}{C.RESET}")
             continue
 
-        # Bullet lists
-        m = re.match(r'^(\s*)[*-]\s+(.+)$', line)
+        # Bullet lists — markdown (* / -) or literal (• / ▸ / ‣)
+        m = re.match(r'^(\s*)(?:[*-]|[•▸‣])\s+(.+)$', line)
         if m:
             indent = m.group(1)
+            depth = len(indent) // 2
             content = _inline_format(m.group(2))
-            out.append(f"{indent}  {C.BLUE}•{C.RESET} {content}")
+            if depth == 0:
+                out.append(f"  {C.BCYAN}▸{C.RESET} {content}")
+            elif depth == 1:
+                out.append(f"    {C.BLUE}•{C.RESET} {content}")
+            else:
+                out.append(f"      {C.GRAY}◦{C.RESET} {C.DIM}{content}{C.RESET}")
             continue
 
-        # Numbered lists
-        m = re.match(r'^(\s*)(\d+)\.\s+(.+)$', line)
+        # Numbered lists (indented, e.g. "  1. item")
+        m = re.match(r'^(\s+)(\d+)[.)]\s+(.+)$', line)
         if m:
             indent = m.group(1)
             num = m.group(2)
             content = _inline_format(m.group(3))
-            out.append(f"{indent}  {C.BLUE}{num}.{C.RESET} {content}")
+            out.append(f"{indent}  {C.BCYAN}{num}.{C.RESET} {content}")
             continue
 
         # Table separator: skip
@@ -150,17 +164,17 @@ def clean_markdown(text: str) -> str:
 def _inline_format(text: str) -> str:
     """Apply inline markdown formatting with ANSI codes."""
     import re
-    # Bold: **text** or __text__
-    text = re.sub(r'\*\*(.+?)\*\*', f'{C.BOLD}\\1{C.RESET}', text)
-    text = re.sub(r'__(.+?)__', f'{C.BOLD}\\1{C.RESET}', text)
-    # Italic: *text* (not inside words)
-    text = re.sub(r'(?<!\w)\*(.+?)\*(?!\w)', f'{C.ITALIC}\\1{C.RESET}', text)
+    # Bold: **text** → bright white bold (stands out from normal text)
+    text = re.sub(r'\*\*(.+?)\*\*', f'{C.BOLD}{C.WHITE}\\1{C.RESET}', text)
+    text = re.sub(r'__(.+?)__', f'{C.BOLD}{C.WHITE}\\1{C.RESET}', text)
+    # Italic: *text*
+    text = re.sub(r'(?<!\w)\*(.+?)\*(?!\w)', f'{C.ITALIC}{C.BCYAN}\\1{C.RESET}', text)
     # Strikethrough: ~~text~~
     text = re.sub(r'~~(.+?)~~', f'{C.DIM}\\1{C.RESET}', text)
-    # Inline code: `code`
-    text = re.sub(r'`([^`]+)`', f'{C.CYAN}\\1{C.RESET}', text)
+    # Inline code: `code` → cyan with dim background feel
+    text = re.sub(r'`([^`]+)`', f'{C.BOLD}{C.CYAN}\\1{C.RESET}', text)
     # Links: [text](url)
-    text = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', f'{C.UNDERLINE}{C.BLUE}\\1{C.RESET} {C.DIM}(\\2){C.RESET}', text)
+    text = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', f'{C.UNDERLINE}{C.BBLUE}\\1{C.RESET} {C.DIM}(\\2){C.RESET}', text)
     # Images: ![alt](url)
     text = re.sub(r'!\[([^\]]*)\]\([^)]+\)', f'{C.DIM}[Image: \\1]{C.RESET}', text)
     return text
