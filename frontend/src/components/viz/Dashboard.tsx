@@ -35,17 +35,19 @@ export function Dashboard() {
         form.append('file', file)
         try {
           const res = await fetch('/api/upload', { method: 'POST', body: form })
+          if (!res.ok) throw new Error(`Upload failed: ${res.status}`)
           const data = await res.json()
-          if (data.path) await loadImage(data.path)
+          if (data.saved_path) await loadImage(data.saved_path)
         } catch (err) { console.error('Upload failed:', err) }
       } else if (['csv','dat','xy','txt'].includes(ext)) {
         const form = new FormData()
         form.append('file', file)
         try {
           const res = await fetch('/api/upload', { method: 'POST', body: form })
+          if (!res.ok) throw new Error(`Upload failed: ${res.status}`)
           const data = await res.json()
-          if (data.path) {
-            const csv = await fetchCsvData(data.path)
+          if (data.saved_path) {
+            const csv = await fetchCsvData(data.saved_path)
             const cols = csv.columns
             addArtifact({
               id: `upload-${Date.now()}`, type: 'plotly', title: file.name,

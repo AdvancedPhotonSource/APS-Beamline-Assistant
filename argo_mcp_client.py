@@ -25,17 +25,204 @@ from apexa_agents import ArgoProvider, OrchestratorAgent, DEV_ONLY_MODELS
 load_dotenv()
 
 
+# ── ANSI terminal styling ──────────────────────────────────────────────────────
+class C:
+    """ANSI escape codes for terminal styling."""
+    BOLD      = "\033[1m"
+    DIM       = "\033[2m"
+    ITALIC    = "\033[3m"
+    UNDERLINE = "\033[4m"
+    RESET     = "\033[0m"
+    # Foreground
+    RED       = "\033[31m"
+    GREEN     = "\033[32m"
+    YELLOW    = "\033[33m"
+    BLUE      = "\033[34m"
+    MAGENTA   = "\033[35m"
+    CYAN      = "\033[36m"
+    WHITE     = "\033[37m"
+    GRAY      = "\033[90m"
+    # Bright
+    BRED      = "\033[91m"
+    BGREEN    = "\033[92m"
+    BYELLOW   = "\033[93m"
+    BBLUE     = "\033[94m"
+    BMAGENTA  = "\033[95m"
+    BCYAN     = "\033[96m"
+
+
 def clean_markdown(text: str) -> str:
-    """Strip markdown formatting for clean terminal output."""
+    """Render markdown as ANSI-colored terminal output."""
+    import re
+
+    lines = text.split('\n')
+    out = []
+    in_code_block = False
+    code_lang = ''
+
+    for line in lines:
+        # Code fence toggle
+        if re.match(r'^```', line):
+            if not in_code_block:
+                in_code_block = True
+                code_lang = line[3:].strip()
+                if code_lang:
+                    out.append(f"  {C.DIM}─── {code_lang} ───{C.RESET}")
+                else:
+                    out.append(f"  {C.DIM}───────────{C.RESET}")
+                continue
+            else:
+                in_code_block = False
+                out.append(f"  {C.DIM}───────────{C.RESET}")
+                continue
+
+        if in_code_block:
+            out.append(f"  {C.CYAN}{line}{C.RESET}")
+            continue
+
+        # Headers
+        m = re.match(r'^(#{1,6})\s+(.+)$', line)
+        if m:
+            level = len(m.group(1))
+            content = m.group(2)
+            if level == 1:
+                out.append(f"\n{C.BOLD}{C.BBLUE}{content.upper()}{C.RESET}")
+                out.append(f"{C.DIM}{'━' * min(len(content) + 4, 50)}{C.RESET}")
+            elif level == 2:
+                out.append(f"\n{C.BOLD}{C.WHITE}{content}{C.RESET}")
+                out.append(f"{C.DIM}{'─' * min(len(content) + 2, 40)}{C.RESET}")
+            else:
+                out.append(f"\n{C.BOLD}{content}{C.RESET}")
+            continue
+
+        # Horizontal rules
+        if re.match(r'^[-*_]{3,}\s*$', line):
+            out.append(f"{C.DIM}{'─' * 40}{C.RESET}")
+            continue
+
+        # Blockquotes
+        if line.startswith('>'):
+            content = line.lstrip('>').strip()
+            content = _inline_format(content)
+            out.append(f"  {C.DIM}│{C.RESET} {C.ITALIC}{content}{C.RESET}")
+            continue
+
+        # Bullet lists
+        m = re.match(r'^(\s*)[*-]\s+(.+)$', line)
+        if m:
+            indent = m.group(1)
+            content = _inline_format(m.group(2))
+            out.append(f"{indent}  {C.BLUE}•{C.RESET} {content}")
+            continue
+
+        # Numbered lists
+        m = re.match(r'^(\s*)(\d+)\.\s+(.+)$', line)
+        if m:
+            indent = m.group(1)
+            num = m.group(2)
+            content = _inline_format(m.group(3))
+            out.append(f"{indent}  {C.BLUE}{num}.{C.RESET} {content}")
+            continue
+
+        # Table separator: skip
+        if re.match(r'^\|[-:| ]+\|\s*$', line):
+            continue
+
+        # Table rows
+        if re.match(r'^\|.+\|\s*$', line):
+            cells = [c.strip() for c in line.strip('|').split('|')]
+            formatted = f"  {C.DIM}│{C.RESET} ".join(_inline_format(c) for c in cells)
+            out.append(f"  {C.DIM}│{C.RESET} {formatted} {C.DIM}│{C.RESET}")
+            continue
+
+        # Regular line: apply inline formatting
+        if line.strip():
+            out.append(_inline_format(line))
+        else:
+            out.append('')
+
+    result = '\n'.join(out)
+    # Collapse 3+ blank lines
+    result = re.sub(r'\n{3,}', '\n\n', result)
+    return result.strip()
+
+
+def _inline_format(text: str) -> str:
+    """Apply inline markdown formatting with ANSI codes."""
     import re
     # Bold: **text** or __text__
-    text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
-    text = re.sub(r'__(.+?)__', r'\1', text)
-    # Italic: *text* or _text_ (but not inside words like file_name)
-    text = re.sub(r'(?<!\w)\*(.+?)\*(?!\w)', r'\1', text)
-    # Headers: ### text -> text
-    text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
+    text = re.sub(r'\*\*(.+?)\*\*', f'{C.BOLD}\\1{C.RESET}', text)
+    text = re.sub(r'__(.+?)__', f'{C.BOLD}\\1{C.RESET}', text)
+    # Italic: *text* (not inside words)
+    text = re.sub(r'(?<!\w)\*(.+?)\*(?!\w)', f'{C.ITALIC}\\1{C.RESET}', text)
+    # Strikethrough: ~~text~~
+    text = re.sub(r'~~(.+?)~~', f'{C.DIM}\\1{C.RESET}', text)
+    # Inline code: `code`
+    text = re.sub(r'`([^`]+)`', f'{C.CYAN}\\1{C.RESET}', text)
+    # Links: [text](url)
+    text = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', f'{C.UNDERLINE}{C.BLUE}\\1{C.RESET} {C.DIM}(\\2){C.RESET}', text)
+    # Images: ![alt](url)
+    text = re.sub(r'!\[([^\]]*)\]\([^)]+\)', f'{C.DIM}[Image: \\1]{C.RESET}', text)
     return text
+
+
+def _print_help():
+    """Print styled help text for the CLI."""
+    def _sec(title):
+        print(f"\n  {C.BOLD}{C.BBLUE}{title}{C.RESET}")
+        print(f"  {C.DIM}{'─' * 50}{C.RESET}")
+
+    def _cmd(cmd, desc):
+        print(f"  {C.CYAN}{cmd:<40}{C.RESET} {C.DIM}{desc}{C.RESET}")
+
+    def _ex(text):
+        print(f"  {C.BLUE}•{C.RESET} {C.DIM}{text}{C.RESET}")
+
+    print(f"\n  {C.BOLD}{C.BCYAN}APEXA{C.RESET} {C.DIM}Command Reference{C.RESET}")
+
+    _sec("Analysis & Processing")
+    _cmd("analyze <query>", "AI-powered analysis")
+    _cmd("batch integrate <pattern> with ...", "Process multiple files")
+    _cmd("workflow list | <name>", "Predefined workflows")
+
+    _sec("Image Analysis")
+    _cmd("image analyze <file>", "Full image analysis with AI")
+    _cmd("image quality <file>", "Check signal, noise, saturation")
+    _cmd("image rings <file>", "Detect diffraction rings")
+
+    _sec("Plotting & Visualization")
+    _cmd("plot 2d <file>", "Plot 2D diffraction image")
+    _cmd("plot radial <file>", "Plot radial intensity profile")
+    _cmd("plot 1d <file>", "Plot 1D integrated pattern")
+    _cmd("plot compare <f1> <f2> ...", "Compare multiple patterns")
+
+    _sec("Monitoring")
+    _cmd("monitor start <directory>", "Watch for new images")
+    _cmd("monitor stop | status | check", "Control monitoring")
+
+    _sec("Sessions")
+    _cmd("session save [name]", "Save current session")
+    _cmd("session load <name>", "Load saved session")
+    _cmd("session list | summary", "Manage sessions")
+
+    _sec("Configuration")
+    _cmd("models", "Show available AI models")
+    _cmd("model <name>", "Switch AI model")
+    _cmd("tools", "List all analysis tools")
+    _cmd("servers", "Show connected servers")
+    _cmd("stats", "Interaction log stats")
+    _cmd("timing", "Toggle API response timing")
+    _cmd("clear", "Clear conversation history")
+    _cmd("quit", "Exit APEXA")
+
+    _sec("Natural Language Examples")
+    _ex('"Integrate data.ge5 with dark.ge5 using calib.txt"')
+    _ex('"What are the peaks at 12.5, 18.2, 25.8 degrees?"')
+    _ex('"Run FF-HEDM workflow in /path/to/data"')
+    _ex('"Calibrate detector using CeO2 standard"')
+    _ex('"Show motor positions"')
+
+    print(f"\n  {C.DIM}↑/↓ command history  •  Enter to send  •  Ctrl+C to exit{C.RESET}\n")
 
 
 class ExperimentContext:
@@ -1171,14 +1358,16 @@ class APEXAClient:
 
 
     def show_available_models(self):
-        print("\nAvailable Argo Models:")
-        print("=" * 50)
-        
+        print(f"\n  {C.BOLD}Available Argo Models{C.RESET}")
+        print(f"  {C.DIM}{'─' * 50}{C.RESET}")
+
         for provider, models in self.available_models.items():
-            print(f"\n{provider}:")
+            print(f"\n  {C.BOLD}{C.WHITE}{provider}{C.RESET}")
             for model_id, description in models.items():
-                status = "✅" if model_id == self.selected_model else "  "
-                print(f"{status} {model_id:15} - {description}")
+                if model_id == self.selected_model:
+                    print(f"  {C.BGREEN}● {C.BOLD}{model_id:18}{C.RESET} {C.DIM}{description}{C.RESET}")
+                else:
+                    print(f"  {C.DIM}  {C.RESET}{C.CYAN}{model_id:18}{C.RESET} {C.DIM}{description}{C.RESET}")
 
     def _is_valid_model(self, model_name: str) -> bool:
         for provider, models in self.available_models.items():
@@ -1189,9 +1378,10 @@ class APEXAClient:
     async def interactive_analysis_session(self):
         n_tools = len(self._available_tools)
         servers = ', '.join(self.sessions.keys())
-        print(f"\n  APEXA - Advanced Photon EXperiment Assistant")
-        print(f"  Model: {self.selected_model} ({self.environment})  |  {n_tools} tools  |  Servers: {servers}")
-        print(f"  Type 'help' for commands, 'quit' to exit\n")
+        print(f"\n  {C.BOLD}{C.BCYAN}APEXA{C.RESET} {C.DIM}— Advanced Photon EXperiment Assistant{C.RESET}")
+        print(f"  {C.DIM}{'─' * 48}{C.RESET}")
+        print(f"  {C.GRAY}Model:{C.RESET} {C.BOLD}{self.selected_model}{C.RESET} {C.DIM}({self.environment}){C.RESET}  {C.GRAY}│{C.RESET}  {C.BGREEN}{n_tools}{C.RESET} {C.GRAY}tools{C.RESET}  {C.GRAY}│{C.RESET}  {C.GRAY}Servers:{C.RESET} {C.CYAN}{servers}{C.RESET}")
+        print(f"  {C.DIM}Type {C.RESET}{C.CYAN}help{C.RESET}{C.DIM} for commands, {C.RESET}{C.CYAN}quit{C.RESET}{C.DIM} to exit{C.RESET}\n")
         
         # Command history
         history = []
@@ -1208,7 +1398,7 @@ class APEXAClient:
                     readline.add_history(cmd)
 
                 # Get input and clean any embedded newlines from paste
-                user_input = input("APEXA> ").strip().replace('\n', '').replace('\r', '')
+                user_input = input(f"{C.BOLD}{C.BCYAN}APEXA{C.RESET}{C.GRAY}>{C.RESET} ").strip().replace('\n', '').replace('\r', '')
                 
                 if not user_input:
                     continue
@@ -1222,11 +1412,11 @@ class APEXAClient:
                 elif user_input.lower() == 'clear':
                     if self.orchestrator:
                         self.orchestrator.clear_history()
-                    print("✓ Conversation history cleared")
+                    print(f"  {C.GREEN}✓{C.RESET} Conversation history cleared")
                 elif user_input.lower() == 'models':
                     self.show_available_models()
                 elif user_input.lower() == 'servers':
-                    print(f"Connected: {list(self.sessions.keys())}")
+                    print(f"  {C.GREEN}●{C.RESET} Connected: {C.CYAN}{', '.join(self.sessions.keys())}{C.RESET}")
 
                 # ===== NEW SMART COMMANDS =====
                 elif user_input.lower().startswith('batch '):
@@ -1274,12 +1464,12 @@ class APEXAClient:
                             **kwargs
                         )
 
-                        print(f"\n{'='*60}")
-                        print(f"Batch Processing Complete:")
-                        print(f"  Total: {results['total_files']}")
-                        print(f"  ✓ Successful: {results['successful']}")
-                        print(f"  ✗ Failed: {results['failed']}")
-                        print(f"{'='*60}\n")
+                        print(f"\n  {C.DIM}{'─' * 44}{C.RESET}")
+                        print(f"  {C.BOLD}Batch Processing Complete{C.RESET}")
+                        print(f"  {C.GRAY}Total:{C.RESET}       {results['total_files']}")
+                        print(f"  {C.GREEN}✓ Successful:{C.RESET} {C.BGREEN}{results['successful']}{C.RESET}")
+                        print(f"  {C.RED}✗ Failed:{C.RESET}     {C.BRED}{results['failed']}{C.RESET}")
+                        print(f"  {C.DIM}{'─' * 44}{C.RESET}\n")
 
                 elif user_input.lower().startswith('workflow '):
                     # Workflow command
@@ -1321,7 +1511,7 @@ class APEXAClient:
                     if action == 'save':
                         session_name = session_cmd[1] if len(session_cmd) > 1 else None
                         saved_file = self.context.save_session(session_name)
-                        print(f"✓ Session saved: {saved_file}")
+                        print(f"  {C.GREEN}✓{C.RESET} Session saved: {C.CYAN}{saved_file}{C.RESET}")
 
                     elif action == 'load':
                         if len(session_cmd) < 2:
@@ -1329,10 +1519,10 @@ class APEXAClient:
                             continue
                         session_name = session_cmd[1]
                         if self.context.load_session(session_name):
-                            print(f"✓ Session loaded: {session_name}")
+                            print(f"  {C.GREEN}✓{C.RESET} Session loaded: {C.CYAN}{session_name}{C.RESET}")
                             print(self.context.get_summary())
                         else:
-                            print(f"✗ Session not found: {session_name}")
+                            print(f"  {C.RED}✗{C.RESET} Session not found: {session_name}")
 
                     elif action == 'list':
                         sessions = self.context.list_sessions()
@@ -1420,33 +1610,34 @@ class APEXAClient:
                         continue
 
                     if action == 'analyze':
-                        print(f"\n📸 Analyzing image: {image_path}")
+                        print(f"\n  {C.CYAN}▸{C.RESET} Analyzing image: {C.BOLD}{image_path}{C.RESET}")
                         summary = self.image_analyzer.create_image_summary(image_path)
                         print(summary)
 
                     elif action == 'quality':
-                        print(f"\n🔍 Quality check: {image_path}")
+                        print(f"\n  {C.CYAN}▸{C.RESET} Quality check: {C.BOLD}{image_path}{C.RESET}")
                         quality = self.image_analyzer.analyze_image_quality(image_path)
                         if 'error' in quality:
-                            print(f"✗ Error: {quality['error']}")
+                            print(f"  {C.RED}✗{C.RESET} Error: {quality['error']}")
                         else:
-                            print(f"  Overall Quality: {quality['overall_quality']}")
-                            print(f"  Signal-to-Noise: {quality['signal_to_noise']:.1f}")
-                            print(f"  Saturation: {quality['saturation_percent']:.2f}%")
+                            qcolor = C.BGREEN if quality['overall_quality'] == 'good' else C.BYELLOW if quality['overall_quality'] == 'fair' else C.BRED
+                            print(f"  {C.GRAY}Quality:{C.RESET}     {qcolor}{C.BOLD}{quality['overall_quality']}{C.RESET}")
+                            print(f"  {C.GRAY}SNR:{C.RESET}         {quality['signal_to_noise']:.1f}")
+                            print(f"  {C.GRAY}Saturation:{C.RESET}  {quality['saturation_percent']:.2f}%")
                             if quality['issues']:
-                                print(f"  Issues:")
+                                print(f"  {C.YELLOW}Issues:{C.RESET}")
                                 for issue in quality['issues']:
-                                    print(f"    • {issue}")
+                                    print(f"    {C.YELLOW}•{C.RESET} {issue}")
 
                     elif action == 'rings':
-                        print(f"\n🔍 Ring detection: {image_path}")
+                        print(f"\n  {C.CYAN}▸{C.RESET} Ring detection: {C.BOLD}{image_path}{C.RESET}")
                         rings = self.image_analyzer.detect_rings_visual(image_path)
                         if 'error' in rings:
-                            print(f"✗ Error: {rings['error']}")
+                            print(f"  {C.RED}✗{C.RESET} Error: {rings['error']}")
                         else:
-                            print(f"  Rings Detected: {rings['rings_detected']}")
-                            print(f"  Ring Radii (pixels): {rings['ring_radii_pixels']}")
-                            print(f"  Assessment: {rings['quality']}")
+                            print(f"  {C.GRAY}Rings:{C.RESET}   {C.BGREEN}{rings['rings_detected']}{C.RESET}")
+                            print(f"  {C.GRAY}Radii:{C.RESET}   {rings['ring_radii_pixels']}")
+                            print(f"  {C.GRAY}Quality:{C.RESET} {rings['quality']}")
 
                     else:
                         print(f"Unknown image command: {action}")
@@ -1543,160 +1734,99 @@ class APEXAClient:
                     # Handle different plot types
                     if plot_type == '2d':
                         if len(files) != 1:
-                            print("2D plot requires exactly one image file")
+                            print(f"  {C.YELLOW}!{C.RESET} 2D plot requires exactly one image file")
                             continue
 
-                        print(f"\n📊 Plotting 2D image: {files[0]}")
+                        print(f"\n  {C.CYAN}▸{C.RESET} Plotting 2D image: {C.BOLD}{files[0]}{C.RESET}")
                         result = self.plotting.plot_2d_image(files[0])
 
                         if result['status'] == 'success':
-                            print(f"✓ Plot saved: {result['plot_saved']}")
-                            print(f"  Statistics:")
-                            print(f"    Mean: {result['statistics']['mean']:.1f}")
-                            print(f"    Max: {result['statistics']['max']:.1f}")
-                            print(f"    Std: {result['statistics']['std']:.1f}")
+                            print(f"  {C.GREEN}✓{C.RESET} Plot saved: {C.CYAN}{result['plot_saved']}{C.RESET}")
+                            print(f"  {C.GRAY}Mean:{C.RESET} {result['statistics']['mean']:.1f}  {C.GRAY}Max:{C.RESET} {result['statistics']['max']:.1f}  {C.GRAY}Std:{C.RESET} {result['statistics']['std']:.1f}")
                         else:
-                            print(f"✗ Error: {result['error']}")
+                            print(f"  {C.RED}✗{C.RESET} Error: {result['error']}")
 
                     elif plot_type == 'radial':
                         if len(files) != 1:
-                            print("Radial plot requires exactly one image file")
+                            print(f"  {C.YELLOW}!{C.RESET} Radial plot requires exactly one image file")
                             continue
 
-                        print(f"\n📊 Plotting radial profile: {files[0]}")
+                        print(f"\n  {C.CYAN}▸{C.RESET} Plotting radial profile: {C.BOLD}{files[0]}{C.RESET}")
                         result = self.plotting.plot_radial_profile(files[0])
 
                         if result['status'] == 'success':
-                            print(f"✓ {result['message']}")
-                            print(f"  Plot saved: {result['plot_saved']}")
+                            print(f"  {C.GREEN}✓{C.RESET} {result['message']}")
+                            print(f"  {C.GRAY}Saved:{C.RESET} {C.CYAN}{result['plot_saved']}{C.RESET}")
                         else:
-                            print(f"✗ Error: {result['error']}")
+                            print(f"  {C.RED}✗{C.RESET} Error: {result['error']}")
 
                     elif plot_type in ['1d', 'pattern']:
                         if len(files) != 1:
-                            print("1D pattern plot requires exactly one data file")
+                            print(f"  {C.YELLOW}!{C.RESET} 1D pattern plot requires exactly one data file")
                             continue
 
-                        print(f"\n📊 Plotting 1D pattern: {files[0]}")
+                        print(f"\n  {C.CYAN}▸{C.RESET} Plotting 1D pattern: {C.BOLD}{files[0]}{C.RESET}")
                         result = self.plotting.plot_1d_pattern(files[0])
 
                         if result['status'] == 'success':
-                            print(f"✓ {result['message']}")
-                            print(f"  Plot saved: {result['plot_saved']}")
+                            print(f"  {C.GREEN}✓{C.RESET} {result['message']}")
+                            print(f"  {C.GRAY}Saved:{C.RESET} {C.CYAN}{result['plot_saved']}{C.RESET}")
                         else:
-                            print(f"✗ Error: {result['error']}")
+                            print(f"  {C.RED}✗{C.RESET} Error: {result['error']}")
 
                     elif plot_type in ['compare', 'comparison']:
                         if len(files) < 2:
-                            print("Comparison requires at least 2 pattern files")
+                            print(f"  {C.YELLOW}!{C.RESET} Comparison requires at least 2 pattern files")
                             continue
 
-                        print(f"\n📊 Comparing {len(files)} patterns...")
+                        print(f"\n  {C.CYAN}▸{C.RESET} Comparing {C.BOLD}{len(files)}{C.RESET} patterns...")
                         result = self.plotting.plot_comparison(files)
 
                         if result['status'] == 'success':
-                            print(f"✓ {result['message']}")
-                            print(f"  Plot saved: {result['plot_saved']}")
+                            print(f"  {C.GREEN}✓{C.RESET} {result['message']}")
+                            print(f"  {C.GRAY}Saved:{C.RESET} {C.CYAN}{result['plot_saved']}{C.RESET}")
                         else:
-                            print(f"✗ Error: {result['error']}")
+                            print(f"  {C.RED}✗{C.RESET} Error: {result['error']}")
 
                 elif user_input.lower() == 'tools':
                     tools = self._available_tools
-                    print(f"\nAvailable tools ({len(tools)}):")
+                    print(f"\n  {C.BOLD}Available Tools{C.RESET} {C.DIM}({len(tools)}){C.RESET}")
+                    print(f"  {C.DIM}{'─' * 44}{C.RESET}")
                     for tool in tools:
-                        print(f"  - {tool['function']['name']}: {tool['function']['description'][:80]}")
+                        print(f"  {C.CYAN}{tool['function']['name']:<35}{C.RESET} {C.DIM}{tool['function']['description'][:60]}{C.RESET}")
                 elif user_input.lower() == 'stats':
                     stats = self.orchestrator.logger.stats()
                     if stats["total"] == 0:
-                        print("No interactions logged yet.")
+                        print(f"  {C.DIM}No interactions logged yet.{C.RESET}")
                     else:
-                        print(f"\n  APEXA Interaction Stats ({stats['total']} queries logged)")
-                        print(f"  Success rate: {stats['success_rate']}  |  Loop rate: {stats['loop_rate']}")
-                        print(f"  Avg tool calls: {stats['avg_tool_calls']}  |  Avg iterations: {stats['avg_iterations']}")
+                        print(f"\n  {C.BOLD}APEXA Stats{C.RESET} {C.DIM}({stats['total']} queries){C.RESET}")
+                        print(f"  {C.DIM}{'─' * 44}{C.RESET}")
+                        print(f"  {C.GRAY}Success:{C.RESET}    {C.BGREEN}{stats['success_rate']}{C.RESET}   {C.GRAY}│{C.RESET}  {C.GRAY}Loops:{C.RESET} {stats['loop_rate']}")
+                        print(f"  {C.GRAY}Avg tools:{C.RESET}  {stats['avg_tool_calls']}   {C.GRAY}│{C.RESET}  {C.GRAY}Avg iters:{C.RESET} {stats['avg_iterations']}")
                         if stats.get("agent_counts"):
-                            print(f"\n  Per-agent breakdown:")
+                            print(f"\n  {C.BOLD}Per-agent:{C.RESET}")
                             for agent, count in stats["agent_counts"].items():
                                 loop_rate = stats["agent_loop_rates"].get(agent, "0%")
-                                print(f"    {agent:20s}: {count:4d} queries, {loop_rate} looped")
+                                print(f"    {C.CYAN}{agent:20s}{C.RESET} {count:4d} queries  {C.DIM}{loop_rate} looped{C.RESET}")
                         print()
                 elif user_input.lower() == 'timing':
                     current = os.environ.get("APEXA_SHOW_TIMING")
                     if current:
                         del os.environ["APEXA_SHOW_TIMING"]
-                        print("Timing display OFF")
+                        print(f"  {C.GRAY}Timing display{C.RESET} {C.RED}OFF{C.RESET}")
                     else:
                         os.environ["APEXA_SHOW_TIMING"] = "1"
-                        print("Timing display ON")
+                        print(f"  {C.GRAY}Timing display{C.RESET} {C.GREEN}ON{C.RESET}")
                 elif user_input.lower() == 'help':
-                    print("""
-APEXA Smart Commands:
-
-📊 Analysis & Processing:
-  analyze <query>                      - Run AI-powered analysis
-  batch integrate <pattern> with ...   - Process multiple files at once
-  workflow list                        - Show available workflows
-  workflow <name>                      - Execute predefined workflow
-
-📸 Image Analysis (Multimodal):
-  image analyze <file>                 - Full image analysis with AI
-  image quality <file>                 - Check signal, noise, saturation
-  image rings <file>                   - Detect diffraction rings
-
-📈 Plotting & Visualization:
-  plot 2d <file>                       - Plot 2D diffraction image
-  plot radial <file>                   - Plot radial intensity profile
-  plot 1d <file>                       - Plot 1D integrated pattern
-  plot compare <file1> <file2> ...     - Compare multiple patterns
-
-🔄 Real-time Monitoring:
-  monitor start <directory>            - Start watching for new images
-  monitor stop                         - Stop monitoring
-  monitor status                       - Show monitoring stats
-  monitor check                        - Check for new files now
-
-💾 Session Management:
-  session save [name]                  - Save current session
-  session load <name>                  - Load saved session
-  session list                         - List all saved sessions
-  session summary                      - Show current session info
-
-🔧 Tools & Configuration:
-  models                               - Show available AI models
-  model <name>                         - Switch AI model
-  tools                                - List all analysis tools
-  servers                              - Show connected servers
-  stats                                - Show interaction log stats
-  clear                                - Clear conversation history
-  help                                 - Show this help
-  quit                                 - Exit APEXA
-
-💡 Natural Language Examples:
-  • "Integrate data.ge5 with dark.ge5 using calib.txt"
-  • "I have peaks at 12.5, 18.2, 25.8 degrees. What phases?"
-  • "Run FF-HEDM workflow in /path/to/data"
-  • "Analyze the diffraction rings in image.tif"
-  • "Plot the radial profile of sample.ge5"
-
-✨ Smart Features:
-  • Multimodal image analysis - AI can "see" your images!
-  • Advanced plotting & visualization with matplotlib
-  • Real-time feedback during beamtime
-  • Automatic error prevention and validation
-  • Proactive next-step suggestions after each analysis
-  • Session persistence with auto-save
-  • Smart caching for faster repeated operations
-  • Batch processing for multiple files
-
-Use ↑/↓ arrows for command history | Tab for completion
-                    """)
+                    _print_help()
                 elif user_input.startswith('model '):
                     model_name = user_input[6:].strip()
                     if self._is_valid_model(model_name):
                         self.selected_model = model_name
-                        print(f"Switched to: {model_name}")
+                        print(f"  {C.GREEN}✓{C.RESET} Switched to: {C.BOLD}{C.CYAN}{model_name}{C.RESET}")
                     else:
-                        print(f"✗ Invalid model: {model_name}")
-                        print("Available models: models")
+                        print(f"  {C.RED}✗{C.RESET} Invalid model: {model_name}")
+                        print(f"  {C.DIM}Type {C.RESET}{C.CYAN}models{C.RESET}{C.DIM} to see available{C.RESET}")
                 elif user_input.startswith('run '):
                     command = user_input[4:].strip()
 
@@ -1747,13 +1877,13 @@ Use ↑/↓ arrows for command history | Tab for completion
                     print(f"\n{clean_markdown(response)}\n")
                     
             except KeyboardInterrupt:
-                print("\nExiting...")
+                print(f"\n  {C.DIM}Exiting...{C.RESET}")
                 break
             except EOFError:
-                print("\nExiting...")
+                print(f"\n  {C.DIM}Exiting...{C.RESET}")
                 break
             except Exception as e:
-                print(f"Error: {str(e)}")
+                print(f"  {C.RED}✗{C.RESET} {C.BOLD}Error:{C.RESET} {str(e)}")
 
     async def cleanup(self):
         await self.exit_stack.aclose()
@@ -1780,13 +1910,13 @@ async def main():
         await client.connect_to_multiple_servers(server_configs)
         
         if not client.sessions:
-            print("Failed to connect to any servers")
+            print(f"  {C.RED}✗{C.RESET} Failed to connect to any servers")
             sys.exit(1)
             
         await client.interactive_analysis_session()
         
     except KeyboardInterrupt:
-        print("\nGoodbye!")
+        print(f"\n  {C.DIM}Goodbye!{C.RESET}")
     finally:
         await client.cleanup()
 

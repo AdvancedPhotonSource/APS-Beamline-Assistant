@@ -7,49 +7,36 @@ export function TypingIndicator() {
   if (!isLoading) return null
 
   return (
-    <div style={{ display: 'flex', gap: 10, padding: '10px 16px' }}>
-      <div style={{ marginTop: 2, flexShrink: 0 }}>
-        <ApexaLogo size={30} />
+    <div style={{ display: 'flex', gap: 12, padding: '14px 20px' }}>
+      <div style={{ marginTop: 4, flexShrink: 0 }}>
+        <ApexaLogo size={32} />
       </div>
-      <div style={{
-        borderRadius: 16,
-        padding: '10px 14px',
+      <div className="rounded-2xl shadow-sm animate-fade-in" style={{
+        padding: '12px 16px',
         maxWidth: '80%',
         background: 'var(--apexa-chat-assistant)',
         border: '1px solid var(--apexa-border)',
       }}>
         {progress ? (
           <div>
-            <div style={{ fontSize: 13, color: 'var(--apexa-text-2)', marginBottom: 6 }}>{progress.step}</div>
-            <div style={{
-              width: 180,
-              height: 6,
-              borderRadius: 3,
-              background: 'var(--apexa-surface-3)',
-              overflow: 'hidden',
-            }}>
-              <div style={{
-                height: '100%',
+            <div className="text-[13px] text-[var(--apexa-text-2)] mb-2 font-medium">{progress.step}</div>
+            <div className="w-48 h-1.5 rounded-full bg-[var(--apexa-surface-3)] overflow-hidden">
+              <div className="h-full rounded-full transition-all duration-500 ease-out" style={{
                 width: `${progress.percent}%`,
                 background: 'linear-gradient(90deg, #3b82f6, #8b5cf6)',
-                borderRadius: 3,
-                transition: 'width 500ms',
               }} />
             </div>
-            <div style={{ fontSize: 11, color: 'var(--apexa-text-muted)', marginTop: 4 }}>{progress.percent}%</div>
+            <div className="text-[11px] text-[var(--apexa-text-muted)] mt-1.5 tabular-nums">{progress.percent}%</div>
           </div>
         ) : (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ fontSize: 13, color: 'var(--apexa-text-2)' }}>APEXA is thinking</span>
-            <span style={{ display: 'flex', gap: 3 }}>
+          <div className="flex items-center gap-3">
+            <span className="text-[13px] text-[var(--apexa-text-2)]">Thinking</span>
+            <span className="flex gap-1">
               {[0, 1, 2].map((i) => (
-                <span key={i} style={{
-                  width: 6,
-                  height: 6,
-                  borderRadius: '50%',
-                  background: '#3b82f6',
+                <span key={i} className="w-1.5 h-1.5 rounded-full bg-blue-500" style={{
                   animation: 'bounce 1.4s infinite',
                   animationDelay: `${i * 160}ms`,
+                  opacity: 0.7,
                 }} />
               ))}
             </span>

@@ -179,7 +179,7 @@ class ArgoProvider:
         )
         elapsed = time.monotonic() - t0
         if os.environ.get("APEXA_SHOW_TIMING"):
-            print(f"  ⏱ {self.model} responded in {elapsed:.1f}s", flush=True)
+            print(f"  \033[2m⏱ {self.model} responded in {elapsed:.1f}s\033[0m", flush=True)
         if response.status_code != 200:
             print(f"  Argo API error ({response.status_code}): {response.text[:500]}", file=sys.stderr)
             response.raise_for_status()
@@ -707,13 +707,21 @@ class AgentRunner:
             if response.tool_calls:
                 messages.append(self._assistant_message(response, provider.model))
                 for tc in response.tool_calls:
-                    print(f"  → {tc.name}")
+                    print(f"  \033[36m▸\033[0m \033[1m{tc.name}\033[0m")
                     t0 = time.monotonic()
                     result = await self._execute(tc.name, tc.arguments)
                     dur = int((time.monotonic() - t0) * 1000)
                     ok = "error" not in result.lower()[:100]
                     if log_entry:
                         log_entry.add_tool_call(tc.name, tc.arguments, result, ok, dur)
+                    if tc.name == "list_directory":
+                        try:
+                            r = json.loads(result)
+                            listing = r.get("listing", "")
+                            if listing:
+                                print(f"\n{listing}\n")
+                        except (json.JSONDecodeError, KeyError):
+                            pass
                     messages.append(
                         self._tool_result_message(tc, result, provider.model)
                     )
@@ -752,24 +760,33 @@ class AgentRunner:
                         })
                         break
 
-                    print(f"  → {tc.name}")
+                    print(f"  \033[36m▸\033[0m \033[1m{tc.name}\033[0m")
                     t0 = time.monotonic()
                     result = await self._execute(tc.name, tc.arguments)
                     dur = int((time.monotonic() - t0) * 1000)
                     ok = "error" not in result.lower()[:100]
                     if log_entry:
                         log_entry.add_tool_call(tc.name, tc.arguments, result, ok, dur)
+                    # Print list_directory results directly to terminal with ANSI colors
+                    if tc.name == "list_directory":
+                        try:
+                            r = json.loads(result)
+                            listing = r.get("listing", "")
+                            if listing:
+                                print(f"\n{listing}\n")
+                        except (json.JSONDecodeError, KeyError):
+                            pass
+
                     # Truncate very long tool results to prevent context overflow
                     if len(result) > 3000:
                         result = result[:3000] + "\n... [truncated]"
                     # Build a context-aware follow-up prompt
                     if tc.name == "list_directory":
                         followup = (
-                            "You have the file listing above. "
-                            "Present the results to the user. Only call another tool if "
-                            "the user's ORIGINAL request requires it (e.g. 'calibrate', "
-                            "'integrate', 'refine'). If they just asked to list/show files, "
-                            "summarize what you found. Do NOT call list_directory again."
+                            "The directory listing was already printed to the terminal. "
+                            "Do NOT list the files again. Give a ONE-LINE summary like "
+                            "'Found N folders and M files' and optionally note anything "
+                            "relevant to the user's original request. Do NOT call list_directory again."
                         )
                     elif tc.name == "fetch_cif_from_mp":
                         followup = (

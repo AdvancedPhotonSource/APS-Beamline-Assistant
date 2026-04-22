@@ -254,15 +254,34 @@ async def list_directory(path: str = ".", show_hidden: bool = False, details: bo
                 n /= 1024
             return f"{n:.1f}T"
 
-        lines = []
-        hidden_count = 0
-        def sort_key(p):
-            try:
-                return (not p.is_symlink() and p.is_file(), p.name.lower())
-            except OSError:
-                return (True, p.name.lower())
+        # ANSI color codes for terminal-style output
+        BOLD = "\033[1m"
+        BLUE = "\033[1;34m"
+        CYAN = "\033[1;36m"
+        GREEN = "\033[1;32m"
+        YELLOW = "\033[33m"
+        MAGENTA = "\033[35m"
+        DIM = "\033[2m"
+        RESET = "\033[0m"
 
-        for item in sorted(dir_path.iterdir(), key=sort_key):
+        # File extension color mapping
+        ext_colors = {
+            '.py': GREEN, '.sh': GREEN, '.js': GREEN, '.ts': GREEN, '.tsx': GREEN,
+            '.csv': YELLOW, '.dat': YELLOW, '.xy': YELLOW, '.txt': YELLOW,
+            '.tif': MAGENTA, '.tiff': MAGENTA, '.ge': MAGENTA, '.ge2': MAGENTA,
+            '.ge3': MAGENTA, '.ge4': MAGENTA, '.ge5': MAGENTA, '.h5': MAGENTA,
+            '.hdf': MAGENTA, '.zarr': MAGENTA,
+            '.md': DIM, '.log': DIM, '.lock': DIM,
+            '.json': CYAN, '.toml': CYAN, '.yaml': CYAN, '.yml': CYAN,
+            '.pdf': "\033[31m",
+        }
+
+        dirs = []
+        files = []
+        symlinks = []
+        hidden_count = 0
+
+        for item in sorted(dir_path.iterdir(), key=lambda p: p.name.lower()):
             if item.name.startswith('.'):
                 if not show_hidden:
                     hidden_count += 1
@@ -272,25 +291,35 @@ async def list_directory(path: str = ".", show_hidden: bool = False, details: bo
                     target = os.readlink(item)
                     resolved = item.resolve()
                     if resolved.is_dir():
-                        lines.append(f"  {item.name}/ -> {target}")
+                        symlinks.append(f"  {CYAN}{item.name}/{RESET} {DIM}-> {target}{RESET}")
                     else:
                         sz = human_size(item.stat().st_size)
-                        lines.append(f"  {item.name:<50}  {sz:>6}  -> {target}")
+                        symlinks.append(f"  {item.name:<45}  {DIM}{sz:>6}  -> {target}{RESET}")
                 except OSError:
-                    lines.append(f"  {item.name:<50}  [broken symlink]")
+                    symlinks.append(f"  {item.name:<45}  {DIM}[broken symlink]{RESET}")
             elif item.is_dir():
-                lines.append(f"  {item.name}/")
+                dirs.append(f"  {BLUE}{BOLD}{item.name}/{RESET}")
             else:
                 try:
                     sz = human_size(item.stat().st_size)
                 except OSError:
                     sz = "?"
-                lines.append(f"  {item.name:<50}  {sz:>6}")
+                ext = item.suffix.lower()
+                color = ext_colors.get(ext, "")
+                reset = RESET if color else ""
+                files.append(f"  {color}{item.name:<45}{reset}  {DIM}{sz:>6}{RESET}")
 
-        output = f"{str(dir_path.absolute())}\n"
-        output += "\n".join(lines)
+        output = f"{BOLD}{str(dir_path.absolute())}{RESET}\n"
+        if dirs:
+            output += "\n".join(dirs) + "\n"
+        if symlinks:
+            output += "\n".join(symlinks) + "\n"
+        if files:
+            if dirs or symlinks:
+                output += "\n"
+            output += "\n".join(files)
         if hidden_count:
-            output += f"\n  ({hidden_count} hidden items not shown — use show_hidden=True)"
+            output += f"\n  {DIM}({hidden_count} hidden items — use show_hidden=True){RESET}"
 
         return format_result({
             "tool": "list_directory",
