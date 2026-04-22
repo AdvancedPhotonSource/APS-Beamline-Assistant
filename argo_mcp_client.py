@@ -1879,13 +1879,21 @@ class APEXAClient:
                             print(f"\n{result}\n")
                         else:
                             print("Core server not connected")
-                elif user_input.startswith('ls '):
-                    path = user_input[3:].strip()
+                elif user_input.startswith('ls') and (len(user_input) == 2 or user_input[2] == ' '):
+                    path = user_input[2:].strip() or "."
                     if "core" in self.sessions:
                         result = await self.execute_tool_call("list_directory", {"path": path})
-                        print(f"\n{result}\n")
+                        try:
+                            r = json.loads(result)
+                            listing = r.get("listing", "")
+                            if listing:
+                                print(f"\n{listing}\n")
+                            else:
+                                print(f"\n{result}\n")
+                        except (json.JSONDecodeError, TypeError):
+                            print(f"\n{result}\n")
                     else:
-                        print("Core server not connected")
+                        print(f"  {C.RED}✗{C.RESET} Core server not connected")
                 elif user_input:
                     response = await self.run_query(user_input)
                     print(f"\n{clean_markdown(response)}\n")
