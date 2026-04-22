@@ -126,6 +126,22 @@ def find_midas_python() -> str:
         "Set MIDAS_PYTHON env var to override, or run: conda env create -f MIDAS/environment.yml"
     )
 
+def _find_gsasii_conda_base() -> Optional[str]:
+    """Find conda base directory across common locations."""
+    conda_base = os.environ.get("CONDA_PREFIX_1") or os.environ.get("CONDA_PREFIX")
+    if not conda_base:
+        conda_exe = os.environ.get("CONDA_EXE")
+        if conda_exe:
+            conda_base = str(Path(conda_exe).parent.parent)
+    if not conda_base:
+        for loc in [Path.home() / "miniconda3", Path.home() / "anaconda3",
+                     Path.home() / "opt" / "miniconda3"]:
+            if loc.exists():
+                conda_base = str(loc)
+                break
+    return conda_base
+
+
 def _find_gsasii_path() -> Optional[str]:
     """Auto-detect GSAS-II installation for subprocess env.
 
@@ -141,32 +157,39 @@ def _find_gsasii_path() -> Optional[str]:
     gsas_path = os.environ.get("GSASII_PATH")
     if gsas_path:
         p = Path(gsas_path)
-        # If pointing to the GSASII package dir, return its parent
         if (p / "GSASIIscriptable.py").exists():
             return str(p.parent)
-        # If pointing to the root (contains GSASII/ subdir)
         if (p / "GSASII" / "GSASIIscriptable.py").exists():
             return str(p)
         return str(p)
 
     # 2. Conda env named GSASII
-    conda_base = os.environ.get("CONDA_PREFIX_1") or os.environ.get("CONDA_PREFIX")
-    if not conda_base:
-        conda_exe = os.environ.get("CONDA_EXE")
-        if conda_exe:
-            conda_base = str(Path(conda_exe).parent.parent)
-    if not conda_base:
-        for loc in [Path.home() / "miniconda3", Path.home() / "anaconda3",
-                     Path.home() / "opt" / "miniconda3"]:
-            if loc.exists():
-                conda_base = str(loc)
-                break
+    conda_base = _find_gsasii_conda_base()
     if conda_base:
         for sub in ["GSAS-II", "GSASII", "gsas2"]:
             candidate = Path(conda_base) / "envs" / "GSASII" / sub
             if (candidate / "GSASII" / "GSASIIscriptable.py").exists():
                 return str(candidate)
 
+    return None
+
+
+def find_gsasii_python() -> Optional[str]:
+    """Find Python interpreter from the GSASII conda env.
+
+    GSAS-II binaries (pyspg, pypowder) are compiled against a specific
+    Python version. The midas_env Python may be a different version, causing
+    binary load failures. This function returns the GSASII env's own Python
+    which is guaranteed to match the compiled binaries.
+
+    Falls back to midas_env Python if no GSASII conda env exists (e.g.,
+    pip-installed GSAS-II).
+    """
+    conda_base = _find_gsasii_conda_base()
+    if conda_base:
+        gsasii_python = Path(conda_base) / "envs" / "GSASII" / "bin" / "python"
+        if gsasii_python.exists():
+            return str(gsasii_python)
     return None
 
 
@@ -3596,6 +3619,77 @@ async def run_midas_viewer(
 # GSAS-II REFINEMENT & LIVE ANALYSIS
 # =============================================================================
 
+def _extract_instprm_from_zarr(zarr_path: str, output_dir: str) -> Optional[str]:
+    """Extract instrument parameters from a MIDAS .zarr.zip and write a .instprm file.
+
+    GSAS-II .xye import requires an instrument parameter file. MIDAS stores
+    these in the zarr under InstrumentParameters/ (Distance, Lam, U, V, W, etc.).
+    """
+    try:
+        instprm_path = Path(output_dir) / "_midas_extracted.instprm"
+
+        # Use the GSASII or midas_env Python to read the zarr (handles compression)
+        extract_script = (
+            "import sys, json\n"
+            "data_file = sys.argv[1]\n"
+            "try:\n"
+            "    import zarr\n"
+            "    try:\n"
+            "        fp = zarr.open(data_file, mode='r')\n"
+            "    except Exception:\n"
+            "        import asyncio\n"
+            "        async def _o():\n"
+            "            s = await zarr.storage.ZipStore.open(data_file, mode='r')\n"
+            "            return zarr.open_group(s, mode='r')\n"
+            "        fp = asyncio.run(_o())\n"
+            "    import numpy as np\n"
+            "    ip = fp['InstrumentParameters']\n"
+            "    params = {}\n"
+            "    for k in ['Lam','Polariz','U','V','W','X','Y','Z','SH_L','Distance']:\n"
+            "        if k in ip:\n"
+            "            params[k] = float(np.array(ip[k]).flat[0])\n"
+            "    print(json.dumps(params))\n"
+            "except Exception as e:\n"
+            "    print(json.dumps({'error': str(e)}))\n"
+        )
+
+        gsasii_python = find_gsasii_python()
+        python_exe = gsasii_python or find_midas_python()
+        env = get_midas_env()
+
+        result = subprocess.run(
+            [python_exe, "-c", extract_script, zarr_path],
+            capture_output=True, text=True, timeout=30, env=env,
+        )
+        if result.returncode != 0:
+            return None
+
+        params = json.loads(result.stdout.strip())
+        if "error" in params or "Lam" not in params:
+            return None
+
+        lines = [
+            "#GSAS-II instrument parameter file; do not add/delete items!",
+            "Type:PXC",
+            f"Lam:{params.get('Lam', 0.2):.6f}",
+            "Zero:0.0",
+            f"Polariz.:{params.get('Polariz', 0.99):.4f}",
+            f"U:{params.get('U', 1.163):.6f}",
+            f"V:{params.get('V', -0.126):.6f}",
+            f"W:{params.get('W', 0.063):.6f}",
+            f"X:{params.get('X', 0.0):.6f}",
+            f"Y:{params.get('Y', 0.0):.6f}",
+            f"Z:{params.get('Z', 0.0):.6f}",
+            f"SH/L:{params.get('SH_L', 0.002):.6f}",
+            "Azimuth:0.0",
+            "Bank:1",
+        ]
+        instprm_path.write_text("\n".join(lines) + "\n")
+        return str(instprm_path)
+    except Exception as e:
+        print(f"  Warning: Could not extract instprm from zarr: {e}", file=sys.stderr)
+        return None
+
 @mcp.tool()
 async def run_gsas_refinement(
     data_file: str,
@@ -3664,9 +3758,20 @@ async def run_gsas_refinement(
         out_path = Path(output_dir).expanduser().absolute()
         out_path.mkdir(parents=True, exist_ok=True)
 
-        midas_python = find_midas_python()
+        # Auto-extract instrument parameters from the zarr if no instprm provided
+        generated_instprm = None
+        if not instprm_file:
+            generated_instprm = _extract_instprm_from_zarr(str(data_path), str(out_path))
+            if generated_instprm:
+                instprm_file = generated_instprm
+                print(f"  Auto-extracted instrument params from zarr", file=sys.stderr)
+
+        # Prefer GSASII env Python — its binaries match the compiled .so ABI.
+        gsasii_python = find_gsasii_python()
+        python_exe = gsasii_python or find_midas_python()
+
         cmd = [
-            midas_python, str(refine_script),
+            python_exe, str(refine_script),
             "--data", str(data_path),
             "--cif", *resolved_cifs,
             "--out", str(out_path),
@@ -3688,14 +3793,21 @@ async def run_gsas_refinement(
         env = get_midas_env()
 
         print(f"  Running GSAS-II refinement: {data_path.name} → {out_path}", file=sys.stderr)
+        print(f"  Python: {python_exe}", file=sys.stderr)
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=600, env=env)
 
         if result.returncode != 0:
+            stderr = result.stderr[-1500:] if result.stderr else ""
+            error_msg = f"gsas_ii_refine.py failed (exit {result.returncode})"
+            if "Cannot import GSASIIscriptable" in stderr or "ModuleNotFoundError" in stderr:
+                error_msg += (". GSAS-II import failed — install via: "
+                              "conda install gsas2full -c briantoby -c conda-forge")
             return format_result({
                 "tool": "run_gsas_refinement",
                 "status": "error",
-                "error": f"gsas_ii_refine.py failed (exit {result.returncode})",
-                "stderr": result.stderr[-1000:] if result.stderr else "",
+                "error": error_msg,
+                "stderr": stderr,
+                "python_used": python_exe,
                 "command": " ".join(cmd),
             })
 
@@ -3707,7 +3819,7 @@ async def run_gsas_refinement(
                 summary = json.load(f)
 
         # List output files
-        output_files = [str(p) for p in out_path.iterdir() if p.is_file()]
+        output_files = sorted(str(p) for p in out_path.iterdir() if p.is_file())
 
         return format_result({
             "tool": "run_gsas_refinement",
@@ -3715,8 +3827,9 @@ async def run_gsas_refinement(
             "data_file": str(data_path),
             "cif_files": resolved_cifs,
             "output_dir": str(out_path),
-            "output_files": output_files[:20],
+            "output_files": output_files[:30],
             "summary": summary,
+            "python_used": python_exe,
             "stdout": result.stdout[-500:] if result.stdout else "",
         })
 
@@ -3819,16 +3932,22 @@ async def run_live_analysis(
         out_path = Path(output_dir).expanduser().absolute()
         out_path.mkdir(parents=True, exist_ok=True)
 
+        env = get_midas_env()
         midas_python = find_midas_python()
-        cmd = [
-            midas_python, str(pipeline_script),
-            "--backend", backend,
-            "-nCPUs", str(n_cpus),
-        ]
+        integration_stdout = ""
+        integration_stderr = ""
+        zarr_output = None
 
-        # Backend-specific args
-        if backend == "batch":
-            if not skip_integration:
+        # ── Stage 1: Integration (midas_env Python — has diplib/skimage/h5py) ──
+        if not skip_integration:
+            int_cmd = [
+                midas_python, str(pipeline_script),
+                "--backend", backend,
+                "-nCPUs", str(n_cpus),
+                "--skip-refinement",
+            ]
+
+            if backend == "batch":
                 if not data_file:
                     return format_result({"tool": "run_live_analysis", "status": "error",
                                           "error": "batch backend requires data_file"})
@@ -3836,94 +3955,138 @@ async def run_live_analysis(
                 if not data_path.exists():
                     return format_result({"tool": "run_live_analysis", "status": "error",
                                           "error": f"Data file not found: {data_path}"})
-                cmd.extend(["-paramFN", str(param_path), "-dataFN", str(data_path)])
-                cmd.extend(["-dataLoc", data_location, "-darkLoc", dark_location])
-        elif backend == "stream":
-            if not skip_integration:
-                cmd.extend(["--param-file", str(param_path)])
+                int_cmd.extend(["-paramFN", str(param_path), "-dataFN", str(data_path)])
+                int_cmd.extend(["-dataLoc", data_location, "-darkLoc", dark_location])
+            elif backend == "stream":
+                int_cmd.extend(["--param-file", str(param_path)])
                 if pva:
-                    cmd.append("--pva")
+                    int_cmd.append("--pva")
                     if pva_ip:
-                        cmd.extend(["--pva-ip", pva_ip])
+                        int_cmd.extend(["--pva-ip", pva_ip])
                 elif folder:
                     folder_path = Path(folder).expanduser().absolute()
                     if not folder_path.exists():
                         return format_result({"tool": "run_live_analysis", "status": "error",
                                               "error": f"Folder not found: {folder_path}"})
-                    cmd.extend(["--folder", str(folder_path)])
+                    int_cmd.extend(["--folder", str(folder_path)])
                 else:
                     return format_result({"tool": "run_live_analysis", "status": "error",
                                           "error": "stream backend requires --folder or --pva"})
                 if output_h5:
-                    cmd.extend(["--output-h5", output_h5])
+                    int_cmd.extend(["--output-h5", output_h5])
 
-        # Refinement args
-        if not skip_refinement and resolved_cifs:
-            cmd.extend(["--cif", *resolved_cifs])
-            cmd.extend(["--out", str(out_path)])
-            cmd.extend(["--bkg-terms", str(bkg_terms)])
-            if two_theta_limits and len(two_theta_limits) == 2:
-                cmd.extend(["--limits", str(two_theta_limits[0]), str(two_theta_limits[1])])
-            if no_atoms:
-                cmd.append("--no-atoms")
+            if dark_file:
+                dark_path = Path(dark_file).expanduser().absolute()
+                if dark_path.exists():
+                    if backend == "batch":
+                        int_cmd.extend(["-darkFN", str(dark_path)])
+                    else:
+                        int_cmd.extend(["--dark", str(dark_path)])
 
-        # Dark file
-        if dark_file:
-            dark_path = Path(dark_file).expanduser().absolute()
-            if dark_path.exists():
-                if backend == "batch":
-                    cmd.extend(["-darkFN", str(dark_path)])
-                else:
-                    cmd.extend(["--dark", str(dark_path)])
+            print(f"  Stage 1: Integration ({backend}): {param_path.name}", file=sys.stderr)
+            int_result = subprocess.run(int_cmd, capture_output=True, text=True,
+                                        timeout=1200, env=env)
+            integration_stdout = int_result.stdout
+            integration_stderr = int_result.stderr
 
-        # Pipeline control flags
-        if skip_integration:
-            cmd.append("--skip-integration")
+            if int_result.returncode != 0:
+                return format_result({
+                    "tool": "run_live_analysis",
+                    "status": "error",
+                    "stage": "integration",
+                    "error": f"Integration failed (exit {int_result.returncode})",
+                    "stderr": integration_stderr[-1500:] if integration_stderr else "",
+                    "command": " ".join(int_cmd),
+                })
+
+            # Find the produced .zarr.zip file
+            data_dir = data_path.parent if backend == "batch" else Path(folder).expanduser().absolute()
+            for zf in sorted(data_dir.rglob("*_caked.hdf.zarr.zip")):
+                zarr_output = str(zf)
+                break
+            if not zarr_output:
+                for zf in sorted(data_dir.rglob("*.zarr.zip")):
+                    zarr_output = str(zf)
+                    break
+        else:
+            # skip_integration: use provided zarr_file
             if zarr_file:
                 zarr_path = Path(zarr_file).expanduser().absolute()
                 if not zarr_path.exists():
                     return format_result({"tool": "run_live_analysis", "status": "error",
                                           "error": f"Zarr file not found: {zarr_path}"})
-                cmd.extend(["--zarr-file", str(zarr_path)])
-        if skip_refinement:
-            cmd.append("--skip-refinement")
+                zarr_output = str(zarr_path)
 
-        env = get_midas_env()
+        # ── Stage 2: Refinement (GSASII env Python — has matching binaries) ──
+        summary = {}
+        refinement_stdout = ""
+        if not skip_refinement and resolved_cifs and zarr_output:
+            refine_script = MIDAS_ROOT / "utils" / "gsas_ii_refine.py"
+            if not refine_script.exists():
+                return format_result({"tool": "run_live_analysis", "status": "error",
+                                      "error": f"gsas_ii_refine.py not found at {refine_script}"})
+
+            gsasii_python = find_gsasii_python()
+            refine_python = gsasii_python or midas_python
+
+            # Extract instrument params from zarr for GSAS-II
+            live_instprm = _extract_instprm_from_zarr(zarr_output, str(out_path))
+
+            ref_cmd = [
+                refine_python, str(refine_script),
+                "--data", zarr_output,
+                "--cif", *resolved_cifs,
+                "--out", str(out_path),
+                "--bkg-terms", str(bkg_terms),
+                "--nCPUs", str(n_cpus),
+            ]
+            if live_instprm:
+                ref_cmd.extend(["--instprm", live_instprm])
+            if two_theta_limits and len(two_theta_limits) == 2:
+                ref_cmd.extend(["--limits", str(two_theta_limits[0]), str(two_theta_limits[1])])
+            if no_atoms:
+                ref_cmd.append("--no-atoms")
+
+            print(f"  Stage 2: GSAS-II refinement → {out_path}", file=sys.stderr)
+            print(f"  Python: {refine_python}", file=sys.stderr)
+            ref_result = subprocess.run(ref_cmd, capture_output=True, text=True,
+                                        timeout=600, env=env)
+            refinement_stdout = ref_result.stdout
+
+            if ref_result.returncode != 0:
+                return format_result({
+                    "tool": "run_live_analysis",
+                    "status": "error",
+                    "stage": "refinement",
+                    "error": f"GSAS-II refinement failed (exit {ref_result.returncode})",
+                    "stderr": ref_result.stderr[-1500:] if ref_result.stderr else "",
+                    "zarr_file": zarr_output,
+                    "python_used": refine_python,
+                    "command": " ".join(ref_cmd),
+                })
+
+            summary_file = out_path / "refinement_summary.json"
+            if summary_file.exists():
+                with open(summary_file) as f:
+                    summary = json.load(f)
 
         mode_desc = "skip→refine" if skip_integration else f"{backend}→refine"
         if skip_refinement:
             mode_desc = f"{backend}→integrate-only"
-        print(f"  Running live analysis ({mode_desc}): {param_path.name}", file=sys.stderr)
 
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800, env=env)
-
-        if result.returncode != 0:
-            return format_result({
-                "tool": "run_live_analysis",
-                "status": "error",
-                "error": f"Pipeline failed (exit {result.returncode})",
-                "stderr": result.stderr[-1500:] if result.stderr else "",
-                "command": " ".join(cmd),
-            })
-
-        # Collect outputs
-        summary_file = out_path / "refinement_summary.json"
-        summary = {}
-        if summary_file.exists():
-            with open(summary_file) as f:
-                summary = json.load(f)
-
-        output_files = [str(p) for p in out_path.iterdir() if p.is_file()] if out_path.exists() else []
+        output_files = sorted(str(p) for p in out_path.iterdir() if p.is_file()) if out_path.exists() else []
 
         return format_result({
             "tool": "run_live_analysis",
             "status": "success",
+            "mode": mode_desc,
             "backend": backend,
             "param_file": str(param_path),
             "output_dir": str(out_path),
-            "output_files": output_files[:20],
+            "zarr_file": zarr_output,
+            "output_files": output_files[:30],
             "refinement_summary": summary,
-            "stdout": result.stdout[-500:] if result.stdout else "",
+            "stdout": (refinement_stdout or integration_stdout)[-500:],
         })
 
     except subprocess.TimeoutExpired:
