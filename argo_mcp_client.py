@@ -1433,29 +1433,42 @@ class APEXAClient:
         print(f"  {C.GRAY}Model:{C.RESET} {C.BOLD}{self.selected_model}{C.RESET} {C.DIM}({self.environment}){C.RESET}  {C.GRAY}│{C.RESET}  {C.BGREEN}{n_tools}{C.RESET} {C.GRAY}tools{C.RESET}  {C.GRAY}│{C.RESET}  {C.GRAY}Servers:{C.RESET} {C.CYAN}{servers}{C.RESET}")
         print(f"  {C.DIM}Type {C.RESET}{C.CYAN}help{C.RESET}{C.DIM} for commands, {C.RESET}{C.CYAN}quit{C.RESET}{C.DIM} to exit{C.RESET}\n")
         
-        # Command history
+        # Readline: tab completion + history
+        import readline, glob as _glob
+        _apexa_commands = sorted({
+            'help', 'quit', 'exit', 'clear', 'model', 'timing',
+            'history', 'status', 'verbose',
+        } | _SHELL_COMMANDS)
+
+        def _completer(text: str, state: int):
+            line = readline.get_line_buffer()
+            tokens = line.split()
+            if not tokens or (len(tokens) == 1 and not line.endswith(' ')):
+                matches = [c + ' ' for c in _apexa_commands if c.startswith(text)]
+            else:
+                matches = [p for p in _glob.glob(text + '*')]
+                matches = [m + '/' if os.path.isdir(m) else m + ' ' for m in matches]
+            return matches[state] if state < len(matches) else None
+
+        readline.set_completer(_completer)
+        readline.set_completer_delims(' \t\n;')
+        if sys.platform == 'darwin':
+            readline.parse_and_bind('bind ^I rl_complete')
+        else:
+            readline.parse_and_bind('tab: complete')
+
         history = []
-        history_index = -1
-        
+
         while True:
             try:
-                # Use input with readline support for history and tab completion
-                import readline
-
-                # Set up history
-                readline.clear_history()
-                for cmd in history:
-                    readline.add_history(cmd)
-
-                # Get input and clean any embedded newlines from paste
                 user_input = input(f"{C.BOLD}{C.BCYAN}APEXA{C.RESET}{C.GRAY}>{C.RESET} ").strip().replace('\n', '').replace('\r', '')
                 
                 if not user_input:
                     continue
                     
-                # Add to history
                 if user_input and (not history or history[-1] != user_input):
                     history.append(user_input)
+                    readline.add_history(user_input)
                 
                 if user_input.lower() == 'quit':
                     break
@@ -1917,9 +1930,16 @@ class APEXAClient:
                             print("Core server not connected")
                 elif _is_shell_command(user_input):
                     if "core" in self.sessions:
-                        cmd_name = user_input.split()[0]
+                        cmd = user_input
+                        parts = cmd.split()
+                        if parts[0] == 'ls':
+                            has_format = any(f in parts for f in ['-1', '-C', '-m', '-x'])
+                            if not has_format:
+                                parts.insert(1, '-C')
+                            parts.insert(1, '--color=always')
+                            cmd = ' '.join(parts)
                         print(f"  {C.DIM}$ {user_input}{C.RESET}")
-                        result = await self.execute_tool_call("run_command", {"command": user_input})
+                        result = await self.execute_tool_call("run_command", {"command": cmd})
                         try:
                             r = json.loads(result)
                             stdout = r.get("stdout", "")
