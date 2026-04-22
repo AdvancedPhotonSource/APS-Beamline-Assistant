@@ -793,10 +793,10 @@ class AgentRunner:
                     # Build a context-aware follow-up prompt
                     if tc.name == "list_directory":
                         followup = (
-                            "The directory listing was already printed to the terminal. "
-                            "Do NOT list the files again. Give a ONE-LINE summary like "
-                            "'Found N folders and M files' and optionally note anything "
-                            "relevant to the user's original request. Do NOT call list_directory again."
+                            "The directory listing is already displayed. Do NOT list files again. "
+                            "Write a short summary using markdown: bold **key filenames** and **folders**, "
+                            "group related files logically (e.g. calibration outputs, data files, configs). "
+                            "Mention the total count. Do NOT call list_directory again."
                         )
                     elif tc.name == "fetch_cif_from_mp":
                         followup = (
@@ -813,8 +813,9 @@ class AgentRunner:
                     else:
                         followup = (
                             "Proceed with the user's request using the result above. "
-                            "If the task is complete, summarize the results for the user. "
-                            "Do NOT repeat the same tool call."
+                            "If the task is complete, summarize the results using markdown formatting: "
+                            "bold **key values**, use bullet points for multiple items, "
+                            "and keep it concise. Do NOT repeat the same tool call."
                         )
                     messages.append({
                         "role": "user",

@@ -5,6 +5,8 @@ import { Dashboard } from './Dashboard'
 import { ResponseView } from './ResponseView'
 import { DiffractionViewer } from '@/components/viewer/DiffractionViewer'
 import { ViewerControls } from '@/components/viewer/ViewerControls'
+import { FileListCard } from '@/components/cards/FileListCard'
+import { ToolResultCard } from '@/components/cards/ToolResultCard'
 
 export function VizPanel() {
   const { artifacts, activeId, setActive, removeArtifact } = useVizStore()
@@ -50,7 +52,15 @@ export function VizPanel() {
 
           {active.type === 'table' && (
             <div style={{ padding: 16, height: '100%', overflow: 'auto' }}>
-              <DataTable data={active.data} />
+              {isDirectoryData(active.data) ? (
+                <FileListCard result={{ tool: 'list_directory', status: 'success', data: active.data as Record<string, unknown> }} />
+              ) : (
+                <ToolResultCard result={{
+                  tool: inferToolFromData(active.data),
+                  status: 'success',
+                  data: active.data as Record<string, unknown>,
+                }} />
+              )}
             </div>
           )}
 
@@ -73,30 +83,18 @@ export function VizPanel() {
   )
 }
 
-function DataTable({ data }: { data: unknown }) {
-  if (!data || typeof data !== 'object') return null
-  const entries = Object.entries(data as Record<string, unknown>)
+function isDirectoryData(data: unknown): boolean {
+  if (!data || typeof data !== 'object') return false
+  const d = data as Record<string, unknown>
+  return !!(d.listing || d.entries || d.tool === 'list_directory')
+}
 
-  return (
-    <div style={{ overflow: 'auto' }}>
-      <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
-        <thead>
-          <tr style={{ borderBottom: '2px solid var(--apexa-border)' }}>
-            <th style={{ textAlign: 'left', padding: '8px 12px', fontWeight: 600, color: 'var(--apexa-text-2)' }}>Parameter</th>
-            <th style={{ textAlign: 'left', padding: '8px 12px', fontWeight: 600, color: 'var(--apexa-text-2)' }}>Value</th>
-          </tr>
-        </thead>
-        <tbody>
-          {entries.map(([key, value]) => (
-            <tr key={key} style={{ borderBottom: '1px solid var(--apexa-border)' }}>
-              <td style={{ padding: '6px 12px', color: 'var(--apexa-text-2)' }}>{key.replace(/_/g, ' ')}</td>
-              <td style={{ padding: '6px 12px', color: 'var(--apexa-text)', fontFamily: 'var(--font-mono)', fontSize: 12 }}>
-                {typeof value === 'object' ? JSON.stringify(value) : String(value)}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  )
+function inferToolFromData(data: unknown): string {
+  if (!data || typeof data !== 'object') return 'unknown'
+  const d = data as Record<string, unknown>
+  if (d.calibrated_parameters || d.Lsd || d.BC) return 'midas_auto_calibrate'
+  if (d.d_spacing || d.wavelength || d.energy) return 'xray_calculate'
+  if (d.integration_result || d.lineout) return 'midas_integrate_2d_to_1d'
+  if (d.workflow) return 'hedm_workflow'
+  return 'unknown'
 }
