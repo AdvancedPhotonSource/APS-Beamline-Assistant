@@ -232,6 +232,11 @@ CALIBRATION_AGENT = APEXAAgent(
         "list_directory",
         "read_file",
         "get_file_info",
+        # Parameter validation
+        "validate_parameter_file",
+        "diagnose_parameter_file",
+        "inspect_dataset_file",
+        "enumerate_bragg_rings",
     ],
     instructions = """You are a detector calibration specialist for HEDM synchrotron experiments at APS.
 
@@ -247,6 +252,18 @@ Never say "I found the file, shall I proceed?" — just run it.
 Never call list_directory more than once per request.
 
 After calibration report: refined BC, Lsd, tilts, and convergence quality.
+
+PARAMETER VALIDATION:
+- validate param file: validate_parameter_file (checks required keys, ranges, cross-field rules)
+- diagnose param file: diagnose_parameter_file (LLM-ready diagnosis with fix suggestions)
+- extract params from data: inspect_dataset_file (auto-detect from GE/HDF5/Zarr)
+- Bragg ring listing: enumerate_bragg_rings (which rings hit the detector)
+
+When the user asks to validate, diagnose, or check a parameter file:
+1. Call validate_parameter_file or diagnose_parameter_file DIRECTLY with the directory path
+   (e.g. param_file="test1", pipeline="ff"). The tool auto-finds Parameters.txt or refined_MIDAS_params*.txt.
+   Do NOT call list_directory first — the tool handles file discovery.
+2. Pipeline arg is required (ff, nf, pf, ri) — infer from the user's query or default to ff.
 
 NEVER mention pyFAI, .poni files, or azimuthalIntegrator. This system uses MIDAS exclusively.
 Calibration output is refined_MIDAS_params*.txt — NOT .poni files.""",
@@ -279,6 +296,17 @@ ANALYSIS_AGENT = APEXAAgent(
         "create_midas_parameter_file",
         "validate_midas_installation",
         "batch_convert_ge_to_tiff",
+        # Parameter validation (pre-workflow)
+        "validate_parameter_file",
+        "diagnose_parameter_file",
+        "inspect_dataset_file",
+        "enumerate_bragg_rings",
+        # Stress/strain analysis (post-reconstruction)
+        "compute_grain_stress",
+        "get_material_stiffness",
+        "correct_d0_equilibrium",
+        "analyze_slip_systems",
+        "read_grains_summary",
         # General tools
         "xray_calculate",
         "list_directory",
@@ -304,15 +332,45 @@ Capabilities (use the matching tool for each):
 - Dream3D export: convert_nf_to_dream3d
 - X-ray calculations: xray_calculate (NEVER compute manually)
 - File operations: list_directory, read_file, get_file_info
+- Validate parameter file: validate_parameter_file (checks required keys, ranges, cross-field rules)
+- Diagnose parameter file: diagnose_parameter_file (LLM-ready diagnosis with fix suggestions)
+- Extract params from data: inspect_dataset_file (auto-detect from GE/HDF5/Zarr)
+- Bragg rings: enumerate_bragg_rings (which rings hit the detector)
+- Stress analysis: compute_grain_stress (Hooke's law + equilibrium from Grains.csv)
+- Material lookup: get_material_stiffness (elastic constants for Au, Cu, Al, Fe, Ni, Ti, W, Si, CeO2)
+- d0 correction: correct_d0_equilibrium (two-step isotropic strain + stress correction)
+- Slip systems: analyze_slip_systems (Schmid factors, Taylor factor, yield proximity)
+- Grain summary: read_grains_summary (statistics of a Grains.csv file)
+
+PARAMETER VALIDATION — When the user asks to validate, diagnose, or check a parameter file:
+1. Call validate_parameter_file or diagnose_parameter_file DIRECTLY with the directory path
+   (e.g. param_file="test1", pipeline="ff"). The tool auto-finds Parameters.txt or refined_MIDAS_params*.txt.
+   Do NOT call list_directory first — the tool handles file discovery.
+2. Pipeline arg is required (ff, nf, pf, ri) — infer from the user's query or default to ff.
+
+PRE-WORKFLOW VALIDATION — Before running any HEDM workflow (ff, nf, pf):
+1. ALWAYS call validate_parameter_file on the param file first
+2. If errors are found, call diagnose_parameter_file and fix issues before proceeding
+3. If the user has a dataset file, call inspect_dataset_file to verify consistency
+4. Call enumerate_bragg_rings to check ring coverage if needed
 
 Standard workflow:
   1. list_directory to find data files
-  2. midas_integrate_2d_to_1d for 2D → 1D (produces .zarr.zip)
-  3. run_gsas_refinement for peak fitting / lattice refinement on .zarr.zip
-  4. Or run_live_analysis for combined integration + refinement in one step
-  5. run_ff_hedm_full_workflow or run_nf_hedm_reconstruction
-  6. Post-process: match_grains, run_ff_grain_tracking, overlay_ff_nf_results, extract_grain_centroids
-  7. Export: convert_nf_to_dream3d
+  2. validate_parameter_file on the param file (catch errors before burning compute)
+  3. midas_integrate_2d_to_1d for 2D → 1D (produces .zarr.zip)
+  4. run_gsas_refinement for peak fitting / lattice refinement on .zarr.zip
+  5. Or run_live_analysis for combined integration + refinement in one step
+  6. run_ff_hedm_full_workflow or run_nf_hedm_reconstruction
+  7. Post-process: match_grains, run_ff_grain_tracking, overlay_ff_nf_results, extract_grain_centroids
+  8. Export: convert_nf_to_dream3d
+
+POST-RECONSTRUCTION STRESS ANALYSIS — After FF-HEDM or NF-HEDM completes:
+1. Call read_grains_summary to understand the grain population
+2. Call get_material_stiffness to look up the material (user must specify material)
+3. Call compute_grain_stress with the Grains.csv and material name
+4. If d0 correction is needed, call correct_d0_equilibrium
+5. For plasticity analysis, call analyze_slip_systems with the load direction
+Always report: grain count, mean/std von Mises stress, hydrostatic shift, d0 correction magnitude.
 
 GSAS-II refinement workflow:
   1. If no CIF file → call fetch_cif_from_mp to download one (you have this tool)
@@ -340,6 +398,8 @@ KNOWLEDGE_AGENT = APEXAAgent(
         "list_common_calibrants",
         "xray_calculate",
         "fetch_cif_from_mp",
+        "enumerate_bragg_rings",
+        "get_material_stiffness",
     ],
     instructions = """You are an HEDM knowledge expert with access to scientific literature,
 experimental logbooks, and crystallographic databases.
@@ -536,11 +596,22 @@ ARGUMENTS: {"motor": "m1"}
 - NEVER describe what you WOULD do — DO IT with TOOL_CALL
 - NEVER read_file to show plot data — launch the viewer with run_midas_viewer
 - NEVER use run_command for MIDAS viewers — always use run_midas_viewer tool
+- NEVER use run_command for GSAS-II, refinement, or peak fitting — always use run_gsas_refinement
+- NEVER use run_command for integration + refinement pipelines — always use run_live_analysis
 - NEVER try to construct Python paths manually — run_midas_viewer handles paths
 - NEVER mention pyFAI, .poni files, or azimuthalIntegrator — this system uses MIDAS only
 - NEVER hallucinate tools, files, or parameters that don't exist in tool results
 - NEVER claim to have read data from a file you didn't actually call read_file on
 - Only report information that came from actual tool results, not from your training data
+
+❌ SPECIFIC WRONG EXAMPLES:
+User: "run GSAS-II refinement on the integrated data"
+WRONG: TOOL_CALL: run_command  ARGUMENTS: {"command": "GSAS-II ..."}
+RIGHT: TOOL_CALL: run_gsas_refinement  ARGUMENTS: {"data_file": "/path/to.zarr.zip", "cif_files": ["/path/to.cif"]}
+
+User: "refine the caked data"
+WRONG: TOOL_CALL: run_command  ARGUMENTS: {"command": "python gsas_ii_refine.py ..."}
+RIGHT: TOOL_CALL: run_gsas_refinement  ARGUMENTS: {"data_file": "/path/to.zarr.zip", "cif_files": ["/path/to.cif"]}
 
 RULES:
 1. For ANY X-ray calculation → TOOL_CALL: xray_calculate
@@ -786,6 +857,24 @@ class AgentRunner:
                         })
                         break
 
+                    # Guard: intercept run_command misuse for dedicated tools
+                    if tc.name == "run_command":
+                        cmd_str = str(tc.arguments.get("command", "")).lower()
+                        if any(kw in cmd_str for kw in ["gsas", "refine", "rietveld", "gsas_ii_refine"]):
+                            result = json.dumps({
+                                "error": "Do NOT use run_command for GSAS-II refinement. "
+                                         "Use TOOL_CALL: run_gsas_refinement with data_file (.zarr.zip) and cif_files.",
+                                "correct_tool": "run_gsas_refinement",
+                            })
+                            messages.append({
+                                "role": "user",
+                                "content": f"[Tool Result for {tc.name}]\n{result}\n\n"
+                                           "You used the WRONG tool. Use run_gsas_refinement instead of run_command. "
+                                           "First call list_directory to find the .zarr.zip and .cif files, "
+                                           "then call run_gsas_refinement with those paths.",
+                            })
+                            continue
+
                     print(f"  \033[36m▸\033[0m \033[1m{tc.name}\033[0m")
                     t0 = time.monotonic()
                     result = await self._execute(tc.name, tc.arguments)
@@ -882,6 +971,7 @@ class OrchestratorAgent:
             "beam center", "detector distance", "lsd", "autocal",
             "stopping strain", "refined param", "bc_x", "bc_y",
             "tilt", "detector geometry",
+            "validate param", "diagnose", "inspect dataset",
         },
         "analysis": {
             "integrat", "hedm", "ff-hedm", "nf-hedm", "pf-hedm", "grain",
@@ -894,6 +984,10 @@ class OrchestratorAgent:
             "misorientation", "dream3d", "forward simulation",
             "gsas", "refine", "refinement", "rietveld", "rwp",
             "lattice param", "peak fit", "live analysis",
+            "stress", "stiffness", "von mises", "schmid",
+            "slip system", "d0 correct", "equilibrium",
+            "plasticity", "taylor factor", "grains.csv",
+            "validate param", "bragg ring",
         },
         "knowledge": {
             "explain", "what is", "what are", "how does", "how do",
