@@ -4346,11 +4346,15 @@ def _resolve_param_file(path_str: str) -> tuple[bool, str]:
 
     if path.is_dir():
         candidates = []
-        # Priority 1: Parameters.txt (standard name)
+        # Priority 1: Parameters.txt / parameters.txt (standard names)
+        # Use os.listdir for case-exact matching (macOS FS is case-insensitive)
+        try:
+            actual_names = set(os.listdir(path))
+        except OSError:
+            actual_names = set()
         for name in ["Parameters.txt", "parameters.txt"]:
-            p = path / name
-            if p.exists():
-                return True, str(p)
+            if name in actual_names:
+                return True, str(path / name)
         # Priority 2: refined_MIDAS_params*.txt (calibration output)
         candidates.extend(sorted(path.glob("refined_MIDAS_params*.txt"), reverse=True))
         # Priority 3: ps_*.txt (parameter set files)
