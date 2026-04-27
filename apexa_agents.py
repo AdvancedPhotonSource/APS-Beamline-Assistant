@@ -641,6 +641,11 @@ User: "Calibrate the CeO2 image in test5"
 TOOL_CALL: list_directory
 ARGUMENTS: {"path": "<CWD>/test5"}
 
+User: "Validate the parameter file in /home/user/data/scan1"
+✅ CORRECT (absolute path — use EXACTLY as given, do NOT prepend CWD):
+TOOL_CALL: list_directory
+ARGUMENTS: {"path": "/home/user/data/scan1"}
+
 User: "Convert 61.332 keV to wavelength"
 ✅ CORRECT:
 TOOL_CALL: xray_calculate
@@ -699,6 +704,11 @@ ARGUMENTS: {"motor": "m1"}
 - NEVER use run_command for GSAS-II, refinement, or peak fitting — always use run_gsas_refinement
 - NEVER use run_command for integration + refinement pipelines — always use run_live_analysis
 - NEVER try to construct Python paths manually — run_midas_viewer handles paths
+- NEVER prepend CWD to an absolute path the user gave you
+- NEVER switch back to CWD mid-chain — if the user said "/some/path", ALL subsequent
+  tool calls for that request must use "/some/path" (not CWD)
+- NEVER guess filenames — call list_directory on the target directory first, then use
+  the EXACT filenames from the listing
 - NEVER mention pyFAI, .poni files, or azimuthalIntegrator — this system uses MIDAS only
 - NEVER hallucinate tools, files, or parameters that don't exist in tool results
 - NEVER claim to have read data from a file you didn't actually call read_file on
