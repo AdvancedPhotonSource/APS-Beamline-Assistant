@@ -704,6 +704,15 @@ ARGUMENTS: {"motor": "m1"}
 - NEVER claim to have read data from a file you didn't actually call read_file on
 - Only report information that came from actual tool results, not from your training data
 
+⛔ ANTI-HALLUCINATION — READ THIS CAREFULLY:
+NEVER generate fake tool results. NEVER fabricate parameter values (Lsd, Wavelength,
+LatticeConstant, BC, PixelSize, etc.). NEVER produce validation reports, file contents,
+or analysis results from your training data. If the user asks you to validate, diagnose,
+read, or analyze a file — you MUST call the actual tool first. If you don't know a value,
+call the tool to look it up. Your training data is NOT a substitute for real tool results.
+Presenting fabricated data as real results is DANGEROUS at a beamline — wrong values can
+damage equipment or ruin experiments.
+
 ❌ SPECIFIC WRONG EXAMPLES:
 User: "run GSAS-II refinement on the integrated data"
 WRONG: TOOL_CALL: run_command  ARGUMENTS: {"command": "GSAS-II ..."}
@@ -844,6 +853,34 @@ class AgentRunner:
                 "role":    "user",
                 "content": f"[Tool Result for {tc.name}]\n{result}",
             }
+
+    @staticmethod
+    def _looks_like_hallucinated_result(text: str) -> bool:
+        """Detect model responses that look like fabricated tool output.
+
+        Returns True when the text contains patterns characteristic of fake
+        validation reports or parameter value listings that should only come
+        from actual tool calls.
+        """
+        t = text.lower()
+        hallucination_markers = [
+            "validation result",
+            "parameter file validation",
+            "validation report",
+            "diagnostic report",
+            "parameter analysis",
+        ]
+        param_value_patterns = 0
+        for kw in ["lsd:", "wavelength:", "latticeconstant:", "pixelsize:",
+                    "bc_x:", "bc_y:", "spacegroupnum:", "ringthresh:",
+                    "omegastart:", "omegastep:", "wedge:"]:
+            if kw in t:
+                param_value_patterns += 1
+
+        has_marker = any(m in t for m in hallucination_markers)
+        has_many_params = param_value_patterns >= 3
+
+        return has_marker and has_many_params
 
     # ── Main loop ────────────────────────────────────────────────────────────
 
@@ -1049,7 +1086,24 @@ class AgentRunner:
                     })
                 continue
 
-            # ── No tool calls at all — return final text ──
+            # ── No tool calls at all — check for hallucination, then return ──
+            if text and self._looks_like_hallucinated_result(text):
+                messages.append({"role": "assistant", "content": text})
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "⚠️ STOP — you just generated what looks like a tool result "
+                        "(validation report, parameter values, or file contents) WITHOUT "
+                        "actually calling a tool. This is hallucinated data and may be WRONG.\n\n"
+                        "You MUST call the actual tool to get real results. For example:\n"
+                        "- To validate: TOOL_CALL: validate_parameter_file\n"
+                        "- To diagnose: TOOL_CALL: diagnose_parameter_file\n"
+                        "- To read a file: TOOL_CALL: read_file\n"
+                        "- To list files: TOOL_CALL: list_directory\n\n"
+                        "Call the appropriate tool NOW with the correct arguments."
+                    ),
+                })
+                continue
             return text or "Analysis complete."
 
         # Extract last assistant text if iterations exhausted
