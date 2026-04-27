@@ -20,6 +20,12 @@ import logging
 import traceback
 from mcp.server.fastmcp import FastMCP
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 # Suppress verbose MCP server logging
 logging.getLogger("mcp").setLevel(logging.WARNING)
 logging.getLogger("fastmcp").setLevel(logging.WARNING)
@@ -2157,6 +2163,25 @@ async def get_midas_workflow_status(
 # This server now contains ONLY official MIDAS tools
 # =============================================================================
 
+def _strip_empty_value_lines(param_path: Path):
+    """Remove lines with a key but no value (e.g. 'Dark \\n') that crash ffGenerateZipRefactor.py."""
+    try:
+        lines = param_path.read_text().splitlines()
+        cleaned = []
+        for line in lines:
+            stripped = line.strip()
+            if not stripped or stripped.startswith('#'):
+                cleaned.append(line)
+                continue
+            parts = stripped.split(None, 1)
+            if len(parts) == 1 and not stripped[0].isdigit():
+                continue
+            cleaned.append(line)
+        param_path.write_text('\n'.join(cleaned) + '\n')
+    except Exception:
+        pass
+
+
 @mcp.tool()
 async def midas_integrate_2d_to_1d(
     image_file: str,
@@ -2211,6 +2236,26 @@ async def midas_integrate_2d_to_1d(
                 return format_result({"tool": "midas_integrate_2d_to_1d", "status": "error",
                                       "error": f"Parameter file not found: {param_path}"})
 
+        # Validate param file is actually a MIDAS parameter file (not CSV/JSON/etc.)
+        if param_path.suffix.lower() in ('.csv', '.json', '.log', '.bin', '.h5', '.hdf', '.tif'):
+            return format_result({"tool": "midas_integrate_2d_to_1d", "status": "error",
+                                  "error": f"Invalid parameter file: {param_path.name} (suffix {param_path.suffix}). "
+                                           f"Use refined_MIDAS_params*.txt from midas_auto_calibrate."})
+        try:
+            with open(param_path) as f:
+                first_500 = f.read(500)
+            if not any(kw in first_500 for kw in ["Lsd", "Wavelength", "NrPixels", "BC "]):
+                return format_result({"tool": "midas_integrate_2d_to_1d", "status": "error",
+                                      "error": f"Parameter file {param_path.name} is missing critical keys "
+                                               f"(Lsd, Wavelength, NrPixels, BC). "
+                                               f"Use refined_MIDAS_params*.txt from midas_auto_calibrate."})
+        except UnicodeDecodeError:
+            return format_result({"tool": "midas_integrate_2d_to_1d", "status": "error",
+                                  "error": f"Parameter file {param_path.name} is a binary file, not a text param file."})
+
+        # Strip empty-value lines that crash ffGenerateZipRefactor.py
+        _strip_empty_value_lines(param_path)
+
         # Find integrator.py — v10 location: FF_HEDM/workflows/
         integrator_script = MIDAS_ROOT / "FF_HEDM" / "workflows" / "integrator.py"
         if not integrator_script.exists():
@@ -2220,6 +2265,12 @@ async def midas_integrate_2d_to_1d(
         out_dir = Path(result_folder).expanduser().absolute() if result_folder \
                   else image_path.parent / "integration"
         out_dir.mkdir(parents=True, exist_ok=True)
+
+        # Extract file number from basename only (not full path) to avoid
+        # matching numbers in parent directories (e.g. /Users/b324240/ → 324240)
+        basename = image_path.stem
+        file_nr_match = re.search(r'(\d{6})', basename)
+        file_nr = int(file_nr_match.group(1)) if file_nr_match else None
 
         midas_python = find_midas_python()
         cmd = [
@@ -2233,6 +2284,8 @@ async def midas_integrate_2d_to_1d(
             "-convertFiles", "1" if convert_files else "0",
             "-writeMat",     "0",
         ]
+        if file_nr is not None:
+            cmd += ["-startFileNr", str(file_nr), "-endFileNr", str(file_nr)]
         if dark_file:
             dark_path = Path(dark_file).expanduser().absolute()
             if not dark_path.exists():
@@ -3019,6 +3072,13 @@ async def midas_batch_integrate(
                 "status": "error",
                 "error": f"Parameter file not found: {param_path}"
             })
+
+        if param_path.suffix.lower() in ('.csv', '.json', '.log', '.bin', '.h5', '.hdf', '.tif'):
+            return format_result({"tool": "midas_batch_integrate", "status": "error",
+                                  "error": f"Invalid parameter file: {param_path.name} (suffix {param_path.suffix}). "
+                                           f"Use refined_MIDAS_params*.txt from midas_auto_calibrate."})
+
+        _strip_empty_value_lines(param_path)
 
         # Find MIDAS integrator.py via MIDAS_ROOT (set from .env)
         if not MIDAS_ROOT:
