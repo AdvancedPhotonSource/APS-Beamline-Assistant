@@ -2936,7 +2936,7 @@ async def midas_auto_calibrate(
 
         message = f"✓ Auto-calibration completed successfully!\n\n"
         message += f"Refined Parameters:\n"
-        message += f"  Beam Center: ({bc_x:.2f}, {bc_y:.2f}) pixels\n"
+        message += f"  Beam Center: BC_Y={bc_y:.2f}, BC_X={bc_x:.2f} pixels\n"
         message += f"  Distance (Lsd): {lsd_mm:.2f} mm\n"
         if calibrated_params.get('tx'):
             message += f"  Tilts: tx={calibrated_params['tx']:.6f}, ty={calibrated_params['ty']:.6f}, tz={calibrated_params['tz']:.6f} rad\n"
