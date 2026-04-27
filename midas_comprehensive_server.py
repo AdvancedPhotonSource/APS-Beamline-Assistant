@@ -4285,7 +4285,16 @@ async def fetch_cif_from_mp(
                 d.energy_above_hull or 999
             ))
             for doc in docs_sorted[:3]:
-                cif_str = doc.structure.to(fmt="cif")
+                # Convert to conventional standard cell with proper space group
+                # (MP stores primitive P1 cells; GSAS-II needs conventional with symmetry)
+                try:
+                    from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+                    from pymatgen.io.cif import CifWriter
+                    sga = SpacegroupAnalyzer(doc.structure)
+                    conv_struct = sga.get_conventional_standard_structure()
+                    cif_str = str(CifWriter(conv_struct, symprec=0.1))
+                except Exception:
+                    cif_str = doc.structure.to(fmt="cif")
                 mp_id = doc.material_id
                 cif_filename = f"{doc.formula_pretty}_{mp_id}.cif"
                 cif_path = out_path / cif_filename
