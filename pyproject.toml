@@ -32,6 +32,8 @@ dependencies = [
     "trame-vuetify>=2.7.0",
     "trame-plotly>=3.0.0",
     "trame-components>=2.4.0",
+    # CLI
+    "prompt-toolkit>=3.0.0",
     # Knowledge base / RAG
     "chromadb>=0.4.0",
     "sentence-transformers>=2.2.0",

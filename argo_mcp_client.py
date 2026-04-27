@@ -17,6 +17,11 @@ from contextlib import AsyncExitStack
 from datetime import datetime
 from pathlib import Path
 
+from prompt_toolkit import PromptSession
+from prompt_toolkit.history import InMemoryHistory
+from prompt_toolkit.completion import Completer, Completion
+from prompt_toolkit.formatted_text import ANSI
+
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from dotenv import load_dotenv
@@ -1435,42 +1440,49 @@ class APEXAClient:
         print(f"  {C.GRAY}Model:{C.RESET} {C.BOLD}{self.selected_model}{C.RESET} {C.DIM}({self.environment}){C.RESET}  {C.GRAY}│{C.RESET}  {C.BGREEN}{n_tools}{C.RESET} {C.GRAY}tools{C.RESET}  {C.GRAY}│{C.RESET}  {C.GRAY}Servers:{C.RESET} {C.CYAN}{servers}{C.RESET}")
         print(f"  {C.DIM}Type {C.RESET}{C.CYAN}help{C.RESET}{C.DIM} for commands, {C.RESET}{C.CYAN}quit{C.RESET}{C.DIM} to exit{C.RESET}\n")
         
-        # Readline: tab completion + history
-        import readline, glob as _glob
+        # prompt_toolkit: tab completion, history, bracketed paste
+        import glob as _glob
+
+        class _APEXACompleter(Completer):
+            def __init__(self, commands):
+                self._commands = sorted(commands)
+
+            def get_completions(self, document, complete_event):
+                text = document.text_before_cursor
+                word = document.get_word_before_cursor(WORD=True)
+                tokens = text.split()
+                if not tokens or (len(tokens) == 1 and not text.endswith(' ')):
+                    for cmd in self._commands:
+                        if cmd.startswith(word):
+                            yield Completion(cmd, start_position=-len(word))
+                else:
+                    for path in _glob.glob(word + '*'):
+                        display = path + '/' if os.path.isdir(path) else path
+                        yield Completion(display, start_position=-len(word))
+
         _apexa_commands = sorted({
             'help', 'quit', 'exit', 'clear', 'model', 'timing',
             'history', 'status', 'verbose',
         } | _SHELL_COMMANDS)
 
-        def _completer(text: str, state: int):
-            line = readline.get_line_buffer()
-            tokens = line.split()
-            if not tokens or (len(tokens) == 1 and not line.endswith(' ')):
-                matches = [c + ' ' for c in _apexa_commands if c.startswith(text)]
-            else:
-                matches = [p for p in _glob.glob(text + '*')]
-                matches = [m + '/' if os.path.isdir(m) else m + ' ' for m in matches]
-            return matches[state] if state < len(matches) else None
-
-        readline.set_completer(_completer)
-        readline.set_completer_delims(' \t\n;')
-        if sys.platform == 'darwin':
-            readline.parse_and_bind('bind ^I rl_complete')
-        else:
-            readline.parse_and_bind('tab: complete')
+        pt_session = PromptSession(
+            history=InMemoryHistory(),
+            completer=_APEXACompleter(_apexa_commands),
+            enable_history_search=True,
+        )
+        prompt_text = ANSI(f"{C.BOLD}{C.BCYAN}APEXA{C.RESET}{C.GRAY}>{C.RESET} ")
 
         history = []
 
         while True:
             try:
-                user_input = input(f"{C.BOLD}{C.BCYAN}APEXA{C.RESET}{C.GRAY}>{C.RESET} ").strip().replace('\n', '').replace('\r', '')
+                user_input = (await pt_session.prompt_async(prompt_text)).strip()
                 
                 if not user_input:
                     continue
                     
                 if user_input and (not history or history[-1] != user_input):
                     history.append(user_input)
-                    readline.add_history(user_input)
                 
                 if user_input.lower() == 'quit':
                     break
@@ -1513,7 +1525,7 @@ class APEXAClient:
                         continue
 
                     print(f"Found {len(files)} files to process")
-                    confirm = input(f"Process all {len(files)} files? (yes/no): ")
+                    confirm = await pt_session.prompt_async(f"Process all {len(files)} files? (yes/no): ")
 
                     if confirm.lower() in ['yes', 'y']:
                         kwargs = {}
