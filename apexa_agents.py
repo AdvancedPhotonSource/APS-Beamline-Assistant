@@ -38,6 +38,74 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional, Callable, Awaitable
 from interaction_logger import InteractionLogger, InteractionEntry
 
+# ── Compact directory listing ───────────────────────────────────────────────
+
+_EXT_GROUPS = {
+    "Data":    {".tif",".tiff",".ge",".ge1",".ge2",".ge3",".ge4",".ge5",
+                ".h5",".hdf",".hdf5",".zarr",".nxs",".cbf",".zip"},
+    "Config":  {".txt",".toml",".yaml",".yml",".json",".cfg",".ini",".env"},
+    "Results": {".csv",".dat",".xy",".bin",".mic",".out"},
+    "Scripts": {".py",".sh",".bash"},
+    "Docs":    {".md",".rst",".pdf",".log"},
+}
+
+def _compact_listing(parsed: dict, max_preview: int = 3) -> str:
+    """Build a grouped compact summary from list_directory JSON result.
+
+    Shows full listing if ≤20 files, otherwise groups by file type
+    with preview filenames and a hint to use 'ls' for the full listing.
+    """
+    DIM = "\033[2m"
+    BOLD = "\033[1m"
+    BLUE = "\033[1;34m"
+    RESET = "\033[0m"
+
+    path = parsed.get("path", "")
+    dirs = parsed.get("dirs", [])
+    files = parsed.get("files", [])
+
+    if not files and not dirs:
+        return parsed.get("listing", "")
+
+    if len(files) <= 20:
+        return parsed.get("listing", "")
+
+    lines = [f"{BOLD}{path}{RESET}"]
+
+    if dirs:
+        dir_strs = [f"{BLUE}{BOLD}{d}{RESET}" for d in dirs]
+        lines.append("  " + "  ".join(dir_strs))
+        lines.append("")
+
+    groups: dict = {cat: [] for cat in _EXT_GROUPS}
+    groups["Other"] = []
+
+    for fname in files:
+        ext = Path(fname).suffix.lower()
+        placed = False
+        for cat, exts in _EXT_GROUPS.items():
+            if ext in exts:
+                groups[cat].append(fname)
+                placed = True
+                break
+        if not placed:
+            groups["Other"].append(fname)
+
+    for cat, flist in groups.items():
+        if not flist:
+            continue
+        preview = flist[:max_preview]
+        preview_str = "  ".join(preview)
+        if len(flist) > max_preview:
+            preview_str += f"  {DIM}+{len(flist) - max_preview} more{RESET}"
+        lines.append(f"  {cat} ({len(flist)}):  {preview_str}")
+
+    hint_path = Path(path).name or path
+    lines.append(f"  {DIM}{len(dirs)} directories, {len(files)} files — type 'ls {hint_path}' for full listing{RESET}")
+
+    return "\n".join(lines)
+
+
 # ── Constants ───────────────────────────────────────────────────────────────
 
 PROD_URL = "https://apps.inside.anl.gov/argoapi/api/v1/resource/chat/"
@@ -375,7 +443,11 @@ Always report: grain count, mean/std von Mises stress, hydrostatic shift, d0 cor
 GSAS-II refinement workflow:
   1. If no CIF file → call fetch_cif_from_mp to download one (you have this tool)
   2. Read the CIF path from the fetch result
-  3. IMMEDIATELY call run_gsas_refinement with data_file=<.zarr.zip path> and cif_files=[<CIF path>]
+  3. IMMEDIATELY call run_gsas_refinement with:
+     - data_file=<.zarr.zip path>
+     - cif_files=[<CIF path>]
+     - two_theta_limits=[2.0, 15.0] (ALWAYS set — without limits Rwp will be ~100%)
+     - n_cpus=8 (parallelize across histograms)
   4. NEVER use run_command for GSAS-II — always use run_gsas_refinement
 
 CRITICAL: After calling a tool, read the result carefully. Do NOT call list_directory
@@ -479,22 +551,34 @@ USE run_midas_viewer for ALL plotting. It handles MIDAS paths and Python automat
 Do NOT use run_command or check_environment — run_midas_viewer does everything.
 Do NOT read data files — the viewer GUI displays the data. Your job is to LAUNCH the viewer, not analyze data.
 
+⚠️ CRITICAL: Call run_midas_viewer EXACTLY ONCE per request. Pick the single BEST viewer. NEVER launch multiple viewers.
+
 STEP 1: Find the data file. Call list_directory if needed.
-STEP 2: Match the file to the correct viewer name:
+STEP 2: Match the file to the correct viewer — pick ONE:
 
-| File pattern | viewer name |
-|---|---|
-| *_corr.csv | plot_calibrant_results |
-| *_lineout.xy | plot_lineout_results |
-| *_lineout.xy (compare) | plot_lineout_comparison |
-| *_lineout.bin (live) | live_viewer |
-| *_caked.hdf.zarr.zip | plot_integrator_peaks |
-| *_caked_peaks.h5 | plot_caked_peaks |
-| Raw .tif/.ge/.h5 | ff_asym_qt |
-| Grains.csv + .zarr | interactiveFFplotting |
-| .mic/.map (NF) | nf_qt |
+| File pattern | viewer name | When to use |
+|---|---|---|
+| *_corr.csv | plot_calibrant_results | Calibration fit, calibration QC, lattice-vs-η |
+| *_lineout.xy | plot_lineout_results | 1D diffraction profile, lineout, peaks |
+| *_lineout.xy (compare) | plot_lineout_comparison | Compare calibrant vs integrator lineouts |
+| *_lineout.bin (live) | live_viewer | Real-time GPU streaming monitor |
+| *_caked.hdf.zarr.zip | plot_caked_peaks | Caked data, integrated image, 2D heatmap (PREFERRED for caked data) |
+| *_caked_peaks.h5 | plot_caked_peaks | Peak fitting results |
+| Raw .tif/.ge/.h5 | ff_asym_qt | Raw detector image, diffraction image, ring overlays |
+| Grains.csv + .zarr | interactiveFFplotting | FF-HEDM grain map, grain results |
+| .mic/.map (NF) | nf_qt | NF-HEDM microstructure |
 
-STEP 3: Call run_midas_viewer with the viewer name and data file path. That's it.
+DISAMBIGUATION — when the user request is ambiguous, pick ONE using these rules:
+- "calibrated image" / "calibration results" / "calibration fit" → plot_calibrant_results
+- "caked image" / "caked data" / "integrated data" / "integration result" → plot_caked_peaks
+- "lineout" / "1D profile" / "diffraction pattern" → plot_lineout_results
+- "raw image" / "diffraction image" / "detector image" → ff_asym_qt
+- "grain map" / "grain results" / "FF results" → interactiveFFplotting
+- "microstructure" / "NF results" → nf_qt
+- For caked .zarr.zip files: ALWAYS use plot_caked_peaks (interactive Qt viewer with heatmap + profile + peak table). Do NOT use plot_integrator_peaks (that is a diagnostic scatter plot, not an interactive viewer).
+- If still ambiguous, prefer the MOST PROCESSED result: caked > lineout > raw.
+
+STEP 3: Call run_midas_viewer ONCE with the viewer name and data file path. That's it.
 
 Example:
   User: "plot the calibration results in test1"
@@ -504,8 +588,8 @@ Example:
 Notes:
 - Pass param_file if refined_MIDAS_params*.txt is available (enables 2θ/Q axes)
 - For live_viewer: pass extra_args="--nRBins 2000" (capital R, capital B)
-- viz_caking.py: DO NOT USE — use plot_integrator_peaks instead
-- Always pass --paramFN when refined_MIDAS_params*.txt is available (enables 2θ/Q axes)
+- viz_caking.py: DO NOT USE — use plot_caked_peaks instead
+- plot_integrator_peaks: diagnostic scatter only — prefer plot_caked_peaks for interactive viewing
 
 After launching, report ONE line: which viewer was launched and which file. Do NOT read or summarize the data — the GUI shows it.""",
 )
@@ -565,9 +649,9 @@ TOOL_CALL: run_midas_viewer
 ARGUMENTS: {"viewer": "plot_calibrant_results", "data_file": "/full/path/to/file_corr.csv"}
 
 User: "Refine the caked output with GSAS-II using the CeO2 CIF"
-✅ CORRECT:
+✅ CORRECT (ALWAYS include two_theta_limits and n_cpus):
 TOOL_CALL: run_gsas_refinement
-ARGUMENTS: {"data_file": "/path/to/CeO2_caked.hdf.zarr.zip", "cif_files": ["/path/to/CeO2.cif"]}
+ARGUMENTS: {"data_file": "/path/to/CeO2_caked.hdf.zarr.zip", "cif_files": ["/path/to/CeO2.cif"], "two_theta_limits": [2.0, 15.0], "n_cpus": 8}
 
 User: "Fetch a CIF file for CeO2"
 ✅ CORRECT:
@@ -607,11 +691,12 @@ ARGUMENTS: {"motor": "m1"}
 ❌ SPECIFIC WRONG EXAMPLES:
 User: "run GSAS-II refinement on the integrated data"
 WRONG: TOOL_CALL: run_command  ARGUMENTS: {"command": "GSAS-II ..."}
-RIGHT: TOOL_CALL: run_gsas_refinement  ARGUMENTS: {"data_file": "/path/to.zarr.zip", "cif_files": ["/path/to.cif"]}
+RIGHT: TOOL_CALL: run_gsas_refinement  ARGUMENTS: {"data_file": "/path/to.zarr.zip", "cif_files": ["/path/to.cif"], "two_theta_limits": [2.0, 15.0], "n_cpus": 8}
 
 User: "refine the caked data"
 WRONG: TOOL_CALL: run_command  ARGUMENTS: {"command": "python gsas_ii_refine.py ..."}
-RIGHT: TOOL_CALL: run_gsas_refinement  ARGUMENTS: {"data_file": "/path/to.zarr.zip", "cif_files": ["/path/to.cif"]}
+WRONG: TOOL_CALL: run_gsas_refinement  ARGUMENTS: {"data_file": "...", "cif_files": ["..."]}  ← missing two_theta_limits!
+RIGHT: TOOL_CALL: run_gsas_refinement  ARGUMENTS: {"data_file": "/path/to.zarr.zip", "cif_files": ["/path/to.cif"], "two_theta_limits": [2.0, 15.0], "n_cpus": 8}
 
 RULES:
 1. For ANY X-ray calculation → TOOL_CALL: xray_calculate
@@ -814,9 +899,7 @@ class AgentRunner:
                     if tc.name == "list_directory":
                         try:
                             r = json.loads(result)
-                            listing = r.get("listing", "")
-                            if listing:
-                                print(f"\n{listing}\n")
+                            print(f"\n{_compact_listing(r)}\n")
                         except (json.JSONDecodeError, KeyError):
                             pass
                     messages.append(
@@ -833,6 +916,8 @@ class AgentRunner:
                 prose = self._strip_tool_calls_from_text(text)
                 if prose:
                     messages.append({"role": "assistant", "content": prose})
+
+                _once_per_response = set()
 
                 for tc in text_calls:
                     # Detect repeated identical tool calls (loop bug)
@@ -856,6 +941,21 @@ class AgentRunner:
                             ),
                         })
                         break
+
+                    # Guard: tools that should only launch once per response
+                    _ONCE_TOOLS = {"run_midas_viewer"}
+                    if tc.name in _ONCE_TOOLS:
+                        if tc.name in _once_per_response:
+                            messages.append({
+                                "role": "user",
+                                "content": (
+                                    f"[Skipped duplicate {tc.name} — viewer already launched.]\n"
+                                    "The GUI window is open. Do NOT launch another viewer. "
+                                    "Report which viewer was launched and which file."
+                                ),
+                            })
+                            continue
+                        _once_per_response.add(tc.name)
 
                     # Guard: intercept run_command misuse for dedicated tools
                     if tc.name == "run_command":
@@ -890,9 +990,7 @@ class AgentRunner:
                     if tc.name == "list_directory":
                         try:
                             r = json.loads(result)
-                            listing = r.get("listing", "")
-                            if listing:
-                                print(f"\n{listing}\n")
+                            print(f"\n{_compact_listing(r)}\n")
                         except (json.JSONDecodeError, KeyError):
                             pass
 

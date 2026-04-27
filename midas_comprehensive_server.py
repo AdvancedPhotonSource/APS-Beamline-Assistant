@@ -325,6 +325,7 @@ MIDAS_NF_BIN = MIDAS_ROOT / "NF_HEDM" / "bin"  # NF-HEDM specific executables
 MIDAS_FF_V7 = MIDAS_ROOT / "FF_HEDM" / "v7"
 MIDAS_NF_V7 = MIDAS_ROOT / "NF_HEDM" / "v7"
 MIDAS_UTILS = MIDAS_ROOT / "utils"
+STRESS_RUNNER_SCRIPT = Path(__file__).parent / "_stress_runner.py"
 
 _autocal_script = MIDAS_UTILS / "AutoCalibrateZarr.py"
 if not _autocal_script.exists():
@@ -1980,6 +1981,36 @@ async def validate_midas_installation(
             validation["recommendations"].append(
                 "Run MIDAS build script to compile executables"
             )
+
+        # Check MIDAS Python packages (midas-params and midas-stress)
+        validation["packages"] = {}
+        midas_python = find_midas_python()
+        for pkg_name, import_name in [
+            ("midas_params", "midas_params"),
+            ("midas_stress", "midas_stress"),
+        ]:
+            try:
+                check = subprocess.run(
+                    [midas_python, "-c", f"import {import_name}; print({import_name}.__version__)"],
+                    capture_output=True, text=True, timeout=15,
+                    env=get_midas_env(),
+                )
+                if check.returncode == 0:
+                    validation["packages"][pkg_name] = {
+                        "installed": True,
+                        "version": check.stdout.strip(),
+                    }
+                else:
+                    validation["packages"][pkg_name] = {"installed": False}
+            except Exception:
+                validation["packages"][pkg_name] = {"installed": False}
+
+        pkgs_missing = [p for p, v in validation["packages"].items() if not v.get("installed")]
+        if pkgs_missing:
+            for pkg in pkgs_missing:
+                validation["recommendations"].append(
+                    f"Install {pkg}: pip install -e $MIDAS_PATH/packages/{pkg}"
+                )
 
         return format_result({
             "tool": "validate_midas_installation",
@@ -3699,7 +3730,7 @@ async def run_gsas_refinement(
     two_theta_limits: Optional[List[float]] = None,
     no_atoms: bool = False,
     no_export: bool = False,
-    n_cpus: int = 1,
+    n_cpus: int = 8,
     instprm_file: Optional[str] = None,
 ) -> str:
     """Run GSAS-II peak fitting and lattice refinement on MIDAS caked output.
@@ -3794,7 +3825,7 @@ async def run_gsas_refinement(
 
         print(f"  Running GSAS-II refinement: {data_path.name} → {out_path}", file=sys.stderr)
         print(f"  Python: {python_exe}", file=sys.stderr)
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600, env=env)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800, env=env)
 
         if result.returncode != 0:
             stderr = result.stderr[-1500:] if result.stderr else ""
@@ -3835,7 +3866,7 @@ async def run_gsas_refinement(
 
     except subprocess.TimeoutExpired:
         return format_result({"tool": "run_gsas_refinement", "status": "error",
-                              "error": "Refinement timed out after 600s"})
+                              "error": "Refinement timed out after 1800s. Try fewer histograms with two_theta_limits or more n_cpus."})
     except Exception as e:
         return format_result({"tool": "run_gsas_refinement", "status": "error",
                               "error": str(e), "traceback": traceback.format_exc()})
@@ -4050,7 +4081,7 @@ async def run_live_analysis(
             print(f"  Stage 2: GSAS-II refinement → {out_path}", file=sys.stderr)
             print(f"  Python: {refine_python}", file=sys.stderr)
             ref_result = subprocess.run(ref_cmd, capture_output=True, text=True,
-                                        timeout=600, env=env)
+                                        timeout=1800, env=env)
             refinement_stdout = ref_result.stdout
 
             if ref_result.returncode != 0:
@@ -4210,6 +4241,494 @@ async def fetch_cif_from_mp(
             "error": str(e),
             "traceback": traceback.format_exc()
         })
+
+
+# =============================================================================
+# PARAMETER VALIDATION TOOLS (midas-params)
+# =============================================================================
+
+def _resolve_param_file(path_str: str) -> tuple[bool, str]:
+    """Resolve a parameter file path — accepts a file OR a directory.
+
+    If a directory is given, searches for parameter files in priority order:
+    Parameters.txt, refined_MIDAS_params*.txt, ps_*.txt, *.txt (param-like).
+    """
+    path = Path(path_str).expanduser()
+    if path.is_file():
+        return True, str(path)
+
+    if path.is_dir():
+        candidates = []
+        # Priority 1: Parameters.txt (standard name)
+        for name in ["Parameters.txt", "parameters.txt"]:
+            p = path / name
+            if p.exists():
+                return True, str(p)
+        # Priority 2: refined_MIDAS_params*.txt (calibration output)
+        candidates.extend(sorted(path.glob("refined_MIDAS_params*.txt"), reverse=True))
+        # Priority 3: ps_*.txt (parameter set files)
+        candidates.extend(sorted(path.glob("ps_*.txt")))
+        if candidates:
+            return True, str(candidates[0])
+        # Priority 4: any .txt file that looks like a param file (has key=value lines)
+        for txt in sorted(path.glob("*.txt")):
+            try:
+                with open(txt) as f:
+                    first_lines = f.read(500)
+                if any(kw in first_lines for kw in ["Lsd", "Wavelength", "NrPixels", "SpaceGroup"]):
+                    return True, str(txt)
+            except Exception:
+                continue
+        return False, f"No parameter file found in directory: {path}"
+
+    return False, f"Path not found: {path}"
+
+
+def _find_midas_params_cli() -> str:
+    """Locate the midas-params CLI binary (installed alongside midas_env Python)."""
+    midas_python = find_midas_python()
+    cli_path = str(Path(midas_python).parent / "midas-params")
+    if Path(cli_path).exists():
+        return cli_path
+    return None
+
+
+def _run_midas_params(subcommand_args: list, timeout: int = 60) -> dict:
+    """Run a midas-params CLI subcommand and return parsed JSON output."""
+    cli = _find_midas_params_cli()
+    if cli is None:
+        midas_python = find_midas_python()
+        cmd = [midas_python, "-c",
+               "from midas_params.cli import main; import sys; sys.exit(main())",
+               ] + subcommand_args
+    else:
+        cmd = [cli] + subcommand_args
+
+    result = subprocess.run(
+        cmd, capture_output=True, text=True,
+        timeout=timeout, env=get_midas_env(),
+    )
+    if result.stdout.strip():
+        return json.loads(result.stdout)
+    raise RuntimeError(result.stderr or "midas-params produced no output")
+
+
+@mcp.tool()
+async def validate_parameter_file(
+    param_file: str,
+    pipeline: str = "ff"
+) -> str:
+    """Validate a MIDAS parameter file against pipeline-specific rules.
+
+    Checks required keys, value ranges (wavelength, LSD, beam center),
+    omega consistency, 12 cross-field rules, and detects typos with
+    edit-distance suggestions. Run this BEFORE any HEDM workflow to
+    catch configuration errors early and save beamtime.
+
+    Args:
+        param_file: Path to MIDAS Parameters.txt file, OR a directory
+                   (auto-finds Parameters.txt / refined_MIDAS_params*.txt)
+        pipeline: Pipeline to validate against: ff, nf, pf, or ri
+
+    Returns:
+        JSON with validation status, error/warning counts, and issues
+        with line numbers, severity, and fix suggestions
+    """
+    try:
+        valid, param_path = _resolve_param_file(param_file)
+        if not valid:
+            return format_result({"tool": "validate_parameter_file",
+                                  "status": "error", "error": param_path})
+
+        if pipeline not in ("ff", "nf", "pf", "ri"):
+            return format_result({"tool": "validate_parameter_file",
+                                  "status": "error",
+                                  "error": f"Invalid pipeline '{pipeline}'. Must be ff, nf, pf, or ri"})
+
+        report = _run_midas_params(["validate", param_path, "--path", pipeline, "--json"])
+
+        return format_result({
+            "tool": "validate_parameter_file",
+            "status": "valid" if report.get("ok") else "invalid",
+            "param_file": param_path,
+            "pipeline": pipeline,
+            "errors": report.get("errors", 0),
+            "warnings": report.get("warnings", 0),
+            "issues": report.get("issues", []),
+        })
+
+    except FileNotFoundError:
+        return format_result({"tool": "validate_parameter_file", "status": "error",
+                              "error": "midas-params not installed. Run: pip install -e $MIDAS_PATH/packages/midas_params"})
+    except Exception as e:
+        return format_result({"tool": "validate_parameter_file", "status": "error", "error": str(e)})
+
+
+@mcp.tool()
+async def diagnose_parameter_file(
+    param_file: str,
+    pipeline: str = "ff",
+    output_format: str = "json"
+) -> str:
+    """Generate LLM-optimized diagnosis of a MIDAS parameter file.
+
+    Produces a structured payload with validation issues, pipeline primer
+    context, parameter registry info, and actionable suggestions designed
+    for AI-assisted debugging. Use this after validate_parameter_file
+    reports errors to get detailed fix guidance.
+
+    Args:
+        param_file: Path to MIDAS Parameters.txt file, OR a directory
+                   (auto-finds Parameters.txt / refined_MIDAS_params*.txt)
+        pipeline: Pipeline to diagnose against: ff, nf, pf, or ri
+        output_format: Output format — 'json' (structured) or 'prompt' (LLM-ready text)
+
+    Returns:
+        JSON or text with complete diagnosis including line-level issues,
+        parameter specs, and fix suggestions
+    """
+    try:
+        valid, param_path = _resolve_param_file(param_file)
+        if not valid:
+            return format_result({"tool": "diagnose_parameter_file",
+                                  "status": "error", "error": param_path})
+
+        if pipeline not in ("ff", "nf", "pf", "ri"):
+            return format_result({"tool": "diagnose_parameter_file",
+                                  "status": "error",
+                                  "error": f"Invalid pipeline '{pipeline}'. Must be ff, nf, pf, or ri"})
+
+        fmt = "json" if output_format not in ("json", "prompt") else output_format
+        args = ["diagnose", param_path, "--path", pipeline, "--format", fmt]
+
+        if fmt == "prompt":
+            cli = _find_midas_params_cli()
+            if cli is None:
+                midas_python = find_midas_python()
+                cmd = [midas_python, "-c",
+                       "from midas_params.cli import main; import sys; sys.exit(main())"
+                       ] + args
+            else:
+                cmd = [cli] + args
+            result = subprocess.run(
+                cmd, capture_output=True, text=True,
+                timeout=60, env=get_midas_env(),
+            )
+            return format_result({
+                "tool": "diagnose_parameter_file",
+                "status": "success",
+                "param_file": param_path,
+                "pipeline": pipeline,
+                "format": "prompt",
+                "diagnosis": result.stdout,
+            })
+
+        diagnosis = _run_midas_params(args)
+        return format_result({
+            "tool": "diagnose_parameter_file",
+            "status": "success",
+            "param_file": param_path,
+            "pipeline": pipeline,
+            "format": "json",
+            "diagnosis": diagnosis,
+        })
+
+    except FileNotFoundError:
+        return format_result({"tool": "diagnose_parameter_file", "status": "error",
+                              "error": "midas-params not installed. Run: pip install -e $MIDAS_PATH/packages/midas_params"})
+    except Exception as e:
+        return format_result({"tool": "diagnose_parameter_file", "status": "error", "error": str(e)})
+
+
+@mcp.tool()
+async def inspect_dataset_file(
+    dataset_file: str
+) -> str:
+    """Auto-extract parameters from a raw dataset file.
+
+    Reads GE, HDF5, Zarr, or TIFF files and extracts detector geometry,
+    beam energy, pixel size, image dimensions, and other parameters
+    embedded in the file headers or metadata. Useful for pre-populating
+    parameter files or verifying consistency.
+
+    Args:
+        dataset_file: Path to data file (GE2/GE3/GE5, HDF5, Zarr, TIFF)
+
+    Returns:
+        JSON with extracted parameters, confidence levels, and sources
+    """
+    try:
+        valid, dataset_path = validate_file(dataset_file)
+        if not valid:
+            return format_result({"tool": "inspect_dataset_file",
+                                  "status": "error", "error": dataset_path})
+
+        report = _run_midas_params(["inspect", dataset_path, "--json"])
+
+        return format_result({
+            "tool": "inspect_dataset_file",
+            "status": "success",
+            "dataset_file": dataset_path,
+            "extracted": report,
+        })
+
+    except FileNotFoundError:
+        return format_result({"tool": "inspect_dataset_file", "status": "error",
+                              "error": "midas-params not installed. Run: pip install -e $MIDAS_PATH/packages/midas_params"})
+    except Exception as e:
+        return format_result({"tool": "inspect_dataset_file", "status": "error", "error": str(e)})
+
+
+@mcp.tool()
+async def enumerate_bragg_rings(
+    param_file: str
+) -> str:
+    """List Bragg rings that fall on the detector for a given crystal/geometry.
+
+    Reads wavelength, detector distance, lattice parameters, and space group
+    from a MIDAS parameter file and enumerates all Bragg rings with their
+    hkl indices, d-spacing, 2theta, and detector radius. Helps verify correct
+    RingThresh and OverAllRingToIndex settings.
+
+    Args:
+        param_file: Path to MIDAS Parameters.txt with crystal/geometry info,
+                   OR a directory (auto-finds the param file)
+
+    Returns:
+        JSON with ring list (hkl, d-spacing, 2theta, radius, on-detector flag)
+    """
+    try:
+        valid, param_path = _resolve_param_file(param_file)
+        if not valid:
+            return format_result({"tool": "enumerate_bragg_rings",
+                                  "status": "error", "error": param_path})
+
+        report = _run_midas_params(["rings", "--from", param_path, "--json"])
+
+        return format_result({
+            "tool": "enumerate_bragg_rings",
+            "status": "success",
+            "param_file": param_path,
+            "rings": report,
+        })
+
+    except FileNotFoundError:
+        return format_result({"tool": "enumerate_bragg_rings", "status": "error",
+                              "error": "midas-params not installed. Run: pip install -e $MIDAS_PATH/packages/midas_params"})
+    except Exception as e:
+        return format_result({"tool": "enumerate_bragg_rings", "status": "error", "error": str(e)})
+
+
+# =============================================================================
+# STRESS / STRAIN ANALYSIS TOOLS (midas-stress)
+# =============================================================================
+
+def _run_stress_runner(subcommand_args: list, timeout: int = 120) -> dict:
+    """Run a _stress_runner.py subcommand and return parsed JSON output."""
+    midas_python = find_midas_python()
+    cmd = [midas_python, str(STRESS_RUNNER_SCRIPT)] + subcommand_args
+
+    result = subprocess.run(
+        cmd, capture_output=True, text=True,
+        timeout=timeout, env=get_midas_env(),
+    )
+    if result.stdout.strip():
+        return json.loads(result.stdout)
+    raise RuntimeError(result.stderr or "_stress_runner.py produced no output")
+
+
+@mcp.tool()
+async def read_grains_summary(
+    grains_file: str
+) -> str:
+    """Read a MIDAS Grains.csv or HDF5 file and return a statistical summary.
+
+    Reports grain count, position ranges, orientation spread, strain tensor
+    statistics, lattice parameters, and confidence distribution. A quick
+    "what's in this file" diagnostic for post-reconstruction data.
+
+    Args:
+        grains_file: Path to Grains.csv or consolidated .h5 file
+
+    Returns:
+        JSON with grain population statistics
+    """
+    try:
+        valid, grains_path = validate_file(grains_file)
+        if not valid:
+            return format_result({"tool": "read_grains_summary",
+                                  "status": "error", "error": grains_path})
+
+        output = _run_stress_runner(["read_grains", "--grains", grains_path])
+        return format_result({"tool": "read_grains_summary", **output})
+
+    except Exception as e:
+        return format_result({"tool": "read_grains_summary", "status": "error", "error": str(e)})
+
+
+@mcp.tool()
+async def compute_grain_stress(
+    grains_file: str,
+    material: str,
+    applied_stress: str = "",
+    min_confidence: float = 0.0
+) -> str:
+    """Compute per-grain stress from HEDM reconstruction output.
+
+    Reads grain orientations and strains from a MIDAS Grains.csv file,
+    applies single-crystal Hooke's law with equilibrium correction, and
+    returns stress decomposition (hydrostatic, deviatoric, von Mises) with
+    uncertainty estimates.
+
+    Supported materials: Au, Cu, Al, Fe, Ni, Ti, W, Si, CeO2
+
+    Args:
+        grains_file: Path to Grains.csv or consolidated .h5 file
+        material: Material name (e.g., "Cu", "Fe", "Ti")
+        applied_stress: Applied macroscopic stress as 6 comma-separated Voigt
+                       components in GPa (e.g., "0.1,0,0,0,0,0" for uniaxial).
+                       Empty string = free-standing sample.
+        min_confidence: Minimum grain confidence for equilibrium averaging (0-1)
+
+    Returns:
+        JSON with von Mises statistics, hydrostatic shift (d0 proxy), and uncertainty
+    """
+    try:
+        valid, grains_path = validate_file(grains_file)
+        if not valid:
+            return format_result({"tool": "compute_grain_stress",
+                                  "status": "error", "error": grains_path})
+
+        cmd_args = ["compute_stress", "--grains", grains_path,
+                    "--material", material,
+                    "--min-confidence", str(min_confidence)]
+        if applied_stress:
+            cmd_args.extend(["--applied-stress", applied_stress])
+
+        output = _run_stress_runner(cmd_args)
+        return format_result({"tool": "compute_grain_stress", **output})
+
+    except Exception as e:
+        return format_result({"tool": "compute_grain_stress", "status": "error", "error": str(e)})
+
+
+@mcp.tool()
+async def get_material_stiffness(
+    material: str
+) -> str:
+    """Look up single-crystal elastic stiffness matrix and d0 sensitivity.
+
+    Returns the full 6x6 stiffness matrix in Voigt-Mandel notation (GPa),
+    independent elastic constants, bulk modulus, and d0 sensitivity (how
+    much stress error results from a given d0 uncertainty).
+
+    Supported materials: Au, Cu, Al, Fe, Ni, Ti, W, Si, CeO2
+
+    Args:
+        material: Material name (e.g., "Cu", "Fe", "Ti")
+
+    Returns:
+        JSON with stiffness matrix, elastic constants, d0 sensitivity, and
+        list of all available materials
+    """
+    try:
+        output = _run_stress_runner(["material_info", "--material", material])
+        return format_result({"tool": "get_material_stiffness", **output})
+
+    except Exception as e:
+        return format_result({"tool": "get_material_stiffness", "status": "error", "error": str(e)})
+
+
+@mcp.tool()
+async def correct_d0_equilibrium(
+    grains_file: str,
+    material: str,
+    applied_stress: str = "",
+    min_confidence: float = 0.0
+) -> str:
+    """Apply two-step d0 correction to grain stress data.
+
+    The d0 reference lattice parameter is the dominant systematic error
+    in HEDM stress analysis. This tool applies:
+    1. Strain-level correction: fits isotropic strain offset (eps_iso)
+    2. Stress-level correction: enforces mechanical equilibrium
+
+    Reports the correction magnitude, residual norms before/after, and
+    corrected stress statistics.
+
+    Args:
+        grains_file: Path to Grains.csv or consolidated .h5 file
+        material: Material name (e.g., "Cu", "Fe", "Ti")
+        applied_stress: Applied macroscopic stress as 6 comma-separated Voigt
+                       components in GPa. Empty = free-standing.
+        min_confidence: Minimum grain confidence for equilibrium averaging (0-1)
+
+    Returns:
+        JSON with eps_iso correction (ppm), residual improvement, corrected stress stats
+    """
+    try:
+        valid, grains_path = validate_file(grains_file)
+        if not valid:
+            return format_result({"tool": "correct_d0_equilibrium",
+                                  "status": "error", "error": grains_path})
+
+        cmd_args = ["correct_d0", "--grains", grains_path,
+                    "--material", material,
+                    "--min-confidence", str(min_confidence)]
+        if applied_stress:
+            cmd_args.extend(["--applied-stress", applied_stress])
+
+        output = _run_stress_runner(cmd_args)
+        return format_result({"tool": "correct_d0_equilibrium", **output})
+
+    except Exception as e:
+        return format_result({"tool": "correct_d0_equilibrium", "status": "error", "error": str(e)})
+
+
+@mcp.tool()
+async def analyze_slip_systems(
+    grains_file: str,
+    material: str,
+    load_direction: str = "0,0,1",
+    crss: float = 0.0
+) -> str:
+    """Compute Schmid factors, Taylor factor, and yield proximity for grains.
+
+    Performs slip-system analysis from HEDM stress data:
+    - Schmid factors for each grain and slip system
+    - Dominant slip system per grain
+    - Taylor factor (polycrystal average)
+    - Yield proximity ranking (if CRSS provided)
+
+    Automatically selects slip families by material (FCC, BCC, or HCP).
+
+    Args:
+        grains_file: Path to Grains.csv or consolidated .h5 file
+        material: Material name (e.g., "Cu" for FCC, "Fe" for BCC, "Ti" for HCP)
+        load_direction: Loading direction in sample frame as 3 comma-separated
+                       values (e.g., "0,0,1" for z-axis loading)
+        crss: Critical resolved shear stress in MPa. Set > 0 to compute
+              yield proximity (which grains yield first). Default 0 = skip.
+
+    Returns:
+        JSON with Schmid factor statistics, Taylor factor, and yield proximity
+    """
+    try:
+        valid, grains_path = validate_file(grains_file)
+        if not valid:
+            return format_result({"tool": "analyze_slip_systems",
+                                  "status": "error", "error": grains_path})
+
+        cmd_args = ["plasticity", "--grains", grains_path,
+                    "--material", material,
+                    "--load-direction", load_direction,
+                    "--crss", str(crss)]
+
+        output = _run_stress_runner(cmd_args)
+        return format_result({"tool": "analyze_slip_systems", **output})
+
+    except Exception as e:
+        return format_result({"tool": "analyze_slip_systems", "status": "error", "error": str(e)})
 
 
 # =============================================================================
