@@ -4219,7 +4219,7 @@ async def fetch_cif_from_mp(
                     "material_id": str(mp_id),
                     "formula": doc.formula_pretty,
                     "space_group": doc.symmetry.symbol if doc.symmetry else "unknown",
-                    "crystal_system": doc.symmetry.crystal_system if doc.symmetry else "unknown",
+                    "crystal_system": str(doc.symmetry.crystal_system) if doc.symmetry else "unknown",
                     "energy_above_hull_eV": doc.energy_above_hull,
                     "is_stable": doc.is_stable,
                     "cif_file": str(cif_path),
