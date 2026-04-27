@@ -331,7 +331,12 @@ When the user asks to validate, diagnose, or check a parameter file:
 1. Call validate_parameter_file or diagnose_parameter_file DIRECTLY with the directory path
    (e.g. param_file="test1", pipeline="ff"). The tool auto-finds Parameters.txt or refined_MIDAS_params*.txt.
    Do NOT call list_directory first — the tool handles file discovery.
-2. Pipeline arg is required (ff, nf, pf, ri) — infer from the user's query or default to ff.
+2. Pipeline arg is required — infer from the user's query:
+   - "calibrat" / "integrat" / "lineout" / "caked" → pipeline="ri" (radial integration)
+   - "ff-hedm" / "far-field" / "reconstruction" → pipeline="ff"
+   - "nf-hedm" / "near-field" / "microstructure" → pipeline="nf"
+   - "pf-hedm" / "point-focus" → pipeline="pf"
+   - Default to "ri" for calibration-related queries, "ff" for HEDM workflow queries.
 
 NEVER mention pyFAI, .poni files, or azimuthalIntegrator. This system uses MIDAS exclusively.
 Calibration output is refined_MIDAS_params*.txt — NOT .poni files.""",
@@ -414,18 +419,24 @@ PARAMETER VALIDATION — When the user asks to validate, diagnose, or check a pa
 1. Call validate_parameter_file or diagnose_parameter_file DIRECTLY with the directory path
    (e.g. param_file="test1", pipeline="ff"). The tool auto-finds Parameters.txt or refined_MIDAS_params*.txt.
    Do NOT call list_directory first — the tool handles file discovery.
-2. Pipeline arg is required (ff, nf, pf, ri) — infer from the user's query or default to ff.
+2. Pipeline arg is required — infer from the user's query:
+   - "calibrat" / "integrat" / "lineout" / "caked" → pipeline="ri" (radial integration)
+   - "ff-hedm" / "far-field" / "reconstruction" → pipeline="ff"
+   - "nf-hedm" / "near-field" / "microstructure" → pipeline="nf"
+   - "pf-hedm" / "point-focus" → pipeline="pf"
+   - Default to "ri" for integration/calibration queries, "ff" for HEDM workflow queries.
 
-PRE-WORKFLOW VALIDATION — Before running any HEDM workflow (ff, nf, pf):
-1. ALWAYS call validate_parameter_file on the param file first
-2. If errors are found, call diagnose_parameter_file and fix issues before proceeding
-3. If the user has a dataset file, call inspect_dataset_file to verify consistency
-4. Call enumerate_bragg_rings to check ring coverage if needed
+PRE-WORKFLOW VALIDATION — ONLY before heavyweight HEDM reconstruction (ff, nf, pf):
+1. Call validate_parameter_file ONLY before run_ff_hedm_full_workflow, run_nf_hedm_reconstruction, or run_pf_hedm_workflow
+2. Do NOT validate before simple operations like midas_integrate_2d_to_1d, midas_auto_calibrate, or run_gsas_refinement — just run them directly
+3. If errors are found, call diagnose_parameter_file and fix issues before proceeding
+4. If the user has a dataset file, call inspect_dataset_file to verify consistency
+
+When the user says "retry", "rerun", or "redo" → call the requested tool IMMEDIATELY. Do NOT validate first.
 
 Standard workflow:
   1. list_directory to find data files
-  2. validate_parameter_file on the param file (catch errors before burning compute)
-  3. midas_integrate_2d_to_1d for 2D → 1D (produces .zarr.zip)
+  2. midas_integrate_2d_to_1d for 2D → 1D (produces .zarr.zip)
   4. run_gsas_refinement for peak fitting / lattice refinement on .zarr.zip
   5. Or run_live_analysis for combined integration + refinement in one step
   6. run_ff_hedm_full_workflow or run_nf_hedm_reconstruction
@@ -553,7 +564,12 @@ Do NOT read data files — the viewer GUI displays the data. Your job is to LAUN
 
 ⚠️ CRITICAL: Call run_midas_viewer EXACTLY ONCE per request. Pick the single BEST viewer. NEVER launch multiple viewers.
 
-STEP 1: Find the data file. Call list_directory if needed.
+STEP 1: Find the data file.
+  - If the user says "integration results" or "caked output" → list the integration/ subdirectory first
+  - Integration outputs (*_lineout.xy, *_caked.hdf.zarr.zip, *_lineout.bin) are in <dir>/integration/
+  - Calibration outputs (*_corr.csv) are in the parent directory
+  - Always prefer .zarr.zip over plain .hdf — the zarr archive is the complete output
+  - Call list_directory on the CORRECT subdirectory, not just the parent
 STEP 2: Match the file to the correct viewer — pick ONE:
 
 | File pattern | viewer name | When to use |
@@ -641,7 +657,7 @@ ARGUMENTS: {"viewer": "plot_lineout_results", "data_file": "/full/path/to/lineou
 User: "Plot the caked output"
 ✅ CORRECT (after finding *_caked.hdf.zarr.zip):
 TOOL_CALL: run_midas_viewer
-ARGUMENTS: {"viewer": "plot_integrator_peaks", "data_file": "/full/path/to/file.caked.hdf.zarr.zip"}
+ARGUMENTS: {"viewer": "plot_caked_peaks", "data_file": "/full/path/to/file.caked.hdf.zarr.zip"}
 
 User: "Plot calibration results in test1"
 ✅ CORRECT (after finding *_corr.csv):
@@ -999,10 +1015,11 @@ class AgentRunner:
                     # Build a context-aware follow-up prompt
                     if tc.name == "list_directory":
                         followup = (
-                            "The directory listing is already displayed. Do NOT list files again. "
-                            "Write a short summary using markdown: bold **key filenames** and **folders**, "
-                            "group related files logically (e.g. calibration outputs, data files, configs). "
-                            "Mention the total count. Do NOT call list_directory again."
+                            "The directory listing is already displayed to the user. "
+                            "Do NOT list files again. Do NOT summarize the listing. "
+                            "IMMEDIATELY proceed with the user's original request — "
+                            "call the appropriate tool using the file paths from the listing above. "
+                            "Do NOT ask the user to confirm. Do NOT describe what you found. Just call the tool."
                         )
                     elif tc.name == "fetch_cif_from_mp":
                         followup = (
@@ -1014,7 +1031,10 @@ class AgentRunner:
                         followup = (
                             "Viewer launched. Report ONE line: which viewer + which file. "
                             "Do NOT read the data file. Do NOT analyze or summarize data. "
-                            "Do NOT call any more tools. The GUI window is open — the user will look at it."
+                            "If the user asked for MULTIPLE plots (e.g. 'both', 'and', 'one by one'), "
+                            "proceed to launch the NEXT viewer for the remaining request. "
+                            "You may need to call list_directory on a subdirectory (e.g. integration/) to find the next file. "
+                            "If the user asked for only ONE plot, do NOT call any more tools."
                         )
                     else:
                         followup = (
@@ -1086,6 +1106,7 @@ class OrchestratorAgent:
             "slip system", "d0 correct", "equilibrium",
             "plasticity", "taylor factor", "grains.csv",
             "validate param", "bragg ring",
+            "calibrated file", "calibrated data", "calibrated image",
         },
         "knowledge": {
             "explain", "what is", "what are", "how does", "how do",
@@ -1101,6 +1122,14 @@ class OrchestratorAgent:
             "live viewer", "overlay", "pattern", "diffraction image",
             "peak plot", "grain plot", "3d grain", "spots",
             "ring", "fit result", "caking", "zarr", "lineout.xy",
+            # Compound keywords — disambiguation when "plot/show" + domain word
+            "plot calibra", "show calibra", "view calibra", "display calibra",
+            "plot the calibra", "show the calibra", "view the calibra",
+            "display the calibra", "see the calibra",
+            "calibration result", "calibrant result",
+            "plot the lineout", "show the grain",
+            "plot the caked", "show the caked", "plot the integration",
+            "show the integration", "plot the raw", "show the raw",
         },
         "motor": {
             "motor", "move", "position", "caget", "caput", "epics",
@@ -1136,6 +1165,12 @@ class OrchestratorAgent:
         best = max(scores, key=scores.get)
 
         if scores[best] > 0:
+            # Break ties: if analysis ties with another domain, prefer analysis
+            # (it's the most general agent and handles post-calibration workflows)
+            top_score = scores[best]
+            tied = [d for d, s in scores.items() if s == top_score]
+            if len(tied) > 1 and "analysis" in tied:
+                best = "analysis"
             return self._ROUTES[best]      # strong keyword match → switch agent
 
         # No keywords matched — stay with current agent if we have one
