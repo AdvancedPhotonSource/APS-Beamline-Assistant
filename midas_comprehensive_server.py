@@ -3893,14 +3893,32 @@ async def run_gsas_refinement(
             if "Cannot import GSASIIscriptable" in stderr or "ModuleNotFoundError" in stderr:
                 error_msg += (". GSAS-II import failed — install via: "
                               "conda install gsas2full -c briantoby -c conda-forge")
-            return format_result({
+
+            # Check for partial results (script may crash in summary but produce .gpx files)
+            partial_summary = {}
+            summary_file = out_path / "refinement_summary.json"
+            if summary_file.exists():
+                try:
+                    with open(summary_file) as f:
+                        partial_summary = json.load(f)
+                except Exception:
+                    pass
+            gpx_files = sorted(out_path.glob("*.gpx"))
+
+            resp = {
                 "tool": "run_gsas_refinement",
-                "status": "error",
+                "status": "partial_success" if (partial_summary or gpx_files) else "error",
                 "error": error_msg,
                 "stderr": stderr,
                 "python_used": python_exe,
                 "command": " ".join(cmd),
-            })
+            }
+            if partial_summary:
+                resp["summary"] = partial_summary
+            if gpx_files:
+                resp["gpx_files_produced"] = len(gpx_files)
+                resp["output_dir"] = str(out_path)
+            return format_result(resp)
 
         # Read refinement summary if produced
         summary_file = out_path / "refinement_summary.json"
