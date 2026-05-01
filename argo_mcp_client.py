@@ -20,7 +20,7 @@ from pathlib import Path
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.completion import Completer, Completion
-from prompt_toolkit.formatted_text import ANSI
+from prompt_toolkit.formatted_text import FormattedText
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -1470,7 +1470,10 @@ class APEXAClient:
             completer=_APEXACompleter(_apexa_commands),
             enable_history_search=True,
         )
-        prompt_text = ANSI(f"{C.BOLD}{C.BCYAN}APEXA{C.RESET}{C.GRAY}>{C.RESET} ")
+        prompt_text = FormattedText([
+            ("bold ansibrightcyan", "APEXA"),
+            ("ansibrightblack", "> "),
+        ])
 
         history = []
 
