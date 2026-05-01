@@ -38,6 +38,74 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional, Callable, Awaitable
 from interaction_logger import InteractionLogger, InteractionEntry
 
+# ── Compact directory listing ───────────────────────────────────────────────
+
+_EXT_GROUPS = {
+    "Data":    {".tif",".tiff",".ge",".ge1",".ge2",".ge3",".ge4",".ge5",
+                ".h5",".hdf",".hdf5",".zarr",".nxs",".cbf",".zip"},
+    "Config":  {".txt",".toml",".yaml",".yml",".json",".cfg",".ini",".env"},
+    "Results": {".csv",".dat",".xy",".bin",".mic",".out"},
+    "Scripts": {".py",".sh",".bash"},
+    "Docs":    {".md",".rst",".pdf",".log"},
+}
+
+def _compact_listing(parsed: dict, max_preview: int = 3) -> str:
+    """Build a grouped compact summary from list_directory JSON result.
+
+    Shows full listing if ≤20 files, otherwise groups by file type
+    with preview filenames and a hint to use 'ls' for the full listing.
+    """
+    DIM = "\033[2m"
+    BOLD = "\033[1m"
+    BLUE = "\033[1;34m"
+    RESET = "\033[0m"
+
+    path = parsed.get("path", "")
+    dirs = parsed.get("dirs", [])
+    files = parsed.get("files", [])
+
+    if not files and not dirs:
+        return parsed.get("listing", "")
+
+    if len(files) <= 20:
+        return parsed.get("listing", "")
+
+    lines = [f"{BOLD}{path}{RESET}"]
+
+    if dirs:
+        dir_strs = [f"{BLUE}{BOLD}{d}{RESET}" for d in dirs]
+        lines.append("  " + "  ".join(dir_strs))
+        lines.append("")
+
+    groups: dict = {cat: [] for cat in _EXT_GROUPS}
+    groups["Other"] = []
+
+    for fname in files:
+        ext = Path(fname).suffix.lower()
+        placed = False
+        for cat, exts in _EXT_GROUPS.items():
+            if ext in exts:
+                groups[cat].append(fname)
+                placed = True
+                break
+        if not placed:
+            groups["Other"].append(fname)
+
+    for cat, flist in groups.items():
+        if not flist:
+            continue
+        preview = flist[:max_preview]
+        preview_str = "  ".join(preview)
+        if len(flist) > max_preview:
+            preview_str += f"  {DIM}+{len(flist) - max_preview} more{RESET}"
+        lines.append(f"  {cat} ({len(flist)}):  {preview_str}")
+
+    hint_path = Path(path).name or path
+    lines.append(f"  {DIM}{len(dirs)} directories, {len(files)} files — type 'ls {hint_path}' for full listing{RESET}")
+
+    return "\n".join(lines)
+
+
 # ── Constants ───────────────────────────────────────────────────────────────
 
 PROD_URL = "https://apps.inside.anl.gov/argoapi/api/v1/resource/chat/"
@@ -232,6 +300,11 @@ CALIBRATION_AGENT = APEXAAgent(
         "list_directory",
         "read_file",
         "get_file_info",
+        # Parameter validation
+        "validate_parameter_file",
+        "diagnose_parameter_file",
+        "inspect_dataset_file",
+        "enumerate_bragg_rings",
     ],
     instructions = """You are a detector calibration specialist for HEDM synchrotron experiments at APS.
 
@@ -247,6 +320,18 @@ Never say "I found the file, shall I proceed?" — just run it.
 Never call list_directory more than once per request.
 
 After calibration report: refined BC, Lsd, tilts, and convergence quality.
+
+PARAMETER VALIDATION:
+- validate param file: validate_parameter_file (checks required keys, ranges, cross-field rules)
+- diagnose param file: diagnose_parameter_file (LLM-ready diagnosis with fix suggestions)
+- extract params from data: inspect_dataset_file (auto-detect from GE/HDF5/Zarr)
+- Bragg ring listing: enumerate_bragg_rings (which rings hit the detector)
+
+When the user asks to validate, diagnose, or check a parameter file:
+1. Call validate_parameter_file or diagnose_parameter_file DIRECTLY with the directory path
+   (e.g. param_file="test1", pipeline="ff"). The tool auto-finds Parameters.txt or refined_MIDAS_params*.txt.
+   Do NOT call list_directory first — the tool handles file discovery.
+2. Pipeline arg is required (ff, nf, pf, ri) — infer from the user's query or default to ff.
 
 NEVER mention pyFAI, .poni files, or azimuthalIntegrator. This system uses MIDAS exclusively.
 Calibration output is refined_MIDAS_params*.txt — NOT .poni files.""",
@@ -279,6 +364,17 @@ ANALYSIS_AGENT = APEXAAgent(
         "create_midas_parameter_file",
         "validate_midas_installation",
         "batch_convert_ge_to_tiff",
+        # Parameter validation (pre-workflow)
+        "validate_parameter_file",
+        "diagnose_parameter_file",
+        "inspect_dataset_file",
+        "enumerate_bragg_rings",
+        # Stress/strain analysis (post-reconstruction)
+        "compute_grain_stress",
+        "get_material_stiffness",
+        "correct_d0_equilibrium",
+        "analyze_slip_systems",
+        "read_grains_summary",
         # General tools
         "xray_calculate",
         "list_directory",
@@ -304,20 +400,54 @@ Capabilities (use the matching tool for each):
 - Dream3D export: convert_nf_to_dream3d
 - X-ray calculations: xray_calculate (NEVER compute manually)
 - File operations: list_directory, read_file, get_file_info
+- Validate parameter file: validate_parameter_file (checks required keys, ranges, cross-field rules)
+- Diagnose parameter file: diagnose_parameter_file (LLM-ready diagnosis with fix suggestions)
+- Extract params from data: inspect_dataset_file (auto-detect from GE/HDF5/Zarr)
+- Bragg rings: enumerate_bragg_rings (which rings hit the detector)
+- Stress analysis: compute_grain_stress (Hooke's law + equilibrium from Grains.csv)
+- Material lookup: get_material_stiffness (elastic constants for Au, Cu, Al, Fe, Ni, Ti, W, Si, CeO2)
+- d0 correction: correct_d0_equilibrium (two-step isotropic strain + stress correction)
+- Slip systems: analyze_slip_systems (Schmid factors, Taylor factor, yield proximity)
+- Grain summary: read_grains_summary (statistics of a Grains.csv file)
+
+PARAMETER VALIDATION — When the user asks to validate, diagnose, or check a parameter file:
+1. Call validate_parameter_file or diagnose_parameter_file DIRECTLY with the directory path
+   (e.g. param_file="test1", pipeline="ff"). The tool auto-finds Parameters.txt or refined_MIDAS_params*.txt.
+   Do NOT call list_directory first — the tool handles file discovery.
+2. Pipeline arg is required (ff, nf, pf, ri) — infer from the user's query or default to ff.
+
+PRE-WORKFLOW VALIDATION — Before running any HEDM workflow (ff, nf, pf):
+1. ALWAYS call validate_parameter_file on the param file first
+2. If errors are found, call diagnose_parameter_file and fix issues before proceeding
+3. If the user has a dataset file, call inspect_dataset_file to verify consistency
+4. Call enumerate_bragg_rings to check ring coverage if needed
 
 Standard workflow:
   1. list_directory to find data files
-  2. midas_integrate_2d_to_1d for 2D → 1D (produces .zarr.zip)
-  3. run_gsas_refinement for peak fitting / lattice refinement on .zarr.zip
-  4. Or run_live_analysis for combined integration + refinement in one step
-  5. run_ff_hedm_full_workflow or run_nf_hedm_reconstruction
-  6. Post-process: match_grains, run_ff_grain_tracking, overlay_ff_nf_results, extract_grain_centroids
-  7. Export: convert_nf_to_dream3d
+  2. validate_parameter_file on the param file (catch errors before burning compute)
+  3. midas_integrate_2d_to_1d for 2D → 1D (produces .zarr.zip)
+  4. run_gsas_refinement for peak fitting / lattice refinement on .zarr.zip
+  5. Or run_live_analysis for combined integration + refinement in one step
+  6. run_ff_hedm_full_workflow or run_nf_hedm_reconstruction
+  7. Post-process: match_grains, run_ff_grain_tracking, overlay_ff_nf_results, extract_grain_centroids
+  8. Export: convert_nf_to_dream3d
+
+POST-RECONSTRUCTION STRESS ANALYSIS — After FF-HEDM or NF-HEDM completes:
+1. Call read_grains_summary to understand the grain population
+2. Call get_material_stiffness to look up the material (user must specify material)
+3. Call compute_grain_stress with the Grains.csv and material name
+4. If d0 correction is needed, call correct_d0_equilibrium
+5. For plasticity analysis, call analyze_slip_systems with the load direction
+Always report: grain count, mean/std von Mises stress, hydrostatic shift, d0 correction magnitude.
 
 GSAS-II refinement workflow:
   1. If no CIF file → call fetch_cif_from_mp to download one (you have this tool)
   2. Read the CIF path from the fetch result
-  3. IMMEDIATELY call run_gsas_refinement with data_file=<.zarr.zip path> and cif_files=[<CIF path>]
+  3. IMMEDIATELY call run_gsas_refinement with:
+     - data_file=<.zarr.zip path>
+     - cif_files=[<CIF path>]
+     - two_theta_limits=[2.0, 15.0] (ALWAYS set — without limits Rwp will be ~100%)
+     - n_cpus=8 (parallelize across histograms)
   4. NEVER use run_command for GSAS-II — always use run_gsas_refinement
 
 CRITICAL: After calling a tool, read the result carefully. Do NOT call list_directory
@@ -340,6 +470,8 @@ KNOWLEDGE_AGENT = APEXAAgent(
         "list_common_calibrants",
         "xray_calculate",
         "fetch_cif_from_mp",
+        "enumerate_bragg_rings",
+        "get_material_stiffness",
     ],
     instructions = """You are an HEDM knowledge expert with access to scientific literature,
 experimental logbooks, and crystallographic databases.
@@ -419,22 +551,34 @@ USE run_midas_viewer for ALL plotting. It handles MIDAS paths and Python automat
 Do NOT use run_command or check_environment — run_midas_viewer does everything.
 Do NOT read data files — the viewer GUI displays the data. Your job is to LAUNCH the viewer, not analyze data.
 
+⚠️ CRITICAL: Call run_midas_viewer EXACTLY ONCE per request. Pick the single BEST viewer. NEVER launch multiple viewers.
+
 STEP 1: Find the data file. Call list_directory if needed.
-STEP 2: Match the file to the correct viewer name:
+STEP 2: Match the file to the correct viewer — pick ONE:
 
-| File pattern | viewer name |
-|---|---|
-| *_corr.csv | plot_calibrant_results |
-| *_lineout.xy | plot_lineout_results |
-| *_lineout.xy (compare) | plot_lineout_comparison |
-| *_lineout.bin (live) | live_viewer |
-| *_caked.hdf.zarr.zip | plot_integrator_peaks |
-| *_caked_peaks.h5 | plot_caked_peaks |
-| Raw .tif/.ge/.h5 | ff_asym_qt |
-| Grains.csv + .zarr | interactiveFFplotting |
-| .mic/.map (NF) | nf_qt |
+| File pattern | viewer name | When to use |
+|---|---|---|
+| *_corr.csv | plot_calibrant_results | Calibration fit, calibration QC, lattice-vs-η |
+| *_lineout.xy | plot_lineout_results | 1D diffraction profile, lineout, peaks |
+| *_lineout.xy (compare) | plot_lineout_comparison | Compare calibrant vs integrator lineouts |
+| *_lineout.bin (live) | live_viewer | Real-time GPU streaming monitor |
+| *_caked.hdf.zarr.zip | plot_caked_peaks | Caked data, integrated image, 2D heatmap (PREFERRED for caked data) |
+| *_caked_peaks.h5 | plot_caked_peaks | Peak fitting results |
+| Raw .tif/.ge/.h5 | ff_asym_qt | Raw detector image, diffraction image, ring overlays |
+| Grains.csv + .zarr | interactiveFFplotting | FF-HEDM grain map, grain results |
+| .mic/.map (NF) | nf_qt | NF-HEDM microstructure |
 
-STEP 3: Call run_midas_viewer with the viewer name and data file path. That's it.
+DISAMBIGUATION — when the user request is ambiguous, pick ONE using these rules:
+- "calibrated image" / "calibration results" / "calibration fit" → plot_calibrant_results
+- "caked image" / "caked data" / "integrated data" / "integration result" → plot_caked_peaks
+- "lineout" / "1D profile" / "diffraction pattern" → plot_lineout_results
+- "raw image" / "diffraction image" / "detector image" → ff_asym_qt
+- "grain map" / "grain results" / "FF results" → interactiveFFplotting
+- "microstructure" / "NF results" → nf_qt
+- For caked .zarr.zip files: ALWAYS use plot_caked_peaks (interactive Qt viewer with heatmap + profile + peak table). Do NOT use plot_integrator_peaks (that is a diagnostic scatter plot, not an interactive viewer).
+- If still ambiguous, prefer the MOST PROCESSED result: caked > lineout > raw.
+
+STEP 3: Call run_midas_viewer ONCE with the viewer name and data file path. That's it.
 
 Example:
   User: "plot the calibration results in test1"
@@ -444,8 +588,8 @@ Example:
 Notes:
 - Pass param_file if refined_MIDAS_params*.txt is available (enables 2θ/Q axes)
 - For live_viewer: pass extra_args="--nRBins 2000" (capital R, capital B)
-- viz_caking.py: DO NOT USE — use plot_integrator_peaks instead
-- Always pass --paramFN when refined_MIDAS_params*.txt is available (enables 2θ/Q axes)
+- viz_caking.py: DO NOT USE — use plot_caked_peaks instead
+- plot_integrator_peaks: diagnostic scatter only — prefer plot_caked_peaks for interactive viewing
 
 After launching, report ONE line: which viewer was launched and which file. Do NOT read or summarize the data — the GUI shows it.""",
 )
@@ -505,9 +649,9 @@ TOOL_CALL: run_midas_viewer
 ARGUMENTS: {"viewer": "plot_calibrant_results", "data_file": "/full/path/to/file_corr.csv"}
 
 User: "Refine the caked output with GSAS-II using the CeO2 CIF"
-✅ CORRECT:
+✅ CORRECT (ALWAYS include two_theta_limits and n_cpus):
 TOOL_CALL: run_gsas_refinement
-ARGUMENTS: {"data_file": "/path/to/CeO2_caked.hdf.zarr.zip", "cif_files": ["/path/to/CeO2.cif"]}
+ARGUMENTS: {"data_file": "/path/to/CeO2_caked.hdf.zarr.zip", "cif_files": ["/path/to/CeO2.cif"], "two_theta_limits": [2.0, 15.0], "n_cpus": 8}
 
 User: "Fetch a CIF file for CeO2"
 ✅ CORRECT:
@@ -536,11 +680,23 @@ ARGUMENTS: {"motor": "m1"}
 - NEVER describe what you WOULD do — DO IT with TOOL_CALL
 - NEVER read_file to show plot data — launch the viewer with run_midas_viewer
 - NEVER use run_command for MIDAS viewers — always use run_midas_viewer tool
+- NEVER use run_command for GSAS-II, refinement, or peak fitting — always use run_gsas_refinement
+- NEVER use run_command for integration + refinement pipelines — always use run_live_analysis
 - NEVER try to construct Python paths manually — run_midas_viewer handles paths
 - NEVER mention pyFAI, .poni files, or azimuthalIntegrator — this system uses MIDAS only
 - NEVER hallucinate tools, files, or parameters that don't exist in tool results
 - NEVER claim to have read data from a file you didn't actually call read_file on
 - Only report information that came from actual tool results, not from your training data
+
+❌ SPECIFIC WRONG EXAMPLES:
+User: "run GSAS-II refinement on the integrated data"
+WRONG: TOOL_CALL: run_command  ARGUMENTS: {"command": "GSAS-II ..."}
+RIGHT: TOOL_CALL: run_gsas_refinement  ARGUMENTS: {"data_file": "/path/to.zarr.zip", "cif_files": ["/path/to.cif"], "two_theta_limits": [2.0, 15.0], "n_cpus": 8}
+
+User: "refine the caked data"
+WRONG: TOOL_CALL: run_command  ARGUMENTS: {"command": "python gsas_ii_refine.py ..."}
+WRONG: TOOL_CALL: run_gsas_refinement  ARGUMENTS: {"data_file": "...", "cif_files": ["..."]}  ← missing two_theta_limits!
+RIGHT: TOOL_CALL: run_gsas_refinement  ARGUMENTS: {"data_file": "/path/to.zarr.zip", "cif_files": ["/path/to.cif"], "two_theta_limits": [2.0, 15.0], "n_cpus": 8}
 
 RULES:
 1. For ANY X-ray calculation → TOOL_CALL: xray_calculate
@@ -743,9 +899,7 @@ class AgentRunner:
                     if tc.name == "list_directory":
                         try:
                             r = json.loads(result)
-                            listing = r.get("listing", "")
-                            if listing:
-                                print(f"\n{listing}\n")
+                            print(f"\n{_compact_listing(r)}\n")
                         except (json.JSONDecodeError, KeyError):
                             pass
                     messages.append(
@@ -762,6 +916,8 @@ class AgentRunner:
                 prose = self._strip_tool_calls_from_text(text)
                 if prose:
                     messages.append({"role": "assistant", "content": prose})
+
+                _once_per_response = set()
 
                 for tc in text_calls:
                     # Detect repeated identical tool calls (loop bug)
@@ -786,6 +942,39 @@ class AgentRunner:
                         })
                         break
 
+                    # Guard: tools that should only launch once per response
+                    _ONCE_TOOLS = {"run_midas_viewer"}
+                    if tc.name in _ONCE_TOOLS:
+                        if tc.name in _once_per_response:
+                            messages.append({
+                                "role": "user",
+                                "content": (
+                                    f"[Skipped duplicate {tc.name} — viewer already launched.]\n"
+                                    "The GUI window is open. Do NOT launch another viewer. "
+                                    "Report which viewer was launched and which file."
+                                ),
+                            })
+                            continue
+                        _once_per_response.add(tc.name)
+
+                    # Guard: intercept run_command misuse for dedicated tools
+                    if tc.name == "run_command":
+                        cmd_str = str(tc.arguments.get("command", "")).lower()
+                        if any(kw in cmd_str for kw in ["gsas", "refine", "rietveld", "gsas_ii_refine"]):
+                            result = json.dumps({
+                                "error": "Do NOT use run_command for GSAS-II refinement. "
+                                         "Use TOOL_CALL: run_gsas_refinement with data_file (.zarr.zip) and cif_files.",
+                                "correct_tool": "run_gsas_refinement",
+                            })
+                            messages.append({
+                                "role": "user",
+                                "content": f"[Tool Result for {tc.name}]\n{result}\n\n"
+                                           "You used the WRONG tool. Use run_gsas_refinement instead of run_command. "
+                                           "First call list_directory to find the .zarr.zip and .cif files, "
+                                           "then call run_gsas_refinement with those paths.",
+                            })
+                            continue
+
                     print(f"  \033[36m▸\033[0m \033[1m{tc.name}\033[0m")
                     t0 = time.monotonic()
                     result = await self._execute(tc.name, tc.arguments)
@@ -801,9 +990,7 @@ class AgentRunner:
                     if tc.name == "list_directory":
                         try:
                             r = json.loads(result)
-                            listing = r.get("listing", "")
-                            if listing:
-                                print(f"\n{listing}\n")
+                            print(f"\n{_compact_listing(r)}\n")
                         except (json.JSONDecodeError, KeyError):
                             pass
 
@@ -882,6 +1069,7 @@ class OrchestratorAgent:
             "beam center", "detector distance", "lsd", "autocal",
             "stopping strain", "refined param", "bc_x", "bc_y",
             "tilt", "detector geometry",
+            "validate param", "diagnose", "inspect dataset",
         },
         "analysis": {
             "integrat", "hedm", "ff-hedm", "nf-hedm", "pf-hedm", "grain",
@@ -894,6 +1082,10 @@ class OrchestratorAgent:
             "misorientation", "dream3d", "forward simulation",
             "gsas", "refine", "refinement", "rietveld", "rwp",
             "lattice param", "peak fit", "live analysis",
+            "stress", "stiffness", "von mises", "schmid",
+            "slip system", "d0 correct", "equilibrium",
+            "plasticity", "taylor factor", "grains.csv",
+            "validate param", "bragg ring",
         },
         "knowledge": {
             "explain", "what is", "what are", "how does", "how do",
