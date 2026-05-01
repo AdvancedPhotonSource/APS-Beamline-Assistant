@@ -20,6 +20,12 @@ import logging
 import traceback
 from mcp.server.fastmcp import FastMCP
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 # Suppress verbose MCP server logging
 logging.getLogger("mcp").setLevel(logging.WARNING)
 logging.getLogger("fastmcp").setLevel(logging.WARNING)
@@ -2157,6 +2163,25 @@ async def get_midas_workflow_status(
 # This server now contains ONLY official MIDAS tools
 # =============================================================================
 
+def _strip_empty_value_lines(param_path: Path):
+    """Remove lines with a key but no value (e.g. 'Dark \\n') that crash ffGenerateZipRefactor.py."""
+    try:
+        lines = param_path.read_text().splitlines()
+        cleaned = []
+        for line in lines:
+            stripped = line.strip()
+            if not stripped or stripped.startswith('#'):
+                cleaned.append(line)
+                continue
+            parts = stripped.split(None, 1)
+            if len(parts) == 1 and not stripped[0].isdigit():
+                continue
+            cleaned.append(line)
+        param_path.write_text('\n'.join(cleaned) + '\n')
+    except Exception:
+        pass
+
+
 @mcp.tool()
 async def midas_integrate_2d_to_1d(
     image_file: str,
@@ -2211,6 +2236,26 @@ async def midas_integrate_2d_to_1d(
                 return format_result({"tool": "midas_integrate_2d_to_1d", "status": "error",
                                       "error": f"Parameter file not found: {param_path}"})
 
+        # Validate param file is actually a MIDAS parameter file (not CSV/JSON/etc.)
+        if param_path.suffix.lower() in ('.csv', '.json', '.log', '.bin', '.h5', '.hdf', '.tif'):
+            return format_result({"tool": "midas_integrate_2d_to_1d", "status": "error",
+                                  "error": f"Invalid parameter file: {param_path.name} (suffix {param_path.suffix}). "
+                                           f"Use refined_MIDAS_params*.txt from midas_auto_calibrate."})
+        try:
+            with open(param_path) as f:
+                first_500 = f.read(500)
+            if not any(kw in first_500 for kw in ["Lsd", "Wavelength", "NrPixels", "BC "]):
+                return format_result({"tool": "midas_integrate_2d_to_1d", "status": "error",
+                                      "error": f"Parameter file {param_path.name} is missing critical keys "
+                                               f"(Lsd, Wavelength, NrPixels, BC). "
+                                               f"Use refined_MIDAS_params*.txt from midas_auto_calibrate."})
+        except UnicodeDecodeError:
+            return format_result({"tool": "midas_integrate_2d_to_1d", "status": "error",
+                                  "error": f"Parameter file {param_path.name} is a binary file, not a text param file."})
+
+        # Strip empty-value lines that crash ffGenerateZipRefactor.py
+        _strip_empty_value_lines(param_path)
+
         # Find integrator.py — v10 location: FF_HEDM/workflows/
         integrator_script = MIDAS_ROOT / "FF_HEDM" / "workflows" / "integrator.py"
         if not integrator_script.exists():
@@ -2220,6 +2265,12 @@ async def midas_integrate_2d_to_1d(
         out_dir = Path(result_folder).expanduser().absolute() if result_folder \
                   else image_path.parent / "integration"
         out_dir.mkdir(parents=True, exist_ok=True)
+
+        # Extract file number from basename only (not full path) to avoid
+        # matching numbers in parent directories (e.g. /Users/b324240/ → 324240)
+        basename = image_path.stem
+        file_nr_match = re.search(r'(\d{6})', basename)
+        file_nr = int(file_nr_match.group(1)) if file_nr_match else None
 
         midas_python = find_midas_python()
         cmd = [
@@ -2233,6 +2284,8 @@ async def midas_integrate_2d_to_1d(
             "-convertFiles", "1" if convert_files else "0",
             "-writeMat",     "0",
         ]
+        if file_nr is not None:
+            cmd += ["-startFileNr", str(file_nr), "-endFileNr", str(file_nr)]
         if dark_file:
             dark_path = Path(dark_file).expanduser().absolute()
             if not dark_path.exists():
@@ -2883,7 +2936,7 @@ async def midas_auto_calibrate(
 
         message = f"✓ Auto-calibration completed successfully!\n\n"
         message += f"Refined Parameters:\n"
-        message += f"  Beam Center: ({bc_x:.2f}, {bc_y:.2f}) pixels\n"
+        message += f"  Beam Center: BC_Y={bc_y:.2f}, BC_X={bc_x:.2f} pixels\n"
         message += f"  Distance (Lsd): {lsd_mm:.2f} mm\n"
         if calibrated_params.get('tx'):
             message += f"  Tilts: tx={calibrated_params['tx']:.6f}, ty={calibrated_params['ty']:.6f}, tz={calibrated_params['tz']:.6f} rad\n"
@@ -3019,6 +3072,13 @@ async def midas_batch_integrate(
                 "status": "error",
                 "error": f"Parameter file not found: {param_path}"
             })
+
+        if param_path.suffix.lower() in ('.csv', '.json', '.log', '.bin', '.h5', '.hdf', '.tif'):
+            return format_result({"tool": "midas_batch_integrate", "status": "error",
+                                  "error": f"Invalid parameter file: {param_path.name} (suffix {param_path.suffix}). "
+                                           f"Use refined_MIDAS_params*.txt from midas_auto_calibrate."})
+
+        _strip_empty_value_lines(param_path)
 
         # Find MIDAS integrator.py via MIDAS_ROOT (set from .env)
         if not MIDAS_ROOT:
@@ -3833,14 +3893,32 @@ async def run_gsas_refinement(
             if "Cannot import GSASIIscriptable" in stderr or "ModuleNotFoundError" in stderr:
                 error_msg += (". GSAS-II import failed — install via: "
                               "conda install gsas2full -c briantoby -c conda-forge")
-            return format_result({
+
+            # Check for partial results (script may crash in summary but produce .gpx files)
+            partial_summary = {}
+            summary_file = out_path / "refinement_summary.json"
+            if summary_file.exists():
+                try:
+                    with open(summary_file) as f:
+                        partial_summary = json.load(f)
+                except Exception:
+                    pass
+            gpx_files = sorted(out_path.glob("*.gpx"))
+
+            resp = {
                 "tool": "run_gsas_refinement",
-                "status": "error",
+                "status": "partial_success" if (partial_summary or gpx_files) else "error",
                 "error": error_msg,
                 "stderr": stderr,
                 "python_used": python_exe,
                 "command": " ".join(cmd),
-            })
+            }
+            if partial_summary:
+                resp["summary"] = partial_summary
+            if gpx_files:
+                resp["gpx_files_produced"] = len(gpx_files)
+                resp["output_dir"] = str(out_path)
+            return format_result(resp)
 
         # Read refinement summary if produced
         summary_file = out_path / "refinement_summary.json"
@@ -4207,7 +4285,16 @@ async def fetch_cif_from_mp(
                 d.energy_above_hull or 999
             ))
             for doc in docs_sorted[:3]:
-                cif_str = doc.structure.to(fmt="cif")
+                # Convert to conventional standard cell with proper space group
+                # (MP stores primitive P1 cells; GSAS-II needs conventional with symmetry)
+                try:
+                    from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+                    from pymatgen.io.cif import CifWriter
+                    sga = SpacegroupAnalyzer(doc.structure)
+                    conv_struct = sga.get_conventional_standard_structure()
+                    cif_str = str(CifWriter(conv_struct, symprec=0.1))
+                except Exception:
+                    cif_str = doc.structure.to(fmt="cif")
                 mp_id = doc.material_id
                 cif_filename = f"{doc.formula_pretty}_{mp_id}.cif"
                 cif_path = out_path / cif_filename
@@ -4219,7 +4306,7 @@ async def fetch_cif_from_mp(
                     "material_id": str(mp_id),
                     "formula": doc.formula_pretty,
                     "space_group": doc.symmetry.symbol if doc.symmetry else "unknown",
-                    "crystal_system": doc.symmetry.crystal_system if doc.symmetry else "unknown",
+                    "crystal_system": str(doc.symmetry.crystal_system) if doc.symmetry else "unknown",
                     "energy_above_hull_eV": doc.energy_above_hull,
                     "is_stable": doc.is_stable,
                     "cif_file": str(cif_path),
@@ -4259,11 +4346,15 @@ def _resolve_param_file(path_str: str) -> tuple[bool, str]:
 
     if path.is_dir():
         candidates = []
-        # Priority 1: Parameters.txt (standard name)
+        # Priority 1: Parameters.txt / parameters.txt (standard names)
+        # Use os.listdir for case-exact matching (macOS FS is case-insensitive)
+        try:
+            actual_names = set(os.listdir(path))
+        except OSError:
+            actual_names = set()
         for name in ["Parameters.txt", "parameters.txt"]:
-            p = path / name
-            if p.exists():
-                return True, str(p)
+            if name in actual_names:
+                return True, str(path / name)
         # Priority 2: refined_MIDAS_params*.txt (calibration output)
         candidates.extend(sorted(path.glob("refined_MIDAS_params*.txt"), reverse=True))
         # Priority 3: ps_*.txt (parameter set files)

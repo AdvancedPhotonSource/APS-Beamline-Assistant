@@ -356,7 +356,9 @@ async def list_directory(path: str = ".", show_hidden: bool = False, details: bo
         return format_result({
             "tool": "list_directory",
             "path": str(dir_path.absolute()),
-            "listing": output
+            "listing": output,
+            "dirs": dir_names,
+            "files": [e[0] for e in file_entries],
         })
 
     except Exception as e:
