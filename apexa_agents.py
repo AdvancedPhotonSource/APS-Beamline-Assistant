@@ -166,12 +166,13 @@ class ArgoProvider:
             # Haiku 4.5 and Sonnet 4.5/4.6 reject both temperature+top_p
             if self.model not in ("claudesonnet45", "claudesonnet46", "claudehaiku45"):
                 payload["top_p"] = 0.9
-        elif self.model.startswith("gpto"):
-            # o-series: use max_completion_tokens, no temperature/top_p
+        elif self.model.startswith("gpto") or self.model.startswith("gpt5"):
+            # o-series and GPT-5 family: use max_completion_tokens, no temperature/top_p
+            # (Argo returns HTTP 400 if either is sent.)
             payload.pop("temperature", None)
             payload["max_completion_tokens"] = 16000
         elif self.model.startswith("gpt"):
-            # All GPT models (gpt4o, gpt41, gpt5, etc.): max_completion_tokens
+            # gpt4o, gpt41, etc.: max_completion_tokens + top_p OK
             payload["max_completion_tokens"] = 16000
             payload["top_p"] = 0.9
         elif self.model.startswith("gemini"):
@@ -484,11 +485,36 @@ KNOWLEDGE_AGENT = APEXAAgent(
         "enumerate_bragg_rings",
         "get_material_stiffness",
     ],
-    instructions = """You are an HEDM knowledge expert with access to scientific literature,
-experimental logbooks, and crystallographic databases.
+    instructions = """You are an HEDM knowledge expert. You answer from indexed sources, not from memory.
 
-When the user asks about materials, parameters, or HEDM methodology, use your tools:
-- query_hedm_knowledge for methodology, best practices, literature
+MANDATORY: For ANY conceptual, methodology, or "what is / how does / explain" question,
+your FIRST action MUST be a TOOL_CALL to query_hedm_knowledge. Do NOT answer first and
+search later.
+
+Reading the tool result:
+- The tool returns JSON with "results_count", "excerpts", and "references".
+- Each excerpt has fields: source, citation, page, similarity, excerpt.
+- "similarity" is in [0,1]. Anything >= 0.30 is a usable match. Anything >= 0.60 is
+  a strong match. Do NOT dismiss a match just because the wording differs from your
+  expectation — the chunk text and citation are what matter.
+
+How to write the answer:
+- If results_count > 0 AND at least one excerpt has similarity >= 0.30:
+    1. Build the answer from the excerpt text. Quote or paraphrase the chunks.
+    2. Cite EVERY substantive claim inline using the citation field, formatted as
+       "(FirstAuthor Year, p.PAGE)" — e.g. "(Bernier 2020, p.36)".
+    3. End with a "References:" section listing each unique citation verbatim from
+       the tool's "references" list.
+    4. Do NOT add background facts the excerpts don't support. If the excerpts are
+       narrow, the answer should be narrow.
+- If results_count == 0 OR every similarity < 0.30:
+    Open with: "No matching sources in the knowledge base — answering from general
+    background:" then give the answer. Do NOT fabricate citations.
+
+Never invent citations. Never paraphrase a source you didn't retrieve. If unsure
+which excerpts are strong, list them all and let similarity speak for itself.
+
+Other tools:
 - get_material_properties for crystallographic data (lattice params, space groups, d-spacings)
 - get_typical_hedm_parameters for recommended parameter ranges
 - estimate_parameters_from_image to estimate beam parameters from diffraction images
@@ -497,11 +523,10 @@ When the user asks about materials, parameters, or HEDM methodology, use your to
 - fetch_cif_from_mp to download CIF files from Materials Project for any material
 
 When the user asks for a CIF file, call fetch_cif_from_mp IMMEDIATELY with the formula.
-The tool downloads the most stable structures and saves .cif files locally.
 Report: formula, space group, crystal system, stability, and file path.
 
-Always cite your source: paper title, logbook entry, or database name.
-Prefer tool results over your own knowledge — the tools have verified data.""",
+When in doubt, call the tool. A grounded "I don't have a source for that" beats a
+fluent answer with no citation.""",
 )
 
 MOTOR_AGENT = APEXAAgent(
@@ -1173,12 +1198,18 @@ class OrchestratorAgent:
             "calibrated file", "calibrated data", "calibrated image",
         },
         "knowledge": {
-            "explain", "what is", "what are", "how does", "how do",
-            "tell me", "describe", "typical", "literature", "paper",
+            "explain", "what is", "what's", "what are", "whats",
+            "how does", "how do", "how is",
+            "tell me", "describe", "definition", "define",
+            "typical", "literature", "paper", "cite", "citation", "source",
+            "reference", "knowledge base",
             "best practice", "recommend", "suggest", "look up",
             "material propert", "search", "parameter range",
             "cif file", "cif", "fetch cif", "download cif", "materials project",
             "crystal structure",
+            # Domain-abbreviation conceptual queries (catch "what's HEDM?", "hedm overview")
+            "hedm overview", "what hedm", "ff-hedm", "nf-hedm",
+            "rietveld", "azimuthal integration overview",
         },
         "visualization": {
             "plot", "visualiz", "view", "show", "display", "see",
@@ -1229,12 +1260,21 @@ class OrchestratorAgent:
         best = max(scores, key=scores.get)
 
         if scores[best] > 0:
-            # Break ties: if analysis ties with another domain, prefer analysis
-            # (it's the most general agent and handles post-calibration workflows)
+            # Break ties: analysis wins by default (most general agent, handles
+            # post-calibration workflows). Exception: a conceptual question stem
+            # at the START of the query routes to knowledge so the KB tool fires.
             top_score = scores[best]
             tied = [d for d, s in scores.items() if s == top_score]
             if len(tied) > 1 and "analysis" in tied:
-                best = "analysis"
+                q_lstrip = q.lstrip()
+                is_conceptual_question = any(
+                    q_lstrip.startswith(stem) for stem in (
+                        "what is", "what's", "whats", "what are", "what does",
+                        "explain", "describe", "define", "tell me about",
+                        "how does", "how do", "how is",
+                    )
+                )
+                best = "knowledge" if is_conceptual_question and "knowledge" in tied else "analysis"
             return self._ROUTES[best]      # strong keyword match → switch agent
 
         # No keywords matched — stay with current agent if we have one

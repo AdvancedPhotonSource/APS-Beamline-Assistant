@@ -1,324 +1,497 @@
 #!/usr/bin/env python3
 """
-Index knowledge base documents (PDFs, logbooks, books) using RAG/vector embeddings
+Index knowledge base documents (PDFs, logbooks, books) into ChromaDB with
+citation-aware metadata.
 
-This script processes all documents in knowledge_base/{papers,logbooks,books}/
-and creates a searchable vector database using ChromaDB.
+For each PDF in knowledge_base/papers/:
+  1. If a sibling .bib file exists (e.g. Foo2024.pdf -> Foo2024.bib), parse it
+     and use authors/year/journal/doi as chunk metadata.
+  2. Otherwise, fall back to PyPDF2 metadata + first-page DOI regex.
 
-Requirements:
-    pip install chromadb sentence-transformers PyPDF2 python-docx
+Chunks are produced per-page (not per-flat-word-stream) so the query tool can
+report a page number alongside the citation.
 
 Usage:
-    python knowledge_base/index_knowledge.py
-
-The indexed database will be stored in knowledge_base/chroma_db/ and can be
-queried instantly by the MCP server tools.
+    uv run python knowledge_base/index_knowledge.py
 """
 
-import os
 import json
-from pathlib import Path
-from typing import List, Dict, Tuple
+import re
 import hashlib
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
 try:
     import chromadb
-    from chromadb.config import Settings
-    HAS_CHROMA = True
 except ImportError:
-    HAS_CHROMA = False
-    print("Warning: chromadb not installed. Install with: pip install chromadb")
+    chromadb = None
 
 try:
     from sentence_transformers import SentenceTransformer
-    HAS_TRANSFORMERS = True
 except ImportError:
-    HAS_TRANSFORMERS = False
-    print("Warning: sentence-transformers not installed. Install with: pip install sentence-transformers")
+    SentenceTransformer = None
+
+import os as _os
+
+# Override via env: APEXA_EMBED_MODEL=nvidia/llama-embed-nemotron-8b uv run ...
+EMBED_MODEL = _os.environ.get("APEXA_EMBED_MODEL", "nomic-ai/nomic-embed-text-v1.5")
+
+# Per-model task prefixes. Nomic requires explicit task tags; most other models
+# (Nemotron, BGE-M3, E5 in symmetric mode) don't. When in doubt, add an entry here.
+EMBED_PREFIXES = {
+    "nomic-ai/nomic-embed-text-v1.5": ("search_document: ", "search_query: "),
+    "nomic-ai/nomic-embed-text-v1":   ("search_document: ", "search_query: "),
+    # No prefix for these (default behavior)
+    "nvidia/llama-embed-nemotron-8b": ("", ""),
+    "BAAI/bge-m3":                    ("", ""),
+}
+
+
+def _prefixes() -> tuple[str, str]:
+    return EMBED_PREFIXES.get(EMBED_MODEL, ("", ""))
+
+
+def embed_doc(embedder, text: str) -> list[float]:
+    pfx, _ = _prefixes()
+    return embedder.encode(f"{pfx}{text}").tolist()
+
+
+def embed_query(embedder, text: str) -> list[float]:
+    _, pfx = _prefixes()
+    return embedder.encode(f"{pfx}{text}").tolist()
 
 try:
     import PyPDF2
-    HAS_PDF = True
 except ImportError:
-    HAS_PDF = False
-    print("Warning: PyPDF2 not installed. Install with: pip install PyPDF2")
+    PyPDF2 = None
 
 
-def extract_text_from_pdf(pdf_path: Path) -> str:
-    """Extract text from PDF file"""
-    if not HAS_PDF:
-        return ""
+# ---------------------------------------------------------------------------
+# .bib parsing — minimal, single-entry BibTeX
+# ---------------------------------------------------------------------------
 
-    text = ""
+_BIB_FIELD_RE = re.compile(r"(\w+)\s*=\s*[{\"]([^{}\"]*)[}\"]\s*,?", re.MULTILINE)
+_BIB_ENTRY_RE = re.compile(r"@(\w+)\s*\{\s*([^,\s]+)\s*,(.*)\}", re.DOTALL)
+
+
+def parse_bib(bib_path: Path) -> Optional[Dict[str, str]]:
+    """Parse a single-entry .bib file. Returns dict of fields or None on error."""
     try:
-        with open(pdf_path, 'rb') as file:
-            pdf_reader = PyPDF2.PdfReader(file)
-            for page_num in range(len(pdf_reader.pages)):
-                page = pdf_reader.pages[page_num]
-                text += page.extract_text() + "\n"
+        text = bib_path.read_text(encoding="utf-8", errors="ignore")
+        entry = _BIB_ENTRY_RE.search(text)
+        if not entry:
+            return None
+        entry_type, bibkey, body = entry.groups()
+        fields = {
+            "entry_type": entry_type.lower(),
+            "bibkey": bibkey.strip(),
+        }
+        for k, v in _BIB_FIELD_RE.findall(body):
+            fields[k.lower()] = " ".join(v.split())
+        return fields
     except Exception as e:
-        print(f"  ⚠️  Error reading {pdf_path.name}: {e}")
-    return text
+        print(f"      ⚠️  Failed to parse {bib_path.name}: {e}")
+        return None
 
 
-def extract_text_from_txt(txt_path: Path) -> str:
-    """Extract text from text file"""
-    try:
-        with open(txt_path, 'r', encoding='utf-8', errors='ignore') as f:
-            return f.read()
-    except Exception as e:
-        print(f"  ⚠️  Error reading {txt_path.name}: {e}")
+def short_authors(authors: str) -> str:
+    """'Sharma, H. and Huizenga, R. and Offerman, S.' -> 'Sharma et al.'"""
+    if not authors:
         return ""
+    parts = [a.strip() for a in re.split(r"\s+and\s+", authors) if a.strip()]
+    if not parts:
+        return ""
+    first_last = parts[0].split(",")[0].strip()
+    if len(parts) == 1:
+        return first_last
+    if len(parts) == 2:
+        second_last = parts[1].split(",")[0].strip()
+        return f"{first_last} & {second_last}"
+    return f"{first_last} et al."
 
 
-def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> List[str]:
-    """Split text into overlapping chunks for better context preservation"""
+def format_citation(meta: Dict[str, str]) -> str:
+    """Render a one-line citation from .bib-style fields."""
+    sa = short_authors(meta.get("author", ""))
+    head = ""
+    if sa and meta.get("year"):
+        head = f"{sa} ({meta['year']})"
+    elif sa:
+        head = sa
+    elif meta.get("year"):
+        head = f"({meta['year']})"
+
+    journal = ""
+    if meta.get("journal"):
+        journal = meta["journal"]
+        if meta.get("volume"):
+            journal += f" {meta['volume']}"
+        if meta.get("pages"):
+            journal += f":{meta['pages']}"
+
+    parts = [p for p in (head, journal) if p]
+    cite = ". ".join(parts)
+    if meta.get("doi"):
+        cite += f". DOI:{meta['doi']}"
+    return cite or meta.get("source", "")
+
+
+# ---------------------------------------------------------------------------
+# PDF metadata fallback
+# ---------------------------------------------------------------------------
+
+_DOI_RE = re.compile(r"\b10\.\d{4,9}/[-._;()/:A-Z0-9]+", re.IGNORECASE)
+_YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
+
+
+def fallback_metadata(reader: "PyPDF2.PdfReader") -> Dict[str, str]:
+    """Best-effort citation fields when no .bib sidecar is present."""
+    meta: Dict[str, str] = {}
+    pdf_meta = reader.metadata or {}
+    if pdf_meta.get("/Title"):
+        meta["title"] = str(pdf_meta["/Title"]).strip()
+    if pdf_meta.get("/Author"):
+        meta["author"] = str(pdf_meta["/Author"]).strip()
+    if pdf_meta.get("/DOI"):
+        meta["doi"] = str(pdf_meta["/DOI"]).strip()
+
+    try:
+        first_page_text = reader.pages[0].extract_text() or ""
+    except Exception:
+        first_page_text = ""
+
+    if "doi" not in meta:
+        m = _DOI_RE.search(first_page_text)
+        if m:
+            meta["doi"] = m.group(0).rstrip(".,;)")
+    if "year" not in meta:
+        m = _YEAR_RE.search(first_page_text)
+        if m:
+            meta["year"] = m.group(0)
+    return meta
+
+
+# ---------------------------------------------------------------------------
+# Chunking
+# ---------------------------------------------------------------------------
+
+def chunk_page_text(text: str, max_words: int = 500, overlap: int = 50) -> List[str]:
+    """Split a single page into one or more chunks if it exceeds max_words."""
     words = text.split()
-    chunks = []
-
-    for i in range(0, len(words), chunk_size - overlap):
-        chunk = ' '.join(words[i:i + chunk_size])
+    if not words:
+        return []
+    if len(words) <= max_words:
+        return [" ".join(words)]
+    chunks: List[str] = []
+    step = max(1, max_words - overlap)
+    for i in range(0, len(words), step):
+        chunk = " ".join(words[i:i + max_words])
         if chunk.strip():
             chunks.append(chunk)
-
     return chunks
 
 
-def get_file_hash(file_path: Path) -> str:
-    """Calculate MD5 hash of file for change detection"""
-    hash_md5 = hashlib.md5()
-    with open(file_path, "rb") as f:
-        for chunk in iter(lambda: f.read(4096), b""):
-            hash_md5.update(chunk)
-    return hash_md5.hexdigest()
+def chunk_flat_text(text: str, chunk_size: int = 500, overlap: int = 50) -> List[str]:
+    """Flat-stream chunking for non-paginated docs (logbooks)."""
+    words = text.split()
+    chunks = []
+    step = max(1, chunk_size - overlap)
+    for i in range(0, len(words), step):
+        chunk = " ".join(words[i:i + chunk_size])
+        if chunk.strip():
+            chunks.append(chunk)
+    return chunks
+
+
+def file_hash(path: Path) -> str:
+    h = hashlib.md5()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(4096), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# Indexing
+# ---------------------------------------------------------------------------
+
+def _citation_metadata(pdf_path: Path, reader: "PyPDF2.PdfReader") -> Dict[str, str]:
+    """Return per-paper citation fields, preferring .bib sidecar."""
+    bib_path = pdf_path.with_suffix(".bib")
+    if bib_path.exists():
+        parsed = parse_bib(bib_path)
+        if parsed:
+            return parsed
+        print(f"      ⚠️  .bib present but unparseable, using PDF fallback")
+    return fallback_metadata(reader)
+
+
+def index_paper(
+    pdf_path: Path,
+    collection,
+    embedder,
+) -> Tuple[int, Dict[str, str]]:
+    """Index one paper, returning (chunk_count, citation_metadata)."""
+    with open(pdf_path, "rb") as f:
+        reader = PyPDF2.PdfReader(f)
+        cite = _citation_metadata(pdf_path, reader)
+        citation_str = format_citation({**cite, "source": pdf_path.name})
+        h = file_hash(pdf_path)
+
+        # Title-aware embedding: prepend paper title (and topics, when present)
+        # to every chunk before encoding. This anchors retrieval to the paper's
+        # subject rather than the immediate paragraph wording. The raw chunk is
+        # still stored as the document so excerpts read naturally.
+        title = cite.get("title", "")
+        topics = cite.get("topics", "")
+        embed_prefix = title
+        if topics:
+            embed_prefix = f"{title}. Topics: {topics}" if title else f"Topics: {topics}"
+
+        total = 0
+        for page_idx, page in enumerate(reader.pages, start=1):
+            try:
+                page_text = page.extract_text() or ""
+            except Exception:
+                page_text = ""
+            for sub_idx, chunk in enumerate(chunk_page_text(page_text)):
+                meta = {
+                    "source": pdf_path.name,
+                    "type": "paper",
+                    "page": page_idx,
+                    "chunk_index": sub_idx,
+                    "file_hash": h,
+                    "citation": citation_str,
+                    "bibkey": cite.get("bibkey", ""),
+                    "title": title,
+                    "authors": cite.get("author", ""),
+                    "year": cite.get("year", ""),
+                    "journal": cite.get("journal", ""),
+                    "doi": cite.get("doi", ""),
+                    "topics": topics,
+                }
+                meta = {k: ("" if v is None else v) for k, v in meta.items()}
+                embed_text = f"{embed_prefix}\n\n{chunk}" if embed_prefix else chunk
+                embedding = embed_doc(embedder, embed_text)
+                collection.add(
+                    documents=[chunk],
+                    embeddings=[embedding],
+                    metadatas=[meta],
+                    ids=[f"{pdf_path.stem}_p{page_idx}_c{sub_idx}"],
+                )
+                total += 1
+        return total, cite
+
+
+def index_logbook(txt_path: Path, collection, embedder) -> int:
+    text = txt_path.read_text(encoding="utf-8", errors="ignore")
+    chunks = chunk_flat_text(text, chunk_size=300)
+    h = file_hash(txt_path)
+    for i, chunk in enumerate(chunks):
+        embedding = embed_doc(embedder, chunk)
+        collection.add(
+            documents=[chunk],
+            embeddings=[embedding],
+            metadatas=[{
+                "source": txt_path.name,
+                "type": "logbook",
+                "page": 0,
+                "chunk_index": i,
+                "file_hash": h,
+                "citation": f"Logbook: {txt_path.name}",
+                "bibkey": "",
+                "title": txt_path.stem,
+                "authors": "",
+                "year": "",
+                "journal": "",
+                "doi": "",
+                "topics": "",
+            }],
+            ids=[f"{txt_path.stem}_chunk_{i}"],
+        )
+    return len(chunks)
+
+
+def index_book(pdf_path: Path, collection, embedder) -> int:
+    with open(pdf_path, "rb") as f:
+        reader = PyPDF2.PdfReader(f)
+        cite = _citation_metadata(pdf_path, reader)
+        citation_str = format_citation({**cite, "source": pdf_path.name})
+        h = file_hash(pdf_path)
+        title = cite.get("title", "")
+        topics = cite.get("topics", "")
+        embed_prefix = title
+        if topics:
+            embed_prefix = f"{title}. Topics: {topics}" if title else f"Topics: {topics}"
+        total = 0
+        for page_idx, page in enumerate(reader.pages, start=1):
+            try:
+                page_text = page.extract_text() or ""
+            except Exception:
+                page_text = ""
+            for sub_idx, chunk in enumerate(chunk_page_text(page_text, max_words=700)):
+                embed_text = f"{embed_prefix}\n\n{chunk}" if embed_prefix else chunk
+                embedding = embed_doc(embedder, embed_text)
+                collection.add(
+                    documents=[chunk],
+                    embeddings=[embedding],
+                    metadatas=[{
+                        "source": pdf_path.name,
+                        "type": "book",
+                        "page": page_idx,
+                        "chunk_index": sub_idx,
+                        "file_hash": h,
+                        "citation": citation_str,
+                        "bibkey": cite.get("bibkey", ""),
+                        "title": cite.get("title", ""),
+                        "authors": cite.get("author", ""),
+                        "year": cite.get("year", ""),
+                        "journal": cite.get("journal", ""),
+                        "doi": cite.get("doi", ""),
+                        "topics": cite.get("topics", ""),
+                    }],
+                    ids=[f"{pdf_path.stem}_p{page_idx}_c{sub_idx}"],
+                )
+                total += 1
+    return total
 
 
 def index_documents(kb_path: Path, collection_name: str = "hedm_knowledge"):
-    """Index all documents in knowledge base"""
-    if not HAS_CHROMA or not HAS_TRANSFORMERS:
-        print("❌ Missing dependencies. Install with:")
-        print("   pip install chromadb sentence-transformers PyPDF2")
+    if chromadb is None or SentenceTransformer is None or PyPDF2 is None:
+        print("❌ Missing dependencies. Install: chromadb sentence-transformers PyPDF2")
         return
 
-    print("🚀 Starting knowledge base indexing...")
+    print("\U0001f680 Starting knowledge base indexing...")
     print()
-
-    # Initialize embedding model (lightweight, runs locally)
-    print("📦 Loading embedding model (all-MiniLM-L6-v2)...")
-    embedder = SentenceTransformer('all-MiniLM-L6-v2')  # 80MB model, very fast
+    print(f"\U0001f4e6 Loading embedding model ({EMBED_MODEL})...")
+    embedder = SentenceTransformer(EMBED_MODEL, trust_remote_code=True)
     print("   ✓ Model loaded")
-    print()
 
-    # Initialize ChromaDB
     chroma_path = kb_path / "chroma_db"
     chroma_path.mkdir(exist_ok=True)
-
     client = chromadb.PersistentClient(path=str(chroma_path))
 
-    # Delete existing collection if it exists (for fresh indexing)
     try:
         client.delete_collection(name=collection_name)
         print(f"   Deleted existing collection '{collection_name}'")
-    except:
+    except Exception:
         pass
 
     collection = client.create_collection(
         name=collection_name,
-        metadata={"description": "HEDM knowledge base with papers, logbooks, and books"}
+        metadata={"description": "HEDM knowledge base with citation-aware chunks",
+                  "hnsw:space": "cosine"},
     )
 
-    # Track indexing stats
-    stats = {
-        "papers": 0,
-        "logbooks": 0,
-        "books": 0,
-        "total_chunks": 0
-    }
+    stats = {"papers": 0, "logbooks": 0, "books": 0, "total_chunks": 0,
+             "papers_with_bib": 0}
 
-    # Index papers
     papers_dir = kb_path / "papers"
     if papers_dir.exists():
-        print("📄 Indexing papers...")
-        for pdf_file in papers_dir.glob("*.pdf"):
-            print(f"   Processing: {pdf_file.name}")
-            text = extract_text_from_pdf(pdf_file)
-            chunks = chunk_text(text, chunk_size=500)
-
-            for i, chunk in enumerate(chunks):
-                embedding = embedder.encode(chunk).tolist()
-                collection.add(
-                    documents=[chunk],
-                    embeddings=[embedding],
-                    metadatas=[{
-                        "source": str(pdf_file.name),
-                        "type": "paper",
-                        "chunk_index": i,
-                        "file_hash": get_file_hash(pdf_file)
-                    }],
-                    ids=[f"{pdf_file.stem}_chunk_{i}"]
-                )
-
+        print()
+        print("\U0001f4c4 Indexing papers...")
+        for pdf in sorted(papers_dir.glob("*.pdf")):
+            print(f"   Processing: {pdf.name}")
+            n, cite = index_paper(pdf, collection, embedder)
+            has_bib = pdf.with_suffix(".bib").exists()
+            tag = " [.bib]" if has_bib else " [PDF metadata fallback]"
+            print(f"      ✓ Indexed {n} chunks{tag}")
+            print(f"      → {format_citation({**cite, 'source': pdf.name})}")
             stats["papers"] += 1
-            stats["total_chunks"] += len(chunks)
-            print(f"      ✓ Indexed {len(chunks)} chunks")
+            stats["total_chunks"] += n
+            if has_bib:
+                stats["papers_with_bib"] += 1
 
-    # Index logbooks
     logbooks_dir = kb_path / "logbooks"
     if logbooks_dir.exists():
         print()
-        print("📓 Indexing logbooks...")
-        for txt_file in list(logbooks_dir.glob("*.txt")) + list(logbooks_dir.glob("*.md")):
-            print(f"   Processing: {txt_file.name}")
-            text = extract_text_from_txt(txt_file)
-            chunks = chunk_text(text, chunk_size=300)  # Smaller chunks for logbooks
-
-            for i, chunk in enumerate(chunks):
-                embedding = embedder.encode(chunk).tolist()
-                collection.add(
-                    documents=[chunk],
-                    embeddings=[embedding],
-                    metadatas=[{
-                        "source": str(txt_file.name),
-                        "type": "logbook",
-                        "chunk_index": i,
-                        "file_hash": get_file_hash(txt_file)
-                    }],
-                    ids=[f"{txt_file.stem}_chunk_{i}"]
-                )
-
+        print("\U0001f4d3 Indexing logbooks...")
+        for txt in sorted(list(logbooks_dir.glob("*.txt")) + list(logbooks_dir.glob("*.md"))):
+            print(f"   Processing: {txt.name}")
+            n = index_logbook(txt, collection, embedder)
+            print(f"      ✓ Indexed {n} chunks")
             stats["logbooks"] += 1
-            stats["total_chunks"] += len(chunks)
-            print(f"      ✓ Indexed {len(chunks)} chunks")
+            stats["total_chunks"] += n
 
-    # Index books
     books_dir = kb_path / "books"
     if books_dir.exists():
         print()
-        print("📚 Indexing books...")
-        for book_file in books_dir.glob("*.pdf"):
-            print(f"   Processing: {book_file.name}")
-            text = extract_text_from_pdf(book_file)
-            chunks = chunk_text(text, chunk_size=700)  # Larger chunks for books
-
-            for i, chunk in enumerate(chunks):
-                embedding = embedder.encode(chunk).tolist()
-                collection.add(
-                    documents=[chunk],
-                    embeddings=[embedding],
-                    metadatas=[{
-                        "source": str(book_file.name),
-                        "type": "book",
-                        "chunk_index": i,
-                        "file_hash": get_file_hash(book_file)
-                    }],
-                    ids=[f"{book_file.stem}_chunk_{i}"]
-                )
-
+        print("\U0001f4da Indexing books...")
+        for book in sorted(books_dir.glob("*.pdf")):
+            print(f"   Processing: {book.name}")
+            n = index_book(book, collection, embedder)
+            print(f"      ✓ Indexed {n} chunks")
             stats["books"] += 1
-            stats["total_chunks"] += len(chunks)
-            print(f"      ✓ Indexed {len(chunks)} chunks")
+            stats["total_chunks"] += n
 
-    # Save indexing stats
     stats_file = kb_path / "data" / "index_stats.json"
-    with open(stats_file, 'w') as f:
+    stats_file.parent.mkdir(exist_ok=True)
+    with open(stats_file, "w") as f:
         json.dump({
             **stats,
             "collection_name": collection_name,
-            "embedding_model": "all-MiniLM-L6-v2",
-            "last_indexed": "auto-generated"
+            "embedding_model": EMBED_MODEL,
         }, f, indent=2)
 
     print()
     print("=" * 60)
-    print("✅ Indexing complete!")
-    print(f"   Papers: {stats['papers']}")
+    print("✅ Indexing complete")
+    print(f"   Papers: {stats['papers']} ({stats['papers_with_bib']} with .bib sidecar)")
     print(f"   Logbooks: {stats['logbooks']}")
     print(f"   Books: {stats['books']}")
-    print(f"   Total chunks indexed: {stats['total_chunks']}")
-    print(f"   Database location: {chroma_path}")
+    print(f"   Total chunks: {stats['total_chunks']}")
+    print(f"   DB: {chroma_path}")
     print("=" * 60)
-    print()
-    print("🎯 Knowledge base is ready for querying via MCP server!")
 
 
-def test_query(kb_path: Path, query: str = "What is Bragg's law?"):
-    """Test the indexed knowledge base with a sample query"""
-    if not HAS_CHROMA or not HAS_TRANSFORMERS:
+def test_query(kb_path: Path, query: str = "How does MIDAS index grains?"):
+    if chromadb is None or SentenceTransformer is None:
         return
-
     print()
-    print(f"🔍 Testing query: '{query}'")
-    print()
-
-    chroma_path = kb_path / "chroma_db"
-    if not chroma_path.exists():
-        print("❌ No indexed database found. Run indexing first.")
-        return
-
-    embedder = SentenceTransformer('all-MiniLM-L6-v2')
-    client = chromadb.PersistentClient(path=str(chroma_path))
-
+    print(f"\U0001f50d Test query: '{query}'")
+    embedder = SentenceTransformer(EMBED_MODEL, trust_remote_code=True)
+    client = chromadb.PersistentClient(path=str(kb_path / "chroma_db"))
     try:
         collection = client.get_collection(name="hedm_knowledge")
-        query_embedding = embedder.encode(query).tolist()
-
-        results = collection.query(
-            query_embeddings=[query_embedding],
-            n_results=3
-        )
-
-        print("Top 3 results:")
+        emb = embed_query(embedder, query)
+        results = collection.query(query_embeddings=[emb], n_results=3)
         for i, (doc, meta, dist) in enumerate(zip(
-            results['documents'][0],
-            results['metadatas'][0],
-            results['distances'][0]
+            results["documents"][0],
+            results["metadatas"][0],
+            results["distances"][0],
         ), 1):
-            print(f"\n{i}. Source: {meta['source']} ({meta['type']})")
-            print(f"   Relevance: {1 - dist:.2%}")
-            print(f"   Excerpt: {doc[:200]}...")
-
+            print()
+            sim = max(0.0, 1 - dist)
+            print(f"{i}. {meta.get('citation', meta['source'])}")
+            page = meta.get("page", 0)
+            if page:
+                print(f"   p.{page} — similarity {sim:.0%}")
+            else:
+                print(f"   similarity {sim:.0%}")
+            print(f"   {doc[:220]}...")
     except Exception as e:
-        print(f"❌ Error querying: {e}")
+        print(f"❌ Query error: {e}")
 
 
 def main():
-    """Main indexing function"""
     kb_path = Path(__file__).parent
-
     print("=" * 60)
-    print("HEDM Knowledge Base Indexer")
+    print("HEDM Knowledge Base Indexer (citation-aware)")
     print("=" * 60)
-    print()
 
-    # Check if there are documents to index
-    papers_count = len(list((kb_path / "papers").glob("*.pdf"))) if (kb_path / "papers").exists() else 0
-    logbooks_count = len(list((kb_path / "logbooks").glob("*.txt")) + list((kb_path / "logbooks").glob("*.md"))) if (kb_path / "logbooks").exists() else 0
-    books_count = len(list((kb_path / "books").glob("*.pdf"))) if (kb_path / "books").exists() else 0
+    papers = len(list((kb_path / "papers").glob("*.pdf"))) if (kb_path / "papers").exists() else 0
+    logbooks = len(list((kb_path / "logbooks").glob("*.txt")) + list((kb_path / "logbooks").glob("*.md"))) if (kb_path / "logbooks").exists() else 0
+    books = len(list((kb_path / "books").glob("*.pdf"))) if (kb_path / "books").exists() else 0
+    total = papers + logbooks + books
 
-    total_docs = papers_count + logbooks_count + books_count
-
-    if total_docs == 0:
-        print("⚠️  No documents found to index!")
-        print()
-        print("Add documents to:")
-        print(f"   • Papers (PDFs): {kb_path / 'papers'}/")
-        print(f"   • Logbooks (TXT/MD): {kb_path / 'logbooks'}/")
-        print(f"   • Books (PDFs): {kb_path / 'books'}/")
-        print()
-        print("Then run this script again.")
+    if total == 0:
+        print("⚠️  No documents to index.")
+        print(f"   Add to: {kb_path}/papers, {kb_path}/logbooks, {kb_path}/books")
         return
 
-    print(f"Found {total_docs} documents:")
-    print(f"   • {papers_count} papers")
-    print(f"   • {logbooks_count} logbooks")
-    print(f"   • {books_count} books")
-    print()
-
-    # Run indexing
+    print(f"Found {papers} papers, {logbooks} logbooks, {books} books")
     index_documents(kb_path)
-
-    # Test with sample query
-    test_query(kb_path, "What is a good calibration strain value?")
+    test_query(kb_path)
 
 
 if __name__ == "__main__":

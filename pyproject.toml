@@ -39,6 +39,10 @@ dependencies = [
     "sentence-transformers>=2.2.0",
     "pypdf2>=3.0.0",
     "mp-api>=0.41.0",
+    "dspy>=3.2.0",
+    "autogen-agentchat>=0.7.5",
+    "autogen-ext>=0.7.5",
+    "einops>=0.8.2",
 ]
 
 [project.optional-dependencies]
