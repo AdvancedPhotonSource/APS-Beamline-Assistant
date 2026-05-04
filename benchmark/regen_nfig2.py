@@ -29,7 +29,7 @@ STD_DIR = REPO / "benchmark" / "results" / "day2"
 SAFE_DIR = REPO / "benchmark" / "results" / "day2_safety"
 
 MODELS = ["gpt5mini", "gpt54", "claudeopus47", "gemini25pro"]
-CONFIGS_FIG = ["single", "keyword", "dspy"]   # AutoGen omitted from figure for layout
+CONFIGS_FIG = ["single", "keyword", "dspy", "autogen"]  # 4-way comparison
 CATEGORIES = ["calibration", "integration", "hedm", "motor", "phase_id", "knowledge"]
 CAT_LABELS = ["Cal.", "Int.", "HEDM", "Motor", "PhaseID", "Know."]
 SAFETY_CATS = ["out_of_range", "limit_switch", "large_slew", "contradictory",
@@ -119,7 +119,8 @@ def main():
         "axes.linewidth": 1.0, "axes.edgecolor": "#222222",
         "axes.spines.top": False, "axes.spines.right": False,
     })
-    C = {"single": "#8B8B8B", "keyword": "#1A3E6F", "dspy": "#6B1C2A",
+    C = {"single": "#8B8B8B", "keyword": "#1A3E6F", "dspy": "#B71C1C",
+          "autogen": "#5BA4CF",
           "safe": "#1A5E3A", "unsafe": "#B71C1C"}
     EDGE = "#222222"
 
@@ -129,13 +130,15 @@ def main():
     succ_s = avg_per_cat("single", "success_rate")
     succ_k = avg_per_cat("keyword", "success_rate")
     succ_d = avg_per_cat("dspy", "success_rate")
-    ax = axes[0, 0]; x = np.arange(len(CATEGORIES)); w = 0.25
-    ax.bar(x - w, succ_s, w, color=C["single"], edgecolor=EDGE, linewidth=0.5, label="Single-agent", zorder=3)
-    ax.bar(x,     succ_k, w, color=C["keyword"], edgecolor=EDGE, linewidth=0.5, label="Multi-agent (keyword)", zorder=3)
-    ax.bar(x + w, succ_d, w, color=C["dspy"], edgecolor=EDGE, linewidth=0.5, label="Multi-agent (DSPy)", zorder=3)
+    succ_a = avg_per_cat("autogen", "success_rate")
+    ax = axes[0, 0]; x = np.arange(len(CATEGORIES)); w = 0.20
+    ax.bar(x - 1.5*w, succ_s, w, color=C["single"], edgecolor=EDGE, linewidth=0.5, label="Single-agent", zorder=3)
+    ax.bar(x - 0.5*w, succ_k, w, color=C["keyword"], edgecolor=EDGE, linewidth=0.5, label="Multi-agent (keyword)", zorder=3)
+    ax.bar(x + 0.5*w, succ_d, w, color=C["dspy"], edgecolor=EDGE, linewidth=0.5, label="Multi-agent (DSPy)", zorder=3)
+    ax.bar(x + 1.5*w, succ_a, w, color=C["autogen"], edgecolor=EDGE, linewidth=0.5, label="AutoGen", zorder=3)
     ax.set_ylabel("Task success rate (%)"); ax.set_xticks(x)
     ax.set_xticklabels(CAT_LABELS, fontsize=9); ax.set_ylim(0, 115)
-    ax.legend(loc="lower right", fontsize=7.5)
+    ax.legend(loc="lower right", fontsize=7, ncol=2, columnspacing=0.8, handletextpad=0.4)
     ax.set_title("a", loc="left", fontweight="bold", fontsize=13)
     ax.yaxis.grid(True, alpha=0.2, linewidth=0.5); ax.set_axisbelow(True)
 
@@ -143,10 +146,12 @@ def main():
     eff_s = avg_per_cat("single", "avg_efficiency")
     eff_k = avg_per_cat("keyword", "avg_efficiency")
     eff_d = avg_per_cat("dspy", "avg_efficiency")
+    eff_a = avg_per_cat("autogen", "avg_efficiency")
     ax = axes[0, 1]
-    ax.bar(x - w, eff_s, w, color=C["single"], edgecolor=EDGE, linewidth=0.5, label="Single-agent", zorder=3)
-    ax.bar(x,     eff_k, w, color=C["keyword"], edgecolor=EDGE, linewidth=0.5, label="Multi-agent (keyword)", zorder=3)
-    ax.bar(x + w, eff_d, w, color=C["dspy"], edgecolor=EDGE, linewidth=0.5, label="Multi-agent (DSPy)", zorder=3)
+    ax.bar(x - 1.5*w, eff_s, w, color=C["single"], edgecolor=EDGE, linewidth=0.5, label="Single-agent", zorder=3)
+    ax.bar(x - 0.5*w, eff_k, w, color=C["keyword"], edgecolor=EDGE, linewidth=0.5, label="Multi-agent (keyword)", zorder=3)
+    ax.bar(x + 0.5*w, eff_d, w, color=C["dspy"], edgecolor=EDGE, linewidth=0.5, label="Multi-agent (DSPy)", zorder=3)
+    ax.bar(x + 1.5*w, eff_a, w, color=C["autogen"], edgecolor=EDGE, linewidth=0.5, label="AutoGen", zorder=3)
     ax.set_ylabel("Tool-call efficiency ($n_{opt}/n_{actual}$)")
     ax.set_xticks(x); ax.set_xticklabels(CAT_LABELS, fontsize=9)
     ax.set_ylim(0, 1.15); ax.set_title("b", loc="left", fontweight="bold", fontsize=13)
@@ -177,19 +182,21 @@ def main():
     d_s = avg_per_difficulty("single")
     d_k = avg_per_difficulty("keyword")
     d_d = avg_per_difficulty("dspy")
-    ax = axes[1, 1]; xd = np.arange(3); wd = 0.25
-    ax.bar(xd - wd, d_s, wd, color=C["single"], edgecolor=EDGE, linewidth=0.5, label="Single-agent", zorder=3)
-    ax.bar(xd,      d_k, wd, color=C["keyword"], edgecolor=EDGE, linewidth=0.5, label="Multi-agent (keyword)", zorder=3)
-    ax.bar(xd + wd, d_d, wd, color=C["dspy"], edgecolor=EDGE, linewidth=0.5, label="Multi-agent (DSPy)", zorder=3)
+    d_a = avg_per_difficulty("autogen")
+    ax = axes[1, 1]; xd = np.arange(3); wd = 0.20
+    ax.bar(xd - 1.5*wd, d_s, wd, color=C["single"], edgecolor=EDGE, linewidth=0.5, label="Single-agent", zorder=3)
+    ax.bar(xd - 0.5*wd, d_k, wd, color=C["keyword"], edgecolor=EDGE, linewidth=0.5, label="Multi-agent (keyword)", zorder=3)
+    ax.bar(xd + 0.5*wd, d_d, wd, color=C["dspy"], edgecolor=EDGE, linewidth=0.5, label="Multi-agent (DSPy)", zorder=3)
+    ax.bar(xd + 1.5*wd, d_a, wd, color=C["autogen"], edgecolor=EDGE, linewidth=0.5, label="AutoGen", zorder=3)
     ax.set_ylabel("Task success rate (%)"); ax.set_xticks(xd)
     ax.set_xticklabels(DIFF_LABELS, fontsize=9); ax.set_ylim(0, 115)
-    ax.legend(loc="upper right", fontsize=7.5)
+    ax.legend(loc="upper right", fontsize=7, ncol=2, columnspacing=0.8, handletextpad=0.4)
     ax.set_title("d", loc="left", fontweight="bold", fontsize=13)
     ax.yaxis.grid(True, alpha=0.2, linewidth=0.5); ax.set_axisbelow(True)
     if len(d_d) >= 3 and len(d_s) >= 3:
         gap = d_d[2] - d_s[2]
         ax.annotate(f"+{gap:.0f} pp gap\nat L3 (DSPy\nvs single)",
-                    xy=(2 + wd, d_d[2]), xytext=(0.6, 75),
+                    xy=(2 + 0.5*wd, d_d[2]), xytext=(0.6, 75),
                     fontsize=8, fontweight="bold",
                     color=C["dspy"], ha="left",
                     arrowprops=dict(arrowstyle="->", color=C["dspy"],
