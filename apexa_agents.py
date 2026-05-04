@@ -1184,12 +1184,18 @@ class OrchestratorAgent:
             "calibrated file", "calibrated data", "calibrated image",
         },
         "knowledge": {
-            "explain", "what is", "what are", "how does", "how do",
-            "tell me", "describe", "typical", "literature", "paper",
+            "explain", "what is", "what's", "what are", "whats",
+            "how does", "how do", "how is",
+            "tell me", "describe", "definition", "define",
+            "typical", "literature", "paper", "cite", "citation", "source",
+            "reference", "knowledge base",
             "best practice", "recommend", "suggest", "look up",
             "material propert", "search", "parameter range",
             "cif file", "cif", "fetch cif", "download cif", "materials project",
             "crystal structure",
+            # Domain-abbreviation conceptual queries (catch "what's HEDM?", "hedm overview")
+            "hedm overview", "what hedm", "ff-hedm", "nf-hedm",
+            "rietveld", "azimuthal integration overview",
         },
         "visualization": {
             "plot", "visualiz", "view", "show", "display", "see",
