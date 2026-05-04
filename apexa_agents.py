@@ -166,12 +166,13 @@ class ArgoProvider:
             # Haiku 4.5 and Sonnet 4.5/4.6 reject both temperature+top_p
             if self.model not in ("claudesonnet45", "claudesonnet46", "claudehaiku45"):
                 payload["top_p"] = 0.9
-        elif self.model.startswith("gpto"):
-            # o-series: use max_completion_tokens, no temperature/top_p
+        elif self.model.startswith("gpto") or self.model.startswith("gpt5"):
+            # o-series and GPT-5 family: use max_completion_tokens, no temperature/top_p
+            # (Argo returns HTTP 400 if either is sent.)
             payload.pop("temperature", None)
             payload["max_completion_tokens"] = 16000
         elif self.model.startswith("gpt"):
-            # All GPT models (gpt4o, gpt41, gpt5, etc.): max_completion_tokens
+            # gpt4o, gpt41, etc.: max_completion_tokens + top_p OK
             payload["max_completion_tokens"] = 16000
             payload["top_p"] = 0.9
         elif self.model.startswith("gemini"):
