@@ -488,17 +488,30 @@ KNOWLEDGE_AGENT = APEXAAgent(
 
 MANDATORY: For ANY conceptual, methodology, or "what is / how does / explain" question,
 your FIRST action MUST be a TOOL_CALL to query_hedm_knowledge. Do NOT answer first and
-search later. Do NOT answer from your own knowledge if the tool returns matching excerpts.
+search later.
 
-After calling query_hedm_knowledge:
-- If excerpts come back (similarity > 0.30), build your answer directly from them and
-  cite each claim inline like "(Bernier 2020)" or "(Sharma 2012, p.694)". End the
-  response with a "References:" section listing each source's full citation exactly as
-  returned by the tool.
-- If the tool returns no excerpts OR all similarities < 0.30, say so plainly:
-  "No matching sources in the knowledge base — answering from general background:"
-  and then give the answer. Do NOT pretend the knowledge base supports it.
-- Never invent citations or paraphrase a source you didn't actually retrieve.
+Reading the tool result:
+- The tool returns JSON with "results_count", "excerpts", and "references".
+- Each excerpt has fields: source, citation, page, similarity, excerpt.
+- "similarity" is in [0,1]. Anything >= 0.30 is a usable match. Anything >= 0.60 is
+  a strong match. Do NOT dismiss a match just because the wording differs from your
+  expectation — the chunk text and citation are what matter.
+
+How to write the answer:
+- If results_count > 0 AND at least one excerpt has similarity >= 0.30:
+    1. Build the answer from the excerpt text. Quote or paraphrase the chunks.
+    2. Cite EVERY substantive claim inline using the citation field, formatted as
+       "(FirstAuthor Year, p.PAGE)" — e.g. "(Bernier 2020, p.36)".
+    3. End with a "References:" section listing each unique citation verbatim from
+       the tool's "references" list.
+    4. Do NOT add background facts the excerpts don't support. If the excerpts are
+       narrow, the answer should be narrow.
+- If results_count == 0 OR every similarity < 0.30:
+    Open with: "No matching sources in the knowledge base — answering from general
+    background:" then give the answer. Do NOT fabricate citations.
+
+Never invent citations. Never paraphrase a source you didn't retrieve. If unsure
+which excerpts are strong, list them all and let similarity speak for itself.
 
 Other tools:
 - get_material_properties for crystallographic data (lattice params, space groups, d-spacings)
@@ -1246,12 +1259,21 @@ class OrchestratorAgent:
         best = max(scores, key=scores.get)
 
         if scores[best] > 0:
-            # Break ties: if analysis ties with another domain, prefer analysis
-            # (it's the most general agent and handles post-calibration workflows)
+            # Break ties: analysis wins by default (most general agent, handles
+            # post-calibration workflows). Exception: a conceptual question stem
+            # at the START of the query routes to knowledge so the KB tool fires.
             top_score = scores[best]
             tied = [d for d, s in scores.items() if s == top_score]
             if len(tied) > 1 and "analysis" in tied:
-                best = "analysis"
+                q_lstrip = q.lstrip()
+                is_conceptual_question = any(
+                    q_lstrip.startswith(stem) for stem in (
+                        "what is", "what's", "whats", "what are", "what does",
+                        "explain", "describe", "define", "tell me about",
+                        "how does", "how do", "how is",
+                    )
+                )
+                best = "knowledge" if is_conceptual_question and "knowledge" in tied else "analysis"
             return self._ROUTES[best]      # strong keyword match → switch agent
 
         # No keywords matched — stay with current agent if we have one
