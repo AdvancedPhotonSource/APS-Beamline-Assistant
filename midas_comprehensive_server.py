@@ -3238,7 +3238,7 @@ def get_knowledge_base():
             if chroma_path.exists():
                 _knowledge_base = {
                     "client": chromadb.PersistentClient(path=str(chroma_path)),
-                    "embedder": SentenceTransformer('all-MiniLM-L6-v2'),
+                    "embedder": SentenceTransformer('nomic-ai/nomic-embed-text-v1.5', trust_remote_code=True),
                     "available": True
                 }
             else:
@@ -3326,8 +3326,8 @@ async def query_hedm_knowledge(
                 "suggestion": "Run: python knowledge_base/index_knowledge.py"
             }, indent=2)
 
-        # Encode the question
-        query_embedding = kb["embedder"].encode(question).tolist()
+        # Encode the question (Nomic requires "search_query: " prefix for queries)
+        query_embedding = kb["embedder"].encode(f"search_query: {question}").tolist()
 
         # Get collection
         collection = kb["client"].get_collection(name="hedm_knowledge")
@@ -3342,7 +3342,7 @@ async def query_hedm_knowledge(
             where=where_filter
         )
 
-        # Format results
+        # Format results — include citation, page, DOI for proper referencing
         excerpts = []
         for i, (doc, meta, dist) in enumerate(zip(
             results['documents'][0],
@@ -3353,16 +3353,45 @@ async def query_hedm_knowledge(
                 "rank": i,
                 "source": meta['source'],
                 "type": meta['type'],
-                "relevance_score": round(1 - dist, 3),
+                "citation": meta.get('citation', meta['source']),
+                "bibkey": meta.get('bibkey', ''),
+                "title": meta.get('title', ''),
+                "authors": meta.get('authors', ''),
+                "year": meta.get('year', ''),
+                "journal": meta.get('journal', ''),
+                "doi": meta.get('doi', ''),
+                "page": meta.get('page', 0),
+                "similarity": round(max(0.0, 1 - dist), 3),
                 "excerpt": doc,
                 "chunk_index": meta.get('chunk_index', 0)
+            })
+
+        # Compact reference list (deduped by source) for the LLM to cite cleanly
+        seen = set()
+        references = []
+        for ex in excerpts:
+            if ex['source'] in seen:
+                continue
+            seen.add(ex['source'])
+            references.append({
+                "source": ex['source'],
+                "citation": ex['citation'],
+                "bibkey": ex['bibkey'],
+                "doi": ex['doi'],
             })
 
         return json.dumps({
             "status": "success",
             "question": question,
             "results_count": len(excerpts),
-            "excerpts": excerpts
+            "references": references,
+            "excerpts": excerpts,
+            "instruction_to_assistant": (
+                "When answering, cite each excerpt inline using the 'citation' field "
+                "(e.g. 'Sharma et al. (2012). J. Appl. Cryst. 45:693–704. DOI:...') and, "
+                "when available, reference the page number. Use get_bibtex(source) to "
+                "retrieve the BibTeX entry for any cited source."
+            )
         }, indent=2)
 
     except Exception as e:
@@ -3370,6 +3399,66 @@ async def query_hedm_knowledge(
             "status": "error",
             "error": str(e),
             "traceback": traceback.format_exc()
+        }, indent=2)
+
+
+@mcp.tool()
+async def get_bibtex(source: str) -> str:
+    """Return the BibTeX entry for a paper in the knowledge base.
+
+    Reads the sibling .bib sidecar (e.g. HEDM-I.pdf -> HEDM-I.bib) for the
+    requested source. Use this after query_hedm_knowledge to cite a result
+    in a manuscript or report.
+
+    Args:
+        source: PDF filename returned by query_hedm_knowledge (e.g. "HEDM-I.pdf"),
+                or the bare stem ("HEDM-I"), or a bibkey ("Sharma2012a").
+
+    Returns:
+        JSON with the BibTeX entry text, or an error if unavailable.
+    """
+    try:
+        from pathlib import Path
+        papers_dir = Path(__file__).parent / "knowledge_base" / "papers"
+
+        # Normalize: try as filename, stem, then bibkey-search
+        candidates = []
+        s = source.strip()
+        if s.endswith(".pdf"):
+            candidates.append(papers_dir / (s[:-4] + ".bib"))
+        if s.endswith(".bib"):
+            candidates.append(papers_dir / s)
+        candidates.append(papers_dir / f"{s}.bib")
+
+        bib_path = next((c for c in candidates if c.exists()), None)
+
+        if bib_path is None:
+            # Fallback: scan all .bib files for matching bibkey
+            for bib in papers_dir.glob("*.bib"):
+                text = bib.read_text(encoding="utf-8", errors="ignore")
+                if f"{{{s}," in text or f"{{ {s}," in text:
+                    bib_path = bib
+                    break
+
+        if bib_path is None:
+            return json.dumps({
+                "status": "error",
+                "error": f"No BibTeX entry found for '{source}'",
+                "available": sorted(p.stem for p in papers_dir.glob("*.bib")),
+            }, indent=2)
+
+        return json.dumps({
+            "status": "success",
+            "source": source,
+            "bib_file": str(bib_path.name),
+            "bibtex": bib_path.read_text(encoding="utf-8"),
+        }, indent=2)
+
+    except Exception as e:
+        return json.dumps({
+            "status": "error",
+            "error": str(e),
+            "traceback": traceback.format_exc(),
         }, indent=2)
 
 
