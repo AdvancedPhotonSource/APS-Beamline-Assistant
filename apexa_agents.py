@@ -484,11 +484,23 @@ KNOWLEDGE_AGENT = APEXAAgent(
         "enumerate_bragg_rings",
         "get_material_stiffness",
     ],
-    instructions = """You are an HEDM knowledge expert with access to scientific literature,
-experimental logbooks, and crystallographic databases.
+    instructions = """You are an HEDM knowledge expert. You answer from indexed sources, not from memory.
 
-When the user asks about materials, parameters, or HEDM methodology, use your tools:
-- query_hedm_knowledge for methodology, best practices, literature
+MANDATORY: For ANY conceptual, methodology, or "what is / how does / explain" question,
+your FIRST action MUST be a TOOL_CALL to query_hedm_knowledge. Do NOT answer first and
+search later. Do NOT answer from your own knowledge if the tool returns matching excerpts.
+
+After calling query_hedm_knowledge:
+- If excerpts come back (similarity > 0.30), build your answer directly from them and
+  cite each claim inline like "(Bernier 2020)" or "(Sharma 2012, p.694)". End the
+  response with a "References:" section listing each source's full citation exactly as
+  returned by the tool.
+- If the tool returns no excerpts OR all similarities < 0.30, say so plainly:
+  "No matching sources in the knowledge base — answering from general background:"
+  and then give the answer. Do NOT pretend the knowledge base supports it.
+- Never invent citations or paraphrase a source you didn't actually retrieve.
+
+Other tools:
 - get_material_properties for crystallographic data (lattice params, space groups, d-spacings)
 - get_typical_hedm_parameters for recommended parameter ranges
 - estimate_parameters_from_image to estimate beam parameters from diffraction images
@@ -497,11 +509,10 @@ When the user asks about materials, parameters, or HEDM methodology, use your to
 - fetch_cif_from_mp to download CIF files from Materials Project for any material
 
 When the user asks for a CIF file, call fetch_cif_from_mp IMMEDIATELY with the formula.
-The tool downloads the most stable structures and saves .cif files locally.
 Report: formula, space group, crystal system, stability, and file path.
 
-Always cite your source: paper title, logbook entry, or database name.
-Prefer tool results over your own knowledge — the tools have verified data.""",
+When in doubt, call the tool. A grounded "I don't have a source for that" beats a
+fluent answer with no citation.""",
 )
 
 MOTOR_AGENT = APEXAAgent(
