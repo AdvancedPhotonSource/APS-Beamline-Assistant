@@ -31,15 +31,34 @@ try:
 except ImportError:
     SentenceTransformer = None
 
-EMBED_MODEL = "nomic-ai/nomic-embed-text-v1.5"
+import os as _os
+
+# Override via env: APEXA_EMBED_MODEL=nvidia/llama-embed-nemotron-8b uv run ...
+EMBED_MODEL = _os.environ.get("APEXA_EMBED_MODEL", "nomic-ai/nomic-embed-text-v1.5")
+
+# Per-model task prefixes. Nomic requires explicit task tags; most other models
+# (Nemotron, BGE-M3, E5 in symmetric mode) don't. When in doubt, add an entry here.
+EMBED_PREFIXES = {
+    "nomic-ai/nomic-embed-text-v1.5": ("search_document: ", "search_query: "),
+    "nomic-ai/nomic-embed-text-v1":   ("search_document: ", "search_query: "),
+    # No prefix for these (default behavior)
+    "nvidia/llama-embed-nemotron-8b": ("", ""),
+    "BAAI/bge-m3":                    ("", ""),
+}
+
+
+def _prefixes() -> tuple[str, str]:
+    return EMBED_PREFIXES.get(EMBED_MODEL, ("", ""))
 
 
 def embed_doc(embedder, text: str) -> list[float]:
-    return embedder.encode(f"search_document: {text}").tolist()
+    pfx, _ = _prefixes()
+    return embedder.encode(f"{pfx}{text}").tolist()
 
 
 def embed_query(embedder, text: str) -> list[float]:
-    return embedder.encode(f"search_query: {text}").tolist()
+    _, pfx = _prefixes()
+    return embedder.encode(f"{pfx}{text}").tolist()
 
 try:
     import PyPDF2

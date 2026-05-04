@@ -3236,9 +3236,12 @@ def get_knowledge_base():
             chroma_path = kb_path / "chroma_db"
 
             if chroma_path.exists():
+                model_name = os.environ.get("APEXA_EMBED_MODEL",
+                                            "nomic-ai/nomic-embed-text-v1.5")
                 _knowledge_base = {
                     "client": chromadb.PersistentClient(path=str(chroma_path)),
-                    "embedder": SentenceTransformer('nomic-ai/nomic-embed-text-v1.5', trust_remote_code=True),
+                    "embedder": SentenceTransformer(model_name, trust_remote_code=True),
+                    "model_name": model_name,
                     "available": True
                 }
             else:
@@ -3326,8 +3329,15 @@ async def query_hedm_knowledge(
                 "suggestion": "Run: python knowledge_base/index_knowledge.py"
             }, indent=2)
 
-        # Encode the question (Nomic requires "search_query: " prefix for queries)
-        query_embedding = kb["embedder"].encode(f"search_query: {question}").tolist()
+        # Encode the question. Some embedders (Nomic) require a task prefix;
+        # most others don't. Keep this in sync with EMBED_PREFIXES in
+        # knowledge_base/index_knowledge.py.
+        _query_prefix_map = {
+            "nomic-ai/nomic-embed-text-v1.5": "search_query: ",
+            "nomic-ai/nomic-embed-text-v1":   "search_query: ",
+        }
+        q_pfx = _query_prefix_map.get(kb.get("model_name", ""), "")
+        query_embedding = kb["embedder"].encode(f"{q_pfx}{question}").tolist()
 
         # Get collection
         collection = kb["client"].get_collection(name="hedm_knowledge")
