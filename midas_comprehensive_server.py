@@ -4916,4 +4916,16 @@ async def analyze_slip_systems(
 # =============================================================================
 
 if __name__ == "__main__":
+    # Pre-warm the knowledge base (loads ~700MB Nomic embedder + ChromaDB client).
+    # Without this, the first query_hedm_knowledge call pays a ~6 s cold-start
+    # cost while the user is waiting. Cost is paid once at server startup
+    # (hidden behind APEXA's normal banner) instead of on the first query.
+    try:
+        import sys as _sys
+        kb = get_knowledge_base()
+        if kb.get("available"):
+            print("[midas] knowledge base pre-warmed", file=_sys.stderr, flush=True)
+    except Exception as _e:
+        print(f"[midas] kb warmup skipped: {_e}", file=_sys.stderr, flush=True)
+
     mcp.run(transport='stdio')
