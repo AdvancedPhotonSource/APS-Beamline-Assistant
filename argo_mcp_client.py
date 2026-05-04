@@ -182,6 +182,39 @@ def _inline_format(text: str) -> str:
     text = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', f'{C.UNDERLINE}{C.BBLUE}\\1{C.RESET} {C.DIM}(\\2){C.RESET}', text)
     # Images: ![alt](url)
     text = re.sub(r'!\[([^\]]*)\]\([^)]+\)', f'{C.DIM}[Image: \\1]{C.RESET}', text)
+    # Inline academic citations: (Author Year) / (Author et al. Year) / (Author Year, p.36)
+    # Handles multi-word surnames (Von Dreele), two-author (&/and), et al., page refs.
+    # Surname: capitalized word, optionally followed by one more capitalized word
+    # (handles "Von Dreele", "Le Roy", "Mac Donald") or a lowercase particle + word
+    # (handles "van der Waals", "de la Cruz")
+    _SURNAME = (
+        r'[A-Z][A-Za-zÀ-ſ\-]+'
+        r'(?:\s+(?:[A-Z][A-Za-zÀ-ſ\-]+|(?:van|von|de|der|den|du|le|la|di)\s+[A-Z][A-Za-zÀ-ſ\-]+))?'
+    )
+    citation_re = re.compile(
+        r'\(('
+        + _SURNAME
+        + r'(?:\s*(?:&|and)\s*' + _SURNAME + r')?'         # Optional second author
+        + r'(?:\s+et\s+al\.?)?'                            # Optional "et al."
+        + r'\s*,?\s*'
+        + r'(?:19|20)\d{2}[a-z]?'                          # Year
+        + r'(?:[,;]\s*p{1,2}\.?\s*\d+(?:[-–]\d+)?)?'     # Optional page
+        + r')\)'
+    )
+    text = citation_re.sub(f'{C.BYELLOW}(\\1){C.RESET}', text)
+    # "Author (YEAR)" form (References list lines): "Bernier et al. (2020). Annu. Rev..."
+    text = re.sub(
+        r'\b(' + _SURNAME + r'(?:\s+et\s+al\.?)?)\s+\(((?:19|20)\d{2}[a-z]?)\)',
+        f'{C.BOLD}\\1{C.RESET} {C.BYELLOW}(\\2){C.RESET}',
+        text,
+    )
+    # DOI strings
+    text = re.sub(
+        r'\b(DOI:\s*)(10\.\d{4,9}/[^\s,)\]]+)',
+        f'{C.DIM}\\1{C.RESET}{C.UNDERLINE}{C.BYELLOW}\\2{C.RESET}',
+        text,
+        flags=re.IGNORECASE,
+    )
     return text
 
 
