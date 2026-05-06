@@ -917,6 +917,25 @@ class AgentRunner:
 
         return has_marker and has_many_params
 
+    @staticmethod
+    def _select_history(history: List[Dict], max_msgs: int) -> List[Dict]:
+        """Pick a compact slice of conversation history.
+
+        Naive `history[-max_msgs:]` drops the original user query that
+        established context. Keep that first user message AND the most recent
+        (max_msgs - 1) messages so payload stays small but the agent doesn't
+        forget what the session is about.
+        """
+        if len(history) <= max_msgs:
+            return list(history)
+        first_user_idx = next(
+            (i for i, m in enumerate(history) if m.get("role") == "user"),
+            None,
+        )
+        if first_user_idx is None or first_user_idx >= len(history) - (max_msgs - 1):
+            return list(history[-max_msgs:])
+        return [history[first_user_idx]] + list(history[-(max_msgs - 1):])
+
     # ── Main loop ────────────────────────────────────────────────────────────
 
     async def run(self, agent: APEXAAgent, query: str,
@@ -957,8 +976,9 @@ class AgentRunner:
         messages = [{"role": "system", "content": system_content}]
         if history:
             # Motor/viz agents need less history (repetitive commands confuse the model)
-            hist_limit = 4 if agent.name in ("MotorAgent", "VisualizationAgent") else 10
-            messages.extend(history[-hist_limit:])
+            hist_limit = 4 if agent.name in ("MotorAgent", "VisualizationAgent") else 8
+            selected = self._select_history(history, hist_limit)
+            messages.extend(selected)
         messages.append({"role": "user", "content": query})
 
         last_tool_name = None          # track repeated tool calls
@@ -1006,11 +1026,13 @@ class AgentRunner:
                     messages.append({"role": "assistant", "content": prose})
 
                 _once_per_response = set()
+                _ONCE_TOOLS = {"run_midas_viewer"}
 
+                # ── Pre-validate all calls (guards run sequentially, side-effect-free
+                #    on the network) so we know which ones to dispatch in parallel.
+                to_execute: List[ToolCall] = []
+                forced_break = False
                 for tc in text_calls:
-                    # Detect repeated identical tool calls (loop bug)
-                    # Compare both name AND arguments — same tool with different args
-                    # is legitimate (e.g. moving 3 different motors)
                     tc_args_str = json.dumps(tc.arguments, sort_keys=True)
                     if tc.name == last_tool_name and tc_args_str == _last_tool_args:
                         repeat_count += 1
@@ -1020,7 +1042,6 @@ class AgentRunner:
                         repeat_count = 0
 
                     if repeat_count >= 2:
-                        # Model is looping with identical calls — force it to summarise
                         messages.append({
                             "role": "user",
                             "content": (
@@ -1028,10 +1049,9 @@ class AgentRunner:
                                 "Do NOT call it again. Summarise the result for the user now."
                             ),
                         })
+                        forced_break = True
                         break
 
-                    # Guard: tools that should only launch once per response
-                    _ONCE_TOOLS = {"run_midas_viewer"}
                     if tc.name in _ONCE_TOOLS:
                         if tc.name in _once_per_response:
                             messages.append({
@@ -1045,28 +1065,45 @@ class AgentRunner:
                             continue
                         _once_per_response.add(tc.name)
 
-                    # Guard: intercept run_command misuse for dedicated tools
                     if tc.name == "run_command":
                         cmd_str = str(tc.arguments.get("command", "")).lower()
                         if any(kw in cmd_str for kw in ["gsas", "refine", "rietveld", "gsas_ii_refine"]):
-                            result = json.dumps({
+                            err = json.dumps({
                                 "error": "Do NOT use run_command for GSAS-II refinement. "
                                          "Use TOOL_CALL: run_gsas_refinement with data_file (.zarr.zip) and cif_files.",
                                 "correct_tool": "run_gsas_refinement",
                             })
                             messages.append({
                                 "role": "user",
-                                "content": f"[Tool Result for {tc.name}]\n{result}\n\n"
+                                "content": f"[Tool Result for {tc.name}]\n{err}\n\n"
                                            "You used the WRONG tool. Use run_gsas_refinement instead of run_command. "
                                            "First call list_directory to find the .zarr.zip and .cif files, "
                                            "then call run_gsas_refinement with those paths.",
                             })
                             continue
 
+                    to_execute.append(tc)
+
+                # ── Execute all approved calls concurrently. Tools emitted in one
+                #    model response are independent by construction (the model
+                #    couldn't see any of their results when it produced them), so
+                #    parallel dispatch is always safe here.
+                async def _run_one(tc: ToolCall):
                     print(f"  \033[36m▸\033[0m \033[1m{tc.name}\033[0m")
                     t0 = time.monotonic()
                     result = await self._execute(tc.name, tc.arguments)
-                    dur = int((time.monotonic() - t0) * 1000)
+                    return tc, result, int((time.monotonic() - t0) * 1000)
+
+                exec_results: List = []
+                if to_execute:
+                    exec_results = await asyncio.gather(
+                        *[_run_one(tc) for tc in to_execute]
+                    )
+
+                # ── Process results sequentially to preserve message ordering and
+                #    maintain deterministic side effects (logging, list_directory
+                #    rendering, follow-up prompts).
+                for tc, result, dur in exec_results:
                     ok = "error" not in result.lower()[:100]
                     if log_entry:
                         log_entry.add_tool_call(tc.name, tc.arguments, result, ok, dur)
@@ -1084,7 +1121,6 @@ class AgentRunner:
 
                     if len(result) > 8000:
                         result = result[:8000] + "\n... [truncated]"
-                    # Build a context-aware follow-up prompt
                     if tc.name == "list_directory":
                         followup = (
                             "The directory listing is already displayed to the user. "
@@ -1119,6 +1155,8 @@ class AgentRunner:
                         "role": "user",
                         "content": f"[Tool Result for {tc.name}]\n{result}\n\n{followup}",
                     })
+                if forced_break:
+                    break
                 continue
 
             # ── No tool calls at all — check for hallucination, then return ──
@@ -1238,6 +1276,19 @@ class OrchestratorAgent:
         },
     }
 
+    # Fast-path patterns: deterministic natural-language commands that map
+    # 1:1 onto a single tool call. Executing them directly skips the entire
+    # orchestrator/agent loop and saves a full LLM round-trip on the most
+    # common queries. Patterns must be VERY specific to avoid false matches.
+    _FAST_PATHS = [
+        (re.compile(r'^\s*(?:list|ls|show)\s+(?:the\s+)?files?\s+(?:in|under|inside|of)\s+(.+?)\s*\??\s*$', re.I),
+         "list_directory", lambda m: {"path": m.group(1).strip().strip('"\'')}),
+        (re.compile(r'^\s*(?:list|ls|show)\s+(?:the\s+)?(?:current\s+)?(?:dir(?:ectory)?|files|folder)\s*\??\s*$', re.I),
+         "list_directory", lambda m: {"path": "."}),
+        (re.compile(r'^\s*what\s+files\s+are\s+(?:in|under|inside)\s+(.+?)\s*\??\s*$', re.I),
+         "list_directory", lambda m: {"path": m.group(1).strip().strip('"\'')}),
+    ]
+
     def __init__(self, execute_tool_fn: ExecuteToolFn,
                  all_tools: List[Dict], context=None):
         self.runner    = AgentRunner(execute_tool_fn)
@@ -1246,18 +1297,23 @@ class OrchestratorAgent:
         self.conversation_history: List[Dict] = []
         self.logger    = InteractionLogger()
         self._last_agent: Optional[APEXAAgent] = None
+        self._execute  = execute_tool_fn
 
     def clear_history(self):
         self.conversation_history = []
         self._last_agent = None
 
-    def _route(self, query: str) -> APEXAAgent:
+    def _score_route(self, query: str) -> tuple:
+        """Return (best_domain, scores_dict) — pure scoring, no fallback."""
         q = query.lower()
         scores = {
             domain: sum(1 for kw in keywords if kw in q)
             for domain, keywords in self._KEYWORDS.items()
         }
-        best = max(scores, key=scores.get)
+        return max(scores, key=scores.get), scores
+
+    def _route(self, query: str) -> APEXAAgent:
+        best, scores = self._score_route(query)
 
         if scores[best] > 0:
             # Break ties: analysis wins by default (most general agent, handles
@@ -1266,7 +1322,7 @@ class OrchestratorAgent:
             top_score = scores[best]
             tied = [d for d, s in scores.items() if s == top_score]
             if len(tied) > 1 and "analysis" in tied:
-                q_lstrip = q.lstrip()
+                q_lstrip = query.lower().lstrip()
                 is_conceptual_question = any(
                     q_lstrip.startswith(stem) for stem in (
                         "what is", "what's", "whats", "what are", "what does",
@@ -1284,10 +1340,113 @@ class OrchestratorAgent:
 
         return ANALYSIS_AGENT              # first query, no context → default
 
+    async def _llm_disambiguate(self, query: str, candidates: List[str],
+                                provider: ArgoProvider) -> Optional[str]:
+        """Single cheap LLM call to pick a domain when keywords are ambiguous.
+
+        Returns one of the candidate domain names, or None if the model's
+        reply doesn't unambiguously match exactly one.
+        """
+        opts = ", ".join(candidates)
+        prompt = (
+            "You route synchrotron-beamline assistant queries to one specialist agent. "
+            f"Pick exactly ONE domain from: {opts}. "
+            "Respond with the single domain word, nothing else.\n\n"
+            f"Query: {query}\n\nDomain:"
+        )
+        try:
+            resp = await provider.chat(
+                [{"role": "user", "content": prompt}],
+                temperature=0.0,
+            )
+        except Exception:
+            return None
+        text = (resp.content or "").strip().lower()
+        matched = [c for c in candidates if c in text]
+        return matched[0] if len(matched) == 1 else None
+
+    async def _route_with_fallback(self, query: str,
+                                   provider: ArgoProvider) -> APEXAAgent:
+        """Run keyword routing first; only fall back to an LLM call when the
+        keyword scoring is genuinely ambiguous (multi-way tie at top score 1).
+        Avoids paying the extra round-trip on the common, confidently-routed
+        case while still recovering from edge cases the keyword set misses.
+        """
+        agent = self._route(query)
+        best, scores = self._score_route(query)
+        if scores[best] <= 1:
+            tied = [d for d, s in scores.items() if s == scores[best] and s > 0]
+            if len(tied) >= 2:
+                pick = await self._llm_disambiguate(query, tied, provider)
+                if pick and pick in self._ROUTES:
+                    return self._ROUTES[pick]
+        return agent
+
+    def _match_fast_path(self, query: str) -> Optional[tuple]:
+        """Return (tool_name, args) if the query is a deterministic command."""
+        for pattern, tool, build_args in self._FAST_PATHS:
+            m = pattern.match(query)
+            if m:
+                return tool, build_args(m)
+        return None
+
+    async def _run_fast_path(self, query: str, tool_name: str,
+                             args: Dict, on_tool_result: OnToolResultFn = None,
+                             use_history: bool = True) -> str:
+        """Execute a fast-path tool directly — no LLM call, no agent loop."""
+        log_entry = self.logger.start(query, model="fast_path")
+        log_entry.set_agent("FastPath")
+
+        print(f"  \033[36m▸\033[0m \033[1m{tool_name}\033[0m \033[2m(fast-path)\033[0m")
+        t0 = time.monotonic()
+        result = await self._execute(tool_name, args)
+        dur = int((time.monotonic() - t0) * 1000)
+        ok = "error" not in result.lower()[:100]
+        log_entry.add_tool_call(tool_name, args, result, ok, dur)
+
+        if on_tool_result:
+            try:
+                await on_tool_result(tool_name, args, result)
+            except Exception:
+                pass
+
+        if tool_name == "list_directory":
+            try:
+                r = json.loads(result)
+                rendered = _compact_listing(r)
+                print(f"\n{rendered}\n")
+                summary = rendered
+            except (json.JSONDecodeError, KeyError):
+                summary = result
+        else:
+            summary = result
+
+        log_entry.finish(summary, iterations=1, looped=False)
+        self.logger.save(log_entry)
+
+        if use_history:
+            self.conversation_history.extend([
+                {"role": "user",      "content": query},
+                {"role": "assistant", "content": summary},
+            ])
+            if len(self.conversation_history) > 12:
+                self.conversation_history = self.conversation_history[-12:]
+
+        return summary
+
     async def process(self, query: str, provider: ArgoProvider,
                       use_history: bool = True,
                       on_tool_result: OnToolResultFn = None) -> str:
-        agent   = self._route(query)
+        # Fast path: deterministic NL commands skip the LLM entirely
+        fast = self._match_fast_path(query)
+        if fast:
+            tool_name, args = fast
+            return await self._run_fast_path(
+                query, tool_name, args,
+                on_tool_result=on_tool_result, use_history=use_history,
+            )
+
+        agent   = await self._route_with_fallback(query, provider)
         self._last_agent = agent
         history = self.conversation_history if use_history else None
 
@@ -1313,9 +1472,11 @@ class OrchestratorAgent:
                 {"role": "user",      "content": query},
                 {"role": "assistant", "content": result},
             ])
-            # Keep last 20 messages (10 exchanges) to avoid token overflow
-            if len(self.conversation_history) > 20:
-                self.conversation_history = self.conversation_history[-20:]
+            # Cap at 12 messages (6 exchanges); the runner does its own
+            # smart selection on top of this so the first user query and the
+            # most recent turns both survive.
+            if len(self.conversation_history) > 12:
+                self.conversation_history = self.conversation_history[-12:]
 
         if self.context:
             self.context.add_analysis(agent.name, result)
