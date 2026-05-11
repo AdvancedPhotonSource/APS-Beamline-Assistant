@@ -59,6 +59,38 @@
 
 ---
 
+## Parameter Validation (Pre-Workflow)
+
+> Requires `midas-params`: `conda activate midas_env && pip install -e $MIDAS_PATH/packages/midas_params`
+
+| What you want | What to type |
+|---|---|
+| Validate for FF-HEDM | `Validate Parameters.txt for ff-hedm` |
+| Validate for NF-HEDM | `Validate test5/Parameters.txt for nf` |
+| Diagnose errors (AI fix) | `Diagnose the parameter file errors in test5/Parameters.txt for ff` |
+| Auto-extract from dataset | `Inspect the GE data file test5/CeO_000001.tif.ge` |
+| List Bragg rings | `What Bragg rings are on the detector for test5/Parameters.txt?` |
+| Validate before workflow | `Validate test5/Parameters.txt then run ff-hedm` |
+
+---
+
+## Stress & Strain Analysis (Post-Reconstruction)
+
+> Requires `midas-stress`: `conda activate midas_env && pip install -e $MIDAS_PATH/packages/midas_stress`
+
+| What you want | What to type |
+|---|---|
+| Summarize grain data | `Summarize the grains in test5/Grains.csv` |
+| Compute stress (Cu) | `Compute stress from test5/Grains.csv for copper` |
+| Compute stress (Fe, loaded) | `Compute stress from Grains.csv for iron with applied stress 0.1,0,0,0,0,0 GPa` |
+| Material stiffness lookup | `What are the elastic constants for titanium?` |
+| d0 equilibrium correction | `Apply d0 correction to test5/Grains.csv for copper` |
+| Slip system analysis | `Analyze slip systems for Grains.csv, copper, loading along z` |
+| With CRSS threshold | `Analyze slip systems for copper with CRSS 40 MPa and loading along 0,0,1` |
+| Available materials | `What materials are in the stiffness database?` |
+
+---
+
 ## Grain Analysis & Post-Processing
 
 | What you want | What to type |
@@ -155,9 +187,12 @@ APEXA> Now integrate that data
 APEXA> Show me the lineout
 APEXA> Fetch a CIF file for CeO2
 APEXA> Refine the caked output with GSAS-II using the CeO2 CIF
-APEXA> What phases match these peaks?
+APEXA> Validate test5/Parameters.txt for ff-hedm
 APEXA> Run FF-HEDM on this data
-APEXA> How many grains were found?
+APEXA> Summarize the grains in Grains.csv
+APEXA> Compute stress from Grains.csv for copper
+APEXA> Apply d0 equilibrium correction
+APEXA> Analyze slip systems with loading along z
 APEXA> Track grains between step 1 and step 2
 APEXA> Export the results to Dream3D
 ```
