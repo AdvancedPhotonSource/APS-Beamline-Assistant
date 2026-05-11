@@ -24,6 +24,39 @@ Two workflows depending on hardware and use case:
 
 ---
 
+## Agent prompting protocol (run BEFORE calling either MCP tool)
+
+Integration is **not silent-defaults safe** — the 2θ window and azimuthal slice
+depend on operator intent, and for batch runs the output location matters.
+
+### Always (single image AND batch): confirm R/Eta ranges
+
+1. **Read the calibrated params file** (`refined_MIDAS_params*.txt`) and extract:
+   `RMin`, `RMax`, `RBinSize`, `EtaMin`, `EtaMax`, `EtaBinSize`.
+2. **Show those values back to the user** verbatim, then ask:
+   "Use these ranges or override (e.g. zoom into a single ring, restrict eta to a
+   sector, change radial bin size for higher resolution)?"
+3. Forward via `r_min` / `r_max` / `r_bin_size` / `eta_min` / `eta_max` /
+   `eta_bin_size` kwargs.
+
+### Confirm `result_folder` ONLY for batch (`midas_batch_integrate`)
+
+- **Single image (`midas_integrate_2d_to_1d`)** → don't prompt. The default
+  `<image_dir>/integration` is derived from the image the user just named, lands
+  next to the data, and is almost always what they want. Asking every time is
+  noise.
+- **Batch (`midas_batch_integrate`)** → **prompt.** The default is
+  `./integration_results` relative to the agent's CWD, which the user can't
+  predict and which scatters outputs in the wrong place. Suggest a sensible
+  default like `<data_file_dir>/integration_results` and ask "use this or
+  specify another?"
+
+> Skip both prompts if the user already specified ranges/folder in the same
+> turn (e.g. "integrate the first 5 rings, eta -90 to 90, output to /tmp/run1").
+> Re-confirming twice is noise.
+
+---
+
 ## Workflow B (CPU): MCP Tools
 
 ### Single image → `midas_integrate_2d_to_1d`
@@ -35,9 +68,18 @@ midas_integrate_2d_to_1d(
     image_file       = "<absolute path to image>",
     calibration_file = "<refined_MIDAS_params*.txt>",  # optional, auto-found
     dark_file        = "<dark image if available>",
-    result_folder    = "<output dir>",                  # default: <image_dir>/integration
+    result_folder    = "<output dir>",                  # default: <image_dir>/integration  (don't prompt — default is fine)
     n_cpus           = 4,
-    convert_files    = True
+    convert_files    = True,
+
+    # R/Eta overrides — pass when user wanted different ranges than the params file.
+    # Defaults: from refined_MIDAS_params*.txt (RMin/RMax/RBinSize/EtaMin/EtaMax/EtaBinSize).
+    r_min            = None,   # e.g. 200  (zoom past the beamstop)
+    r_max            = None,   # e.g. 800  (limit to first N rings)
+    r_bin_size       = None,   # e.g. 0.25 (finer Δ2θ for sharper peaks)
+    eta_min          = None,   # e.g. -90  (restrict to half the detector)
+    eta_max          = None,   # e.g.  90
+    eta_bin_size     = None,   # e.g. 1    (finer azimuthal slices)
 )
 ```
 
@@ -50,10 +92,14 @@ midas_batch_integrate(
     parameter_file = "<refined_MIDAS_params*.txt>",
     start_frame    = <int>,
     end_frame      = <int>,
-    result_folder  = "./integration_results",
+    result_folder  = "./integration_results",   # CONFIRM with user
     num_cpus       = 10,
     map_detector   = True,
-    convert_files  = True
+    convert_files  = True,
+
+    # Same R/Eta overrides as the single-image tool — None = use params-file values.
+    r_min          = None, r_max        = None, r_bin_size   = None,
+    eta_min        = None, eta_max      = None, eta_bin_size = None,
 )
 ```
 
@@ -126,6 +172,10 @@ python ~/Git/MIDAS/FF_HEDM/workflows/integrator_batch_process.py \
 | `-skipExisting` | flag | Skip already-processed files |
 | `-dataLoc` | `exchange/data` | HDF5 dataset path |
 | `-darkLoc` | `exchange/dark` | Dark HDF5 dataset path |
+| `-shortNames` | `1` | **NEW v11.** Output as `<stem>.zarr.zip` (default). Set `0` for legacy `<stem>.h5.analysis.MIDAS.zip.caked.hdf.zarr.zip` suffix-stacking. |
+| `-outName` | `''` | **NEW v11.** Override the zarr.zip stem entirely (single-file runs only — errors on multi-file). |
+| `-brightFN` | `''` | **NEW v11.** Bright/flat-field image; 1D + 2D profiles embedded under `processed/bright/` in each output zarr for downstream normalization. |
+| `-csvOutput` | `0` | **NEW v11.** Also export per-frame lineouts + REtaMap as CSVs alongside each zarr.zip via `midas-integrate-export-csv`. |
 
 **Parameter overrides** (append to end of command):
 ```bash
@@ -140,7 +190,9 @@ integrator.py -paramFN setup.txt -dataFN scan_001.tif MinRad 10 MaxRad 1000 RBin
 Workflow B (CPU):
   integrator.py
     ├─ DetectorMapper      → Map.bin, nMap.bin, maskMap.bin  (first run only)
-    └─ IntegratorZarrOMP   → _lineout.xy + _caked.hdf.zarr.zip per file
+    └─ IntegratorZarrOMP   → _lineout.xy + <stem>.zarr.zip per file
+                             (legacy: <stem>.h5.analysis.MIDAS.zip.caked.hdf.zarr.zip
+                              when -shortNames=0)
 
 Workflow A (GPU):
   integrator_batch_process.py
@@ -159,7 +211,9 @@ Workflow A (GPU):
 |---|---|---|
 | `*_lineout.xy` | B (CPU) | 2θ (degrees) vs intensity text — load in GSAS-II, plot directly |
 | `*_lineout.bin` | B (CPU) | Binary lineout (backward compatible) |
-| `*_caked.hdf.zarr.zip` | Both | Full caked data — GSAS-II compatible (`zarr==2.18.3` required) |
+| `<stem>.zarr.zip` | Both | Full caked data (default v11 with `-shortNames=1`) — GSAS-II compatible (`zarr==2.18.3`) |
+| `<stem>.h5.analysis.MIDAS.zip.caked.hdf.zarr.zip` | Both | Legacy long-form (only when `-shortNames=0`) |
+| `*_lineouts.csv`, `*_REtaMap.csv` | B (CPU) | Optional CSVs when `-csvOutput=1` (uses `midas-integrate-export-csv`) |
 | `Map.bin`, `nMap.bin`, `maskMap.bin` | Both | Geometry maps (generated once per detector/params) |
 | `scan_01_integrated.h5` | A (GPU) | Consolidated HDF5 with lineouts + fit results |
 | `fit.bin` | Both (if peak fit) | Binary stream: 7 doubles/peak/frame (Area, Center, sig, gam, FWHM, η, χ²) |

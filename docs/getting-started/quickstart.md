@@ -21,10 +21,10 @@ The script will ask for:
 You should see:
 ```
   core: 9 tools
-  midas: 34 tools
+  midas: 37 tools
 
   APEXA - Advanced Photon EXperiment Assistant
-  Model: gpt4o (PROD)  |  43 tools  |  Servers: core, midas
+  Model: gpt4o (PROD)  |  46 tools  |  Servers: core, midas
 ```
 
 ### 3. Start Analyzing

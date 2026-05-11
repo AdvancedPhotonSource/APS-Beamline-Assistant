@@ -28,7 +28,7 @@ User (CLI / Gradio / Web UI)
                 |   (9 tools)         |
                 +---------------------+
                 |   midas server      |
-                |   (34 tools)        |
+                |   (37 tools)        |
                 +---------------------+
 ```
 
@@ -49,7 +49,7 @@ All three call `run_query()` as the single entry point.
 | `apexa_agents.py` | Agent definitions, ArgoProvider, AgentRunner, OrchestratorAgent |
 | `argo_mcp_client.py` | MCP client, tool registry, CLI session loop |
 | `beamline_core_server.py` | Core MCP server: file ops, shell commands, X-ray calculations |
-| `midas_comprehensive_server.py` | MIDAS MCP server: 34 tools for HEDM workflows, validation, stress analysis |
+| `midas_comprehensive_server.py` | MIDAS MCP server: 37 tools for HEDM workflows, validation, stress analysis, PyTorch v11 pipeline |
 | `servers.config` | Server configuration (`name:script_path` pairs) |
 | `.agents/skills/` | Agent Skills: canonical MIDAS workflow reference |
 
@@ -85,7 +85,7 @@ System prompt injected into every agent call. Instructs the model to use `TOOL_C
 `list_directory`, `read_file`, `write_file`, `get_file_info`, `run_command`,
 `check_environment`, `xray_calculate`, `validate_beamline_parameters`, `list_common_calibrants`
 
-### MIDAS Server (`midas_comprehensive_server.py`) -- 34 tools
+### MIDAS Server (`midas_comprehensive_server.py`) -- 37 tools
 
 **Workflows:** `midas_auto_calibrate`, `midas_integrate_2d_to_1d`, `midas_batch_integrate`,
 `run_gsas_refinement`, `run_live_analysis`, `fetch_cif_from_mp`,
