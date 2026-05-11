@@ -13,6 +13,7 @@ import sys
 import os
 from pathlib import Path
 import numpy as np
+import xrayutilities as xu
 import re
 import subprocess
 import asyncio
@@ -2673,8 +2674,7 @@ async def midas_auto_calibrate(
         if energy_match:
             energy_kev = float(energy_match.group(1).replace('p', '.'))
             if energy_kev > 0:
-                # Convert keV to Angstroms: λ = 12.398 / E(keV)
-                _energy_from_filename = 12.398 / energy_kev
+                _energy_from_filename = xu.en2lam(energy_kev * 1000)
                 print(f"✓ Extracted energy from original filename: {energy_kev} keV → λ = {_energy_from_filename:.6f} Å", file=sys.stderr)
 
         # Extract Lsd guess from original filename if present (e.g. 650mm, 210mm)
