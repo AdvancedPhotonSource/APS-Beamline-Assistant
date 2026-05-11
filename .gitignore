@@ -118,8 +118,9 @@ test*/
 test-*/
 !tutorials-demo/
 
-# Manuscript (not for public repo)
-manuscript-APEXA/
+# Manuscripts (not for public repo) — each subdirectory is its own repo with
+# its own Overleaf sync (1-CS-APEXA-Bench, 2-NMI-APEXA, ...).
+manuscripts/
 
 # MIDAS output artifacts
 *.ge1
