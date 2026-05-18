@@ -2334,6 +2334,43 @@ async def midas_integrate_2d_to_1d(
         # Strip empty-value lines that crash ffGenerateZipRefactor.py
         _strip_empty_value_lines(param_path)
 
+        # ── Native engine attempt (Strategy C: PyTorch compute + dual-format) ──
+        # OPT-IN ONLY: subprocess (integrator.py) is the default path; set
+        # APEXA_USE_NATIVE_MIDAS=1 to try the native pip-package path first.
+        # Native path is also skipped when bright_file is set (no flat-field
+        # support yet) or csv_output is requested (no export-csv sidecars yet).
+        if (os.environ.get("APEXA_USE_NATIVE_MIDAS") == "1"
+                and not bright_file and not csv_output):
+            try:
+                from apexa_midas_native import (
+                    native_integrate_2d_to_1d, MidasEngineUnavailable,
+                )
+                print("[engine] trying native midas_integrate first…",
+                      file=sys.stderr)
+                _out = (str(Path(result_folder).expanduser().absolute())
+                        if result_folder
+                        else str(image_path.parent / "integration"))
+                result_dict = native_integrate_2d_to_1d(
+                    image_file=str(image_path),
+                    calibration_file=str(param_path),
+                    dark_file=dark_file or "",
+                    result_folder=_out,
+                    out_name=out_name,
+                    r_min=r_min, r_max=r_max, r_bin_size=r_bin_size,
+                    eta_min=eta_min, eta_max=eta_max, eta_bin_size=eta_bin_size,
+                )
+                return format_result(result_dict)
+            except MidasEngineUnavailable as e:
+                print(f"[engine] native unavailable: {e.install_hint}",
+                      file=sys.stderr)
+                print("[engine] falling back to subprocess (integrator.py)",
+                      file=sys.stderr)
+            except Exception as e:
+                print(f"[engine] native call raised {type(e).__name__}: {e}",
+                      file=sys.stderr)
+                print("[engine] falling back to subprocess (integrator.py)",
+                      file=sys.stderr)
+
         # Find integrator.py — v10 location: FF_HEDM/workflows/
         integrator_script = MIDAS_ROOT / "FF_HEDM" / "workflows" / "integrator.py"
         if not integrator_script.exists():
@@ -2551,6 +2588,38 @@ async def midas_auto_calibrate(
         print(f"   Image: {image_file}", file=sys.stderr)
         print(f"   Params: {parameters_file}", file=sys.stderr)
         print(f"{'='*70}\n", file=sys.stderr)
+
+        # ── Native engine attempt ──────────────────────────────────────────
+        # OPT-IN ONLY: subprocess (AutoCalibrateZarr.py) is the default path;
+        # set APEXA_USE_NATIVE_MIDAS=1 to try the native pip-package path
+        # first. Native path is also skipped when parameters_file is empty
+        # (no filename-based auto-detect yet) or when image_transform is set.
+        if (os.environ.get("APEXA_USE_NATIVE_MIDAS") == "1"
+                and parameters_file and not image_transform):
+            try:
+                from apexa_midas_native import (
+                    native_autocalibrate, MidasEngineUnavailable,
+                )
+                print("[engine] trying native midas_calibrate first…",
+                      file=sys.stderr)
+                result_dict = native_autocalibrate(
+                    image_file=image_file,
+                    parameters_file=parameters_file,
+                    dark_file=dark_file,
+                    n_iterations=n_iterations,
+                )
+                return format_result(result_dict)
+            except MidasEngineUnavailable as e:
+                print(f"[engine] native unavailable: {e.install_hint}",
+                      file=sys.stderr)
+                print("[engine] falling back to subprocess (AutoCalibrateZarr.py)",
+                      file=sys.stderr)
+            except Exception as e:
+                # Any other native failure → fall back; don't lose the user.
+                print(f"[engine] native call raised {type(e).__name__}: {e}",
+                      file=sys.stderr)
+                print("[engine] falling back to subprocess (AutoCalibrateZarr.py)",
+                      file=sys.stderr)
 
         # Locate AutoCalibrateZarr.py
         # Note: We don't check MIDAS_AVAILABLE here because that only checks for
@@ -2773,8 +2842,8 @@ async def midas_auto_calibrate(
         if energy_match:
             energy_kev = float(energy_match.group(1).replace('p', '.'))
             if energy_kev > 0:
-                # Convert keV to Angstroms: λ = 12.398 / E(keV)
-                _energy_from_filename = 12.398 / energy_kev
+                from apexa_units import kev_to_angstrom
+                _energy_from_filename = kev_to_angstrom(energy_kev)
                 print(f"✓ Extracted energy from original filename: {energy_kev} keV → λ = {_energy_from_filename:.6f} Å", file=sys.stderr)
 
         # Extract Lsd guess from original filename if present (e.g. 650mm, 210mm)
@@ -3687,7 +3756,8 @@ async def get_typical_hedm_parameters(
 
         # Get relevant beam energy info
         if beam_energy_kev:
-            wavelength_angstrom = 12.398 / beam_energy_kev
+            from apexa_units import kev_to_angstrom
+            wavelength_angstrom = kev_to_angstrom(beam_energy_kev)
             result["beam_info"] = {
                 "energy_kev": beam_energy_kev,
                 "wavelength_angstrom": round(wavelength_angstrom, 4)

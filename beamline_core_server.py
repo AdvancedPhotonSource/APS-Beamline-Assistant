@@ -875,8 +875,9 @@ async def validate_beamline_parameters(
             if pixel_size_um < 10 or pixel_size_um > 500:
                 warnings.append(f"Pixel size {pixel_size_um} μm is unusual (typical: 50-200 μm)")
 
-        # Calculate wavelength for reference
-        wavelength = 12.398 / energy_kev
+        # Calculate wavelength for reference (xrayutilities-backed)
+        from apexa_units import kev_to_angstrom
+        wavelength = kev_to_angstrom(energy_kev)
 
         result = {
             "tool": "validate_beamline_parameters",
