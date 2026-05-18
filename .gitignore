@@ -155,3 +155,37 @@ paraview_export.py
 site/
 ARGO-API-Docs/
 test_viewer.html
+
+# Materials Project CIF downloads to working dir
+CeO2_*.cif
+Fe_*.cif
+LaB6_*.cif
+Ni_*.cif
+Si_*.cif
+Ti_*.cif
+cif_files/
+cifs/
+
+# Calibration / refinement scratch outputs
+Parameters_steel_FF.txt
+calibrant_screen_out.csv
+hkls.csv
+refined_MIDAS_params_ff.txt
+ff_*.tiff.checkpoint.txt
+ff_*.tiff.caked.hdf
+ff_*_spline_only_map.png
+ff_*_stage*.png
+test6.
+refinement/
+scratch/
+unknown_integration/
+
+# Benchmark suite lives in the CS-APEXA-Bench repo, not here
+benchmark/
+
+# Tutorials-demo: defer new presentation generators/decks to a later release
+tutorials-demo/apexa_aps_presentation.py
+tutorials-demo/apexa_architecture_diagrams.py
+tutorials-demo/APEXA_APS_Presentation.pptx
+tutorials-demo/APEXA_Architecture_Detailed.pptx
+tutorials-demo/APEXA_Architecture_HighLevel.pptx

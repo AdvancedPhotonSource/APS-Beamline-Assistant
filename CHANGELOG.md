@@ -148,19 +148,6 @@ manuscripts in preparation.
   ground-truth file layouts.
 - Path-confusion guard when the user points at a non-CWD directory.
 
-### Evaluation
-
-- `benchmark/` houses APEXA-Bench:
-  - `benchmark_tasks.json` (58 real beamline tasks),
-  - `safety_suite.json` (50 adversarial motor scenarios, 200 attempts
-    across four models),
-  - `detector_zoo/` cross-detector regression set (Varex with spline,
-    Varex aero, Pilatus, GE),
-  - `eval_harness.py` runs the suite across orchestration configurations,
-  - `croissant.json` ML-ready datasheet,
-  - `run_safety_real_ioc.sh` end-to-end safety regression against a real
-    EPICS IOC.
-
 ### Documentation
 
 - `README.md`, `USER_MANUAL.md`, `QUICK_REFERENCE.md`, `WEB_UI_GUIDE.md`,
