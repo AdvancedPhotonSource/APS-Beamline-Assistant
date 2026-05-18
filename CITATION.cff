@@ -1,0 +1,43 @@
+cff-version: 1.2.0
+message: >-
+  If you use APEXA in your research, please cite it using the metadata
+  below. A DOI minted through DOECode (OSTI) will be added on release.
+title: "APEXA: Advanced Photon EXperiment Assistant"
+abstract: >-
+  APEXA is a multi-agent AI framework that operates a synchrotron beamline
+  as an intelligent instrument. It orchestrates five specialist agents
+  (Calibration, Analysis, Knowledge, Visualization, Motor Control) over
+  57 domain tools spanning detector calibration, 2D-to-1D azimuthal
+  integration, high-energy diffraction microscopy (HEDM), crystallographic
+  phase identification, and real-time EPICS motor control. Motor-safety
+  guarantees are enforced at the tool-execution layer rather than at the
+  prompt layer. APEXA is deployed at the Advanced Photon Source, Argonne
+  National Laboratory.
+type: software
+authors:
+  - family-names: Tripathi
+    given-names: Pawan
+    email: ptripathi@anl.gov
+    affiliation: "Advanced Photon Source, Argonne National Laboratory"
+  - family-names: Sharma
+    given-names: Hemant
+    affiliation: "Advanced Photon Source, Argonne National Laboratory"
+  - family-names: Cherukara
+    given-names: Matthew
+    affiliation: "Advanced Photon Source, Argonne National Laboratory"
+repository-code: "https://github.com/AdvancedPhotonSource/APEXA-APS-Beamline-Assistant"
+url: "https://github.com/AdvancedPhotonSource/APEXA-APS-Beamline-Assistant"
+license-url: "https://github.com/AdvancedPhotonSource/APEXA-APS-Beamline-Assistant/blob/main/LICENSE"
+version: "0.1.0"
+date-released: "2026-05-18"
+keywords:
+  - synchrotron
+  - multi-agent AI
+  - large language model
+  - HEDM
+  - X-ray diffraction
+  - EPICS
+  - motor control
+  - Model Context Protocol
+  - intelligent instrument
+  - continual learning
