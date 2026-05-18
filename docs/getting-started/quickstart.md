@@ -21,10 +21,10 @@ The script will ask for:
 You should see:
 ```
   core: 9 tools
-  midas: 21 tools
+  midas: 37 tools
 
   APEXA - Advanced Photon EXperiment Assistant
-  Model: gpt4o (PROD)  |  30 tools  |  Servers: core, midas
+  Model: gpt4o (PROD)  |  46 tools  |  Servers: core, midas
 ```
 
 ### 3. Start Analyzing
@@ -96,6 +96,9 @@ APEXA> convert 61.332 keV to wavelength
 APEXA> what is the d-spacing for Fe (110)?
 APEXA> run FF-HEDM workflow on /data/experiment
 APEXA> explain what beam center calibration does
+APEXA> validate my parameter file for ff-hedm
+APEXA> compute stress from Grains.csv for copper sample
+APEXA> what are the elastic constants for titanium?
 ```
 
 ## Switching AI Models

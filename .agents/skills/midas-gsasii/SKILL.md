@@ -124,6 +124,25 @@ run_gsas_refinement(
 - Use `no_atoms=True` for quick lattice parameter extraction (skips Stage 4).
 - Start with `n_cpus=1` to debug, then scale up.
 
+### Engine selection (`engine=` parameter)
+
+`run_gsas_refinement` accepts `engine="gsas2"` (default), `"maud"`, or `"both"`. The engines are
+independent Rietveld implementations dispatched through the same tool surface — output schema is
+identical so downstream scoring code (`benchmark/detector_zoo/refine_v2.py`) does not change.
+
+- `engine="gsas2"` — fastest, the standard path. Use unless you have a specific reason not to.
+- `engine="maud"` — MAUD via MILK (lanl/MILK). Use for texture/microstructure-heavy data
+  (HEDM grain analysis, rolled samples) or as a second opinion on a suspicious GSAS-II fit.
+  Soft-fails with a structured `engine_unavailable` response if MAUD or JDK is missing
+  (set `MAUD_PATH`, install MILK with `uv pip install milk-rietveld`).
+- `engine="both"` — runs gsas2 then maud sequentially, writes a `refinement_crossvalidation.json`
+  reporting `|Δa_engines|` and Rwp ratio. Use for calibrant validation and paper-grade NIST
+  agreement claims. Falls back silently to gsas2-only with `fallback_used="gsas2"` if MAUD is
+  missing (no error, just a warning in the response).
+
+Texture and microstructure modes (`refine_texture=`, `refine_microstructure=`) are Phase 2
+and not yet exposed; today `engine="maud"` does cell+profile parity only.
+
 ---
 
 ## Tool B: `run_live_analysis`
@@ -213,6 +232,9 @@ fetch_cif_from_mp(
 ```
 
 Returns up to 3 structures sorted by thermodynamic stability (energy above hull).
+**CIFs are auto-converted to the conventional standard cell with proper space group**
+(e.g., Fm-3m for CeO2, not primitive P1). This is critical for GSAS-II — primitive P1
+cells produce incorrect peak intensities and cause refinement failure (Rwp ~70-100%).
 
 ---
 

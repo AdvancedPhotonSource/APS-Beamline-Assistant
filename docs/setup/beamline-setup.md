@@ -177,6 +177,33 @@ This means `midas_auto_calibrate` returned an error. Check:
 3. Verify MIDAS Python dependencies are installed
 4. Restart MCP server after fixing MIDAS installation
 
+## Optional: MIDAS Python Packages
+
+APEXA can validate parameter files and compute stress/strain from grain data if two optional MIDAS packages are installed in the `midas_env` conda environment:
+
+```bash
+conda activate midas_env
+pip install -e $MIDAS_PATH/packages/midas_params    # parameter file validation
+pip install -e $MIDAS_PATH/packages/midas_stress     # stress/strain analysis
+```
+
+**What they enable:**
+- `validate_parameter_file` — catch param file errors before burning compute
+- `diagnose_parameter_file` — AI-assisted diagnosis with fix suggestions
+- `inspect_dataset_file` — auto-extract parameters from raw data files
+- `enumerate_bragg_rings` — list which Bragg rings fall on the detector
+- `compute_grain_stress` — Hooke's law + equilibrium correction from Grains.csv
+- `get_material_stiffness` — elastic constants lookup (Au, Cu, Al, Fe, Ni, Ti, W, Si, CeO2)
+- `correct_d0_equilibrium` — two-step d0 correction (dominant HEDM systematic error)
+- `analyze_slip_systems` — Schmid factors, Taylor factor, yield proximity
+- `read_grains_summary` — quick statistical summary of a Grains.csv file
+
+Verify installation from APEXA:
+```
+APEXA> check midas installation
+```
+Both packages should appear under "packages" in the output.
+
 ## Contact
 
 For issues with:

@@ -2164,6 +2164,62 @@ async def get_midas_workflow_status(
 # This server now contains ONLY official MIDAS tools
 # =============================================================================
 
+def _read_param_value(param_path: Path, key: str) -> str | None:
+    """Return the first whitespace-separated value for ``key`` in a MIDAS params file, or None."""
+    try:
+        for line in param_path.read_text().splitlines():
+            s = line.strip()
+            if not s or s.startswith('#'):
+                continue
+            parts = s.split(None, 1)
+            if len(parts) == 2 and parts[0] == key:
+                return parts[1].split('#', 1)[0].strip()
+    except Exception:
+        return None
+    return None
+
+
+def _resolve_image_transform(image_path: Path, user_arg: str,
+                             params_file: Path | None) -> tuple[str, str]:
+    """Pick the right ImTransOpt for calibration.
+
+    Per MIDAS manual (manuals/README.md §Image Transformation), ImTransOpt is
+    detector-mount specific — there is no extension-based rule. Resolution order:
+
+      1. Explicit ``user_arg`` wins (honour what the operator said).
+      2. ``ImTransOpt`` from the parameter file if present (re-use prior calibration).
+      3. Sibling ``parameters.txt`` / ``Parameters.txt`` next to the image (auto-pick).
+      4. Fall back to ``"0"`` (no transform) and emit a warning.
+
+    Returns ``(transform_str, source)``. ``transform_str`` is "" when no override
+    should be passed (i.e. params already has it). ``source`` is a short tag for
+    diagnostics ("user" / "params" / "sibling" / "default-warned").
+    """
+    if user_arg:
+        return user_arg.strip(), "user"
+
+    # Check the explicit params file we're about to use
+    if params_file and params_file.exists():
+        v = _read_param_value(params_file, "ImTransOpt")
+        if v is not None:
+            print(f"  ImTransOpt={v} (from params {params_file.name})", file=sys.stderr)
+            return "", "params"  # already in params, do not pass on CLI
+
+    # Check sibling params files in the image directory
+    for sibling_name in ("parameters.txt", "Parameters.txt", "params.txt"):
+        sibling = image_path.parent / sibling_name
+        if sibling.exists():
+            v = _read_param_value(sibling, "ImTransOpt")
+            if v is not None:
+                print(f"  ImTransOpt={v} (auto-detected from {sibling.name})", file=sys.stderr)
+                return v, "sibling"
+
+    print("  ⚠ ImTransOpt not specified and not found in params/siblings — defaulting to 0 (no transform).", file=sys.stderr)
+    print("    If calibration fails or geometry looks wrong, verify ImTransOpt against a", file=sys.stderr)
+    print("    physical fiducial (beam-stop wire, fiducial marker). See MIDAS manuals/README.md.", file=sys.stderr)
+    return "0", "default-warned"
+
+
 def _strip_empty_value_lines(param_path: Path):
     """Remove lines with a key but no value (e.g. 'Dark \\n') that crash ffGenerateZipRefactor.py."""
     try:
@@ -2190,20 +2246,31 @@ async def midas_integrate_2d_to_1d(
     dark_file: str = None,
     result_folder: str = None,
     n_cpus: int = 4,
-    convert_files: bool = True
+    convert_files: bool = True,
+    bright_file: str = None,
+    csv_output: bool = False,
+    out_name: str = None,
+    short_names: bool = True,
+    r_min: float = None,
+    r_max: float = None,
+    r_bin_size: float = None,
+    eta_min: float = None,
+    eta_max: float = None,
+    eta_bin_size: float = None,
 ) -> str:
-    """Integrate a single 2D diffraction image to a 1D lineout using MIDAS integrator.py (v10).
+    """Integrate a single 2D diffraction image to a 1D lineout using MIDAS integrator.py (v11).
 
     calibration_file is optional — if omitted, auto-searches the image directory for
     refined_MIDAS_params*.txt produced by midas_auto_calibrate.
 
-    v10 executable chain:
+    v11 executable chain:
       integrator.py (FF_HEDM/workflows/) → IntegratorZarrOMP
 
     Outputs written to result_folder (default: image_dir/integration/):
-      *_lineout.xy         — 2θ (degrees) vs intensity text file
-      *_lineout.bin        — binary lineout
-      *_caked.hdf.zarr.zip — caked output (GSAS-II compatible)
+      *_lineout.xy   — 2θ (degrees) vs intensity text file
+      *_lineout.bin  — binary lineout
+      <stem>.zarr.zip — caked output (GSAS-II compatible; short-name default)
+      *_lineouts.csv / *_REtaMap.csv — when csv_output=True
       Map.bin / nMap.bin / maskMap.bin — geometry maps (generated once)
 
     Args:
@@ -2213,6 +2280,17 @@ async def midas_integrate_2d_to_1d(
         result_folder: Output directory (default: <image_dir>/integration)
         n_cpus: OMP threads for IntegratorZarrOMP (default: 4)
         convert_files: Convert input to Zarr before integrating (default: True)
+        bright_file: Optional bright/flat-field image; integrated profiles embedded under processed/bright/ in zarr (v11, issue #20)
+        csv_output: Also export per-frame lineouts and REtaMap as CSVs (v11, issue #23)
+        out_name: Override the output zarr stem (single-file only — clobbers on multi-file)
+        short_names: Use short v11 output naming (<stem>.zarr.zip). False = legacy suffix-stacking
+        r_min, r_max, r_bin_size: Radial integration range overrides (pixels). Defaults: from params file.
+        eta_min, eta_max, eta_bin_size: Azimuthal range overrides (degrees). Defaults: from params file.
+
+    The agent SHOULD prompt the user to confirm R/eta ranges and result_folder before
+    invoking this tool — those values control what 2θ window and azimuthal slice get
+    integrated, which depends on what the user wants to study (specific rings, full eta,
+    sub-sector, etc.). See midas-integrate SKILL.md for the recommended prompting flow.
     """
     try:
         image_path = Path(image_file).expanduser().absolute()
@@ -2257,6 +2335,43 @@ async def midas_integrate_2d_to_1d(
         # Strip empty-value lines that crash ffGenerateZipRefactor.py
         _strip_empty_value_lines(param_path)
 
+        # ── Native engine attempt (Strategy C: PyTorch compute + dual-format) ──
+        # OPT-IN ONLY: subprocess (integrator.py) is the default path; set
+        # APEXA_USE_NATIVE_MIDAS=1 to try the native pip-package path first.
+        # Native path is also skipped when bright_file is set (no flat-field
+        # support yet) or csv_output is requested (no export-csv sidecars yet).
+        if (os.environ.get("APEXA_USE_NATIVE_MIDAS") == "1"
+                and not bright_file and not csv_output):
+            try:
+                from apexa_midas_native import (
+                    native_integrate_2d_to_1d, MidasEngineUnavailable,
+                )
+                print("[engine] trying native midas_integrate first…",
+                      file=sys.stderr)
+                _out = (str(Path(result_folder).expanduser().absolute())
+                        if result_folder
+                        else str(image_path.parent / "integration"))
+                result_dict = native_integrate_2d_to_1d(
+                    image_file=str(image_path),
+                    calibration_file=str(param_path),
+                    dark_file=dark_file or "",
+                    result_folder=_out,
+                    out_name=out_name,
+                    r_min=r_min, r_max=r_max, r_bin_size=r_bin_size,
+                    eta_min=eta_min, eta_max=eta_max, eta_bin_size=eta_bin_size,
+                )
+                return format_result(result_dict)
+            except MidasEngineUnavailable as e:
+                print(f"[engine] native unavailable: {e.install_hint}",
+                      file=sys.stderr)
+                print("[engine] falling back to subprocess (integrator.py)",
+                      file=sys.stderr)
+            except Exception as e:
+                print(f"[engine] native call raised {type(e).__name__}: {e}",
+                      file=sys.stderr)
+                print("[engine] falling back to subprocess (integrator.py)",
+                      file=sys.stderr)
+
         # Find integrator.py — v10 location: FF_HEDM/workflows/
         integrator_script = MIDAS_ROOT / "FF_HEDM" / "workflows" / "integrator.py"
         if not integrator_script.exists():
@@ -2284,6 +2399,8 @@ async def midas_integrate_2d_to_1d(
             "-mapDetector",  "1",
             "-convertFiles", "1" if convert_files else "0",
             "-writeMat",     "0",
+            "-shortNames",   "1" if short_names else "0",
+            "-csvOutput",    "1" if csv_output else "0",
         ]
         if file_nr is not None:
             cmd += ["-startFileNr", str(file_nr), "-endFileNr", str(file_nr)]
@@ -2293,6 +2410,22 @@ async def midas_integrate_2d_to_1d(
                 return format_result({"tool": "midas_integrate_2d_to_1d", "status": "error",
                                       "error": f"Dark file not found: {dark_path}"})
             cmd += ["-darkFN", str(dark_path)]
+        if bright_file:
+            bright_path = Path(bright_file).expanduser().absolute()
+            if not bright_path.exists():
+                return format_result({"tool": "midas_integrate_2d_to_1d", "status": "error",
+                                      "error": f"Bright file not found: {bright_path}"})
+            cmd += ["-brightFN", str(bright_path)]
+        if out_name:
+            cmd += ["-outName", str(out_name)]
+
+        # Trailing parameter overrides — integrator.py treats unknown KEY VALUE pairs
+        # at end of argv as parameter-file overrides written to a temp params copy.
+        for key, val in (("RMin", r_min), ("RMax", r_max), ("RBinSize", r_bin_size),
+                         ("EtaMin", eta_min), ("EtaMax", eta_max),
+                         ("EtaBinSize", eta_bin_size)):
+            if val is not None:
+                cmd += [key, str(val)]
 
         print(f"\n  $ {' '.join(cmd)}", file=sys.stderr)
 
@@ -2309,7 +2442,10 @@ async def midas_integrate_2d_to_1d(
                                   "stderr": result.stderr, "stdout": result.stdout})
 
         lineout = sorted(out_dir.glob("*_lineout.xy"), key=lambda p: p.stat().st_mtime, reverse=True)
-        zarr_out = sorted(out_dir.glob("*_caked.hdf.zarr.zip"), key=lambda p: p.stat().st_mtime, reverse=True)
+        # v11 short-name default is <stem>.zarr.zip; legacy is *_caked.hdf.zarr.zip
+        zarr_out = sorted(out_dir.glob("*.zarr.zip"), key=lambda p: p.stat().st_mtime, reverse=True)
+        csv_files = sorted(out_dir.glob("*_lineouts.csv"), key=lambda p: p.stat().st_mtime, reverse=True) \
+                    if csv_output else []
 
         return format_result({
             "tool": "midas_integrate_2d_to_1d", "status": "success",
@@ -2318,6 +2454,7 @@ async def midas_integrate_2d_to_1d(
             "result_folder": str(out_dir),
             "lineout_xy": str(lineout[0]) if lineout else "not found — check result_folder",
             "zarr_zip": str(zarr_out[0]) if zarr_out else "not found",
+            "csv_files": [str(p) for p in csv_files] if csv_files else None,
             "message": f"Integration complete. Lineout: {lineout[0].name if lineout else 'see result_folder'}"
         })
 
@@ -2452,6 +2589,38 @@ async def midas_auto_calibrate(
         print(f"   Image: {image_file}", file=sys.stderr)
         print(f"   Params: {parameters_file}", file=sys.stderr)
         print(f"{'='*70}\n", file=sys.stderr)
+
+        # ── Native engine attempt ──────────────────────────────────────────
+        # OPT-IN ONLY: subprocess (AutoCalibrateZarr.py) is the default path;
+        # set APEXA_USE_NATIVE_MIDAS=1 to try the native pip-package path
+        # first. Native path is also skipped when parameters_file is empty
+        # (no filename-based auto-detect yet) or when image_transform is set.
+        if (os.environ.get("APEXA_USE_NATIVE_MIDAS") == "1"
+                and parameters_file and not image_transform):
+            try:
+                from apexa_midas_native import (
+                    native_autocalibrate, MidasEngineUnavailable,
+                )
+                print("[engine] trying native midas_calibrate first…",
+                      file=sys.stderr)
+                result_dict = native_autocalibrate(
+                    image_file=image_file,
+                    parameters_file=parameters_file,
+                    dark_file=dark_file,
+                    n_iterations=n_iterations,
+                )
+                return format_result(result_dict)
+            except MidasEngineUnavailable as e:
+                print(f"[engine] native unavailable: {e.install_hint}",
+                      file=sys.stderr)
+                print("[engine] falling back to subprocess (AutoCalibrateZarr.py)",
+                      file=sys.stderr)
+            except Exception as e:
+                # Any other native failure → fall back; don't lose the user.
+                print(f"[engine] native call raised {type(e).__name__}: {e}",
+                      file=sys.stderr)
+                print("[engine] falling back to subprocess (AutoCalibrateZarr.py)",
+                      file=sys.stderr)
 
         # Locate AutoCalibrateZarr.py
         # Note: We don't check MIDAS_AVAILABLE here because that only checks for
@@ -2674,7 +2843,8 @@ async def midas_auto_calibrate(
         if energy_match:
             energy_kev = float(energy_match.group(1).replace('p', '.'))
             if energy_kev > 0:
-                _energy_from_filename = xu.en2lam(energy_kev * 1000)
+                from apexa_units import kev_to_angstrom
+                _energy_from_filename = kev_to_angstrom(energy_kev)
                 print(f"✓ Extracted energy from original filename: {energy_kev} keV → λ = {_energy_from_filename:.6f} Å", file=sys.stderr)
 
         # Extract Lsd guess from original filename if present (e.g. 650mm, 210mm)
@@ -2740,10 +2910,13 @@ async def midas_auto_calibrate(
         if data_loc:  # Non-standard HDF5 dataset location
             cmd.extend(["-dataLoc", data_loc])
 
-        # Add image transformation options if provided
-        if image_transform:
-            # Parse transform string - can be "2" or "1 2 3" etc.
-            transforms = image_transform.strip().split()
+        # Image transformation: explicit user_arg → params file → sibling params → 0+warn
+        # (per MIDAS manuals/README.md, ImTransOpt is detector-mount specific — no extension rule)
+        resolved_transform, transform_source = _resolve_image_transform(
+            image_path, image_transform, param_path
+        )
+        if resolved_transform:
+            transforms = resolved_transform.strip().split()
             if transforms:
                 cmd.extend(["-ImTransOpt"] + transforms)
 
@@ -3000,7 +3173,16 @@ async def midas_batch_integrate(
     convert_files: bool = True,
     write_mat: bool = False,
     data_location: str = "/exchange/data",
-    dark_location: str = "/exchange/data"
+    dark_location: str = "/exchange/data",
+    bright_file: str = None,
+    csv_output: bool = False,
+    short_names: bool = True,
+    r_min: float = None,
+    r_max: float = None,
+    r_bin_size: float = None,
+    eta_min: float = None,
+    eta_max: float = None,
+    eta_bin_size: float = None,
 ) -> str:
     """
     Batch integrate 2D diffraction images using MIDAS Python integrator.
@@ -3031,6 +3213,14 @@ async def midas_batch_integrate(
         write_mat: Write MATLAB .mat files (default: False, saves disk space)
         data_location: Location within data HDF5 file (default: /exchange/data)
         dark_location: Location within dark HDF5 file (default: /exchange/data)
+        bright_file: Optional bright/flat-field image (v11, issue #20) — embedded under processed/bright/ in zarr
+        csv_output: Also export per-frame lineouts and REtaMap as CSVs (v11, issue #23)
+        short_names: Use short v11 output naming (<stem>.zarr.zip). False = legacy suffix-stacking
+        r_min, r_max, r_bin_size: Radial integration range overrides (pixels). Defaults: from params file.
+        eta_min, eta_max, eta_bin_size: Azimuthal range overrides (degrees). Defaults: from params file.
+
+    The agent SHOULD show the params-file R/eta values back to the user and confirm
+    result_folder before invoking this tool. See midas-integrate SKILL.md.
 
     Returns:
         JSON with integration status, output files (.zarr.zip), and processing details
@@ -3112,8 +3302,23 @@ async def midas_batch_integrate(
             "-mapDetector", "1" if map_detector else "0",
             "-nCPUs", str(num_cpus),
             "-writeMat", "1" if write_mat else "0",
-            "-numFrameChunks", str(num_frame_chunks)
+            "-numFrameChunks", str(num_frame_chunks),
+            "-shortNames", "1" if short_names else "0",
+            "-csvOutput", "1" if csv_output else "0",
         ]
+        if bright_file:
+            bright_path = Path(bright_file).expanduser().resolve()
+            if not bright_path.exists():
+                return format_result({"tool": "midas_batch_integrate", "status": "error",
+                                      "error": f"Bright file not found: {bright_path}"})
+            cmd += ["-brightFN", str(bright_path)]
+
+        # Trailing parameter overrides (R/Eta range — see integrator.py override syntax)
+        for key, val in (("RMin", r_min), ("RMax", r_max), ("RBinSize", r_bin_size),
+                         ("EtaMin", eta_min), ("EtaMax", eta_max),
+                         ("EtaBinSize", eta_bin_size)):
+            if val is not None:
+                cmd += [key, str(val)]
 
         cmd_str = " ".join(cmd)
         print(f"\n  $ {cmd_str}", file=sys.stderr)
@@ -3552,7 +3757,8 @@ async def get_typical_hedm_parameters(
 
         # Get relevant beam energy info
         if beam_energy_kev:
-            wavelength_angstrom = 12.398 / beam_energy_kev
+            from apexa_units import kev_to_angstrom
+            wavelength_angstrom = kev_to_angstrom(beam_energy_kev)
             result["beam_info"] = {
                 "energy_kev": beam_energy_kev,
                 "wavelength_angstrom": round(wavelength_angstrom, 4)
@@ -3891,15 +4097,46 @@ async def run_gsas_refinement(
     no_export: bool = False,
     n_cpus: int = 8,
     instprm_file: Optional[str] = None,
+    robust: bool = True,
+    wavelength_A: Optional[float] = None,
+    experimental_a: Optional[float] = None,
+    engine: str = "gsas2",
 ) -> str:
-    """Run GSAS-II peak fitting and lattice refinement on MIDAS caked output.
+    """Run Rietveld refinement on MIDAS caked output via GSAS-II, MAUD, or both.
 
-    Takes a .zarr.zip file produced by integration (midas_integrate_2d_to_1d or
-    midas_batch_integrate) and performs multi-stage Rietveld-style refinement:
-      Stage 1: Background + Scale
-      Stage 2: Unit Cell (lattice parameters)
-      Stage 3: Peak Profile (U, V, W, X, Y, SH/L)
-      Stage 4: Atomic positions + thermal (optional, skipped with no_atoms)
+    The `engine` parameter selects the backend; the historical name
+    `run_gsas_refinement` is retained for backward compatibility but the tool
+    now dispatches to one of two drivers (with `engine="both"` running both
+    engines and writing a cross-validation summary). When `robust=False` the
+    engine selector is ignored and the legacy MIDAS `gsas_ii_refine.py` script
+    is invoked exactly as before.
+
+    By default (robust=True, engine="gsas2") APEXA's robust GSAS-II driver
+    `apexa_gsas_robust.py` is invoked instead of the raw MIDAS
+    `gsas_ii_refine.py`. The robust driver fixes two real-data failure modes
+    encountered on the cross-detector benchmark (see
+    benchmark/detector_zoo/ground_truth.json):
+
+      * NaN-safe extraction — pixel-array detectors with module gaps (Pilatus,
+        Eiger) leave NaN bins in the lineout. The MIDAS extractor passes them
+        through and they bias the residual; we drop them per-slice. On Pilatus
+        this took |Δa| from 63 mAangstrom to 0.56 mAangstrom and recovered all
+        360/360 slices.
+
+      * Data-aware starting cell — Materials Project DFT-relaxed CIFs sit
+        ~50 mAangstrom above experimental lattice constants. For low-statistics
+        single-frame data (GE) the per-slice landscape does not pull the cell
+        across that gap, locking refinement near the wrong minimum. The robust
+        driver substitutes a NIST experimental cell when the CIF names a known
+        calibrant (CeO2 / LaB6 / Si / Al2O3), or uses the user-supplied
+        ``experimental_a``. On GE this took |Δa| from 65 mAangstrom to
+        0.07 mAangstrom and recovered 81/81 slices.
+
+    Set robust=False to fall back to the legacy MIDAS script (n_cpus parallelism
+    is only available in the legacy path; the robust path runs serially per
+    histogram but completes a 360-slice run in ~10 min).
+
+    Stages: Background+Scale → Cell → U,V,W → X,Y,SH/L → (Atoms, optional).
 
     Prerequisites:
     - GSAS-II installed (conda install gsas2pkg -c briantoby)
@@ -3913,11 +4150,30 @@ async def run_gsas_refinement(
         two_theta_limits: Optional 2θ limits in degrees as [LOW, HIGH] (default: full range)
         no_atoms: Skip atomic position / thermal parameter refinement (default: False)
         no_export: Skip CIF and CSV exports after refinement (default: False)
-        n_cpus: Number of parallel workers for histogram refinement (default: 1)
+        n_cpus: Number of parallel workers (legacy path only; default: 8)
         instprm_file: Optional .instprm file for GSAS-II instrument parameters
+        robust: Use APEXA robust driver with NaN filter + calibrant cell fix (default: True)
+        wavelength_A: X-ray wavelength in Angstroms — used by robust driver to
+            estimate starting cell from lineout peak positions when CIF cell
+            disagrees with data by >20 mAangstrom (default: None, no estimation)
+        experimental_a: Explicit override for starting cell a parameter in
+            Angstroms (robust driver only). Overrides auto-calibrant detection.
+        engine: Rietveld engine to use when robust=True. One of:
+            - "gsas2" (default): GSAS-II via `apexa_gsas_robust.py`.
+            - "maud":  MAUD via `apexa_maud_milk.py` (MILK Python wrapper;
+                      requires MAUD + a JDK on PATH; install hint surfaced
+                      automatically when missing).
+            - "both":  run gsas2 then maud, write `refinement_crossvalidation.json`
+                      reporting |Δa_engines|, the Rwp ratio, and an agreement
+                      verdict. If MAUD is unavailable, the call silently falls
+                      back to gsas2-only and tags the response.
+            Ignored when robust=False (the legacy MIDAS path runs unchanged).
 
     Returns:
-        JSON with refinement summary: Rwp values, lattice parameters, output file paths
+        JSON with refinement summary: Rwp values, lattice parameters, output file paths.
+        When robust=True, includes "extraction_stats", "cif_preparation", and
+        "robust_features_applied" diagnostics. When engine="both", also includes
+        a top-level "crossvalidation" object.
     """
     try:
         data_path = Path(data_file).expanduser().absolute()
@@ -3938,12 +4194,46 @@ async def run_gsas_refinement(
                                       "error": f"CIF file not found: {cif_path}"})
             resolved_cifs.append(str(cif_path))
 
-        # Find the refinement script
-        refine_script = MIDAS_ROOT / "utils" / "gsas_ii_refine.py"
-        if not refine_script.exists():
+        # === Engine + driver-script resolution ================================
+        # `engine` selects between the two robust drivers; `robust=False`
+        # forces the legacy MIDAS path regardless of `engine`.
+        if engine not in ("gsas2", "maud", "both"):
             return format_result({"tool": "run_gsas_refinement", "status": "error",
-                                  "error": f"gsas_ii_refine.py not found at {refine_script}. "
+                                  "error": f"Unknown engine={engine!r}. Use 'gsas2', 'maud', or 'both'."})
+
+        apexa_root = Path(__file__).resolve().parent
+        gsas2_script  = apexa_root / "apexa_gsas_robust.py"
+        maud_script   = apexa_root / "apexa_maud_milk.py"
+        legacy_script = MIDAS_ROOT / "utils" / "gsas_ii_refine.py"
+
+        if not robust and not legacy_script.exists():
+            return format_result({"tool": "run_gsas_refinement", "status": "error",
+                                  "error": f"Legacy gsas_ii_refine.py not found at {legacy_script}. "
                                            "Requires MIDAS v11+."})
+        if robust and engine in ("gsas2", "both") and not gsas2_script.exists():
+            return format_result({"tool": "run_gsas_refinement", "status": "error",
+                                  "error": f"GSAS-II robust driver missing at {gsas2_script}."})
+
+        # MAUD-engine availability is a soft fail (degrade rather than error).
+        # Discovery checks the filesystem; the script itself raises EngineUnavailable
+        # at import time if MILK / JDK are missing.
+        from apexa_engines import find_maud_installation, maud_install_hint, cross_validate, load_summary
+        maud_available = maud_script.exists() and find_maud_installation() is not None
+        maud_unavailable_msg = None
+        if engine == "maud" and not maud_available:
+            return format_result({
+                "tool": "run_gsas_refinement",
+                "status": "engine_unavailable",
+                "engine": "maud",
+                "install_hint": maud_install_hint(),
+                "maud_script_exists": maud_script.exists(),
+            })
+        if engine == "both" and not maud_available:
+            # Fall back to gsas2-only, but flag it in the response.
+            maud_unavailable_msg = (
+                "MAUD engine unavailable; cross-validation skipped. "
+                + maud_install_hint()
+            )
 
         out_path = Path(output_dir).expanduser().absolute()
         out_path.mkdir(parents=True, exist_ok=True)
@@ -3956,89 +4246,193 @@ async def run_gsas_refinement(
                 instprm_file = generated_instprm
                 print(f"  Auto-extracted instrument params from zarr", file=sys.stderr)
 
-        # Prefer GSASII env Python — its binaries match the compiled .so ABI.
+        # Prefer GSASII env Python for the GSAS-II driver — its binaries match
+        # the compiled .so ABI. The MAUD driver runs in the apexa env.
         gsasii_python = find_gsasii_python()
-        python_exe = gsasii_python or find_midas_python()
+        python_for_gsas2 = gsasii_python or find_midas_python()
+        python_for_maud  = sys.executable  # apexa env (MILK + JDK)
+        python_for_legacy = python_for_gsas2
 
-        cmd = [
-            python_exe, str(refine_script),
-            "--data", str(data_path),
-            "--cif", *resolved_cifs,
-            "--out", str(out_path),
-            "--bkg-terms", str(bkg_terms),
-            "--nCPUs", str(n_cpus),
-        ]
+        # ------------------------------------------------------------------
+        # Inner: build command + execute one driver, return a result dict.
+        # The same shape is reused for gsas2, maud, and the legacy path.
+        # ------------------------------------------------------------------
+        def _invoke(script: Path, python_exe: str, sub_out: Path, label: str) -> dict:
+            sub_out.mkdir(parents=True, exist_ok=True)
+            cmd = [
+                python_exe, str(script),
+                "--data", str(data_path),
+                "--cif", *resolved_cifs,
+                "--out", str(sub_out),
+                "--bkg-terms", str(bkg_terms),
+            ]
+            if script == legacy_script:
+                cmd.extend(["--nCPUs", str(n_cpus)])
+            if two_theta_limits and len(two_theta_limits) == 2:
+                cmd.extend(["--limits", str(two_theta_limits[0]), str(two_theta_limits[1])])
+            # Robust drivers (gsas2, maud): atom refinement OFF by default; legacy: ON by default.
+            if script != legacy_script:
+                if not no_atoms:
+                    cmd.append("--refine-atoms")
+                if wavelength_A is not None:
+                    cmd.extend(["--wavelength", str(wavelength_A)])
+                if experimental_a is not None:
+                    cmd.extend(["--experimental-a", str(experimental_a)])
+            else:
+                if no_atoms:
+                    cmd.append("--no-atoms")
+                if no_export:
+                    cmd.append("--no-export")
+            if instprm_file:
+                instprm_path = Path(instprm_file).expanduser().absolute()
+                if instprm_path.exists():
+                    cmd.extend(["--instprm", str(instprm_path)])
 
-        if two_theta_limits and len(two_theta_limits) == 2:
-            cmd.extend(["--limits", str(two_theta_limits[0]), str(two_theta_limits[1])])
-        if no_atoms:
-            cmd.append("--no-atoms")
-        if no_export:
-            cmd.append("--no-export")
-        if instprm_file:
-            instprm_path = Path(instprm_file).expanduser().absolute()
-            if instprm_path.exists():
-                cmd.extend(["--instprm", str(instprm_path)])
+            env = get_midas_env()
+            print(f"  [{label}] {data_path.name} → {sub_out}", file=sys.stderr)
+            print(f"  [{label}] python: {python_exe}", file=sys.stderr)
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1800, env=env)
 
-        env = get_midas_env()
+            # Read whichever summary file the driver writes.
+            summary = {}
+            for cand in ("summary.json", "refinement_summary.json"):
+                f = sub_out / cand
+                if f.exists():
+                    try:
+                        summary = json.load(open(f))
+                        break
+                    except Exception:
+                        pass
 
-        print(f"  Running GSAS-II refinement: {data_path.name} → {out_path}", file=sys.stderr)
-        print(f"  Python: {python_exe}", file=sys.stderr)
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800, env=env)
-
-        if result.returncode != 0:
-            stderr = result.stderr[-1500:] if result.stderr else ""
-            error_msg = f"gsas_ii_refine.py failed (exit {result.returncode})"
-            if "Cannot import GSASIIscriptable" in stderr or "ModuleNotFoundError" in stderr:
-                error_msg += (". GSAS-II import failed — install via: "
-                              "conda install gsas2full -c briantoby -c conda-forge")
-
-            # Check for partial results (script may crash in summary but produce .gpx files)
-            partial_summary = {}
-            summary_file = out_path / "refinement_summary.json"
-            if summary_file.exists():
-                try:
-                    with open(summary_file) as f:
-                        partial_summary = json.load(f)
-                except Exception:
-                    pass
-            gpx_files = sorted(out_path.glob("*.gpx"))
-
-            resp = {
-                "tool": "run_gsas_refinement",
-                "status": "partial_success" if (partial_summary or gpx_files) else "error",
-                "error": error_msg,
-                "stderr": stderr,
+            ok = proc.returncode == 0
+            stderr = proc.stderr[-1500:] if proc.stderr else ""
+            res = {
+                "label": label,
+                "driver": script.name,
+                "status": "success" if ok else "error",
+                "returncode": proc.returncode,
+                "output_dir": str(sub_out),
+                "summary": summary,
                 "python_used": python_exe,
+                "stderr": stderr if not ok else "",
+                "stdout_tail": (proc.stdout or "")[-500:],
                 "command": " ".join(cmd),
             }
-            if partial_summary:
-                resp["summary"] = partial_summary
-            if gpx_files:
-                resp["gpx_files_produced"] = len(gpx_files)
-                resp["output_dir"] = str(out_path)
-            return format_result(resp)
+            if not ok:
+                hint = ""
+                if "Cannot import GSASIIscriptable" in stderr or "ModuleNotFoundError" in stderr:
+                    hint = (" GSAS-II import failed — install via: "
+                            "conda install gsas2full -c briantoby -c conda-forge")
+                if "milk" in stderr.lower() or "MAUD" in stderr or "JAVA_HOME" in stderr:
+                    hint = " " + maud_install_hint()
+                res["error"] = f"{script.name} failed (exit {proc.returncode}).{hint}"
+            return res
 
-        # Read refinement summary if produced
-        summary_file = out_path / "refinement_summary.json"
-        summary = {}
-        if summary_file.exists():
-            with open(summary_file) as f:
-                summary = json.load(f)
+        # === Dispatch =========================================================
+        if not robust:
+            res = _invoke(legacy_script, python_for_legacy, out_path, "legacy")
+            return format_result({
+                "tool": "run_gsas_refinement",
+                "status": res["status"],
+                "engine": "midas_legacy",
+                "driver": "midas_gsas_ii_refine",
+                "data_file": str(data_path),
+                "cif_files": resolved_cifs,
+                "output_dir": str(out_path),
+                "summary": res["summary"],
+                "python_used": res["python_used"],
+                "stdout": res["stdout_tail"],
+                "stderr": res.get("stderr", ""),
+                **({"error": res["error"]} if "error" in res else {}),
+            })
 
-        # List output files
-        output_files = sorted(str(p) for p in out_path.iterdir() if p.is_file())
+        if engine == "gsas2":
+            res = _invoke(gsas2_script, python_for_gsas2, out_path, "gsas2")
+            return format_result({
+                "tool": "run_gsas_refinement",
+                "status": res["status"],
+                "engine": "gsas2",
+                "driver": "apexa_gsas_robust",
+                "data_file": str(data_path),
+                "cif_files": resolved_cifs,
+                "output_dir": str(out_path),
+                "summary": res["summary"],
+                "python_used": res["python_used"],
+                "stdout": res["stdout_tail"],
+                "stderr": res.get("stderr", ""),
+                **({"error": res["error"]} if "error" in res else {}),
+            })
 
+        if engine == "maud":
+            res = _invoke(maud_script, python_for_maud, out_path, "maud")
+            return format_result({
+                "tool": "run_gsas_refinement",
+                "status": res["status"],
+                "engine": "maud",
+                "driver": "apexa_maud_milk",
+                "data_file": str(data_path),
+                "cif_files": resolved_cifs,
+                "output_dir": str(out_path),
+                "summary": res["summary"],
+                "python_used": res["python_used"],
+                "stdout": res["stdout_tail"],
+                "stderr": res.get("stderr", ""),
+                **({"error": res["error"]} if "error" in res else {}),
+            })
+
+        # engine == "both": run gsas2, then maud (if available), then cross-validate.
+        gsas2_dir = out_path / "gsas2"
+        maud_dir  = out_path / "maud"
+        gsas2_res = _invoke(gsas2_script, python_for_gsas2, gsas2_dir, "gsas2")
+
+        if not maud_available:
+            return format_result({
+                "tool": "run_gsas_refinement",
+                "status": gsas2_res["status"],
+                "engine": "both",
+                "fallback_used": "gsas2",
+                "fallback_reason": maud_unavailable_msg,
+                "data_file": str(data_path),
+                "cif_files": resolved_cifs,
+                "output_dir": str(out_path),
+                "gsas2": gsas2_res,
+                "maud": None,
+                "crossvalidation": None,
+            })
+
+        maud_res = _invoke(maud_script, python_for_maud, maud_dir, "maud")
+
+        # Cross-validate when both engines wrote a usable summary.
+        cv = None
+        if gsas2_res["summary"] and maud_res["summary"]:
+            try:
+                g = load_summary(gsas2_dir / "summary.json", engine="gsas2") \
+                    if (gsas2_dir / "summary.json").exists() \
+                    else load_summary(gsas2_dir / "refinement_summary.json", engine="gsas2")
+                m = load_summary(maud_dir / "summary.json", engine="maud") \
+                    if (maud_dir / "summary.json").exists() \
+                    else load_summary(maud_dir / "refinement_summary.json", engine="maud")
+                cv = cross_validate(g, m)
+                (out_path / "refinement_crossvalidation.json").write_text(
+                    json.dumps(cv, indent=2)
+                )
+            except Exception as e:
+                cv = {"verdict": "incomplete", "error": str(e)}
+
+        overall_status = (
+            "success" if gsas2_res["status"] == "success" and maud_res["status"] == "success"
+            else "partial_success"
+        )
         return format_result({
             "tool": "run_gsas_refinement",
-            "status": "success",
+            "status": overall_status,
+            "engine": "both",
             "data_file": str(data_path),
             "cif_files": resolved_cifs,
             "output_dir": str(out_path),
-            "output_files": output_files[:30],
-            "summary": summary,
-            "python_used": python_exe,
-            "stdout": result.stdout[-500:] if result.stdout else "",
+            "gsas2": gsas2_res,
+            "maud": maud_res,
+            "crossvalidation": cv,
         })
 
     except subprocess.TimeoutExpired:
@@ -4919,6 +5313,204 @@ async def analyze_slip_systems(
 
     except Exception as e:
         return format_result({"tool": "analyze_slip_systems", "status": "error", "error": str(e)})
+
+
+# =============================================================================
+# MIDAS v11 PYTORCH PIPELINE WRAPPERS
+# (packages/midas_ff_pipeline, midas_fit_grain, midas_nf_preprocess)
+# =============================================================================
+
+def _run_midas_module(module: str, args: list, timeout: int = 7200) -> dict:
+    """Invoke `python -m <module>` with MIDAS env. Returns dict with status/stdout/stderr."""
+    midas_python = find_midas_python()
+    cmd = [midas_python, "-m", module] + [str(a) for a in args]
+    print(f"\n  $ {' '.join(cmd)}", file=sys.stderr)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True,
+                                timeout=timeout, env=get_midas_env())
+    except subprocess.TimeoutExpired:
+        return {"status": "error", "error": f"{module} timed out (>{timeout}s)"}
+    if result.returncode != 0:
+        for line in result.stderr.strip().splitlines()[-20:]:
+            print(f"  {line}", file=sys.stderr)
+        return {"status": "error", "exit_code": result.returncode,
+                "stdout": result.stdout, "stderr": result.stderr,
+                "error": f"{module} exited {result.returncode}"}
+    return {"status": "success", "stdout": result.stdout, "stderr": result.stderr}
+
+
+@mcp.tool()
+async def run_ff_pipeline(
+    params: str,
+    result: str,
+    zarr: str = None,
+    detectors: str = None,
+    layers: str = "1-1",
+    n_cpus: int = 16,
+    device: str = "cuda",
+    dtype: str = "auto",
+    resume: str = "auto",
+    resume_from: str = None,
+    only: list = None,
+    skip: list = None,
+    solver: str = "lbfgs",
+    loss: str = "pixel",
+    mode: str = "",
+    group_size: str = "auto",
+    shard_gpus: str = "auto",
+    pg_mode: str = "spot_aware",
+    raw_dir: str = None,
+    grains_file: str = None,
+    nf_result_dir: str = None,
+    batch: bool = False,
+    generate_h5: bool = False,
+    extra_args: list = None,
+) -> str:
+    """Run the differentiable PyTorch FF-HEDM pipeline (midas_ff_pipeline.run).
+
+    Wraps the v11 ``midas-ff-pipeline run`` console script — the new PyTorch port
+    of the FF-HEDM workflow with checkpoint/resume, multi-GPU sharding, and
+    swappable solvers/losses. Drop-in replacement for legacy ``ff_MIDAS.py``.
+
+    Args:
+        params: Path to Parameters.txt (required).
+        result: Result directory for this run (required).
+        zarr: Override zarr.zip path (auto-derived if omitted).
+        detectors: Detector spec (e.g. "1" or "1,2,3,4" for Hydra).
+        layers: Layer range, e.g. "1-1" or "1-3".
+        n_cpus: CPU thread count for non-GPU stages.
+        device: "cuda" | "cpu" | "mps".
+        dtype: "auto" | "float32" | "float64".
+        resume: Resume policy — "none" | "auto" | "from".
+        resume_from: Stage to resume from when resume="from".
+        only: Stage allow-list (one per --only flag).
+        skip: Stage skip-list (one per --skip flag).
+        solver: "lbfgs" | "lm" | "nelder_mead" | "adam" | "lm_batched".
+        loss: "pixel" | "angular" | "internal_angle".
+        mode: Optional mode override.
+        group_size: Per-grain batch group size or "auto".
+        shard_gpus: GPU sharding spec or "auto".
+        pg_mode: Peak-group mode (default "spot_aware").
+        raw_dir: Raw data directory (when not in params).
+        grains_file: Pre-computed grains file (skip indexing).
+        nf_result_dir: Companion NF reconstruction directory (for FF↔NF cross-checks).
+        batch: Enable batched execution.
+        generate_h5: Emit consolidated HDF5 output.
+        extra_args: Any additional argv to forward verbatim (advanced).
+    """
+    args = ["run", "--params", params, "--result", result, "--layers", layers,
+            "--n-cpus", n_cpus, "--device", device, "--dtype", dtype,
+            "--resume", resume, "--solver", solver, "--loss", loss,
+            "--group-size", group_size, "--shard-gpus", shard_gpus,
+            "--pg-mode", pg_mode]
+    if zarr:           args += ["--zarr", zarr]
+    if detectors:      args += ["--detectors", detectors]
+    if resume_from:    args += ["--from", resume_from]
+    if mode:           args += ["--mode", mode]
+    if raw_dir:        args += ["--raw-dir", raw_dir]
+    if grains_file:    args += ["--grains-file", grains_file]
+    if nf_result_dir:  args += ["--nf-result-dir", nf_result_dir]
+    if batch:          args += ["--batch"]
+    if generate_h5:    args += ["--generate-h5"]
+    for s in (only or []):  args += ["--only", s]
+    for s in (skip or []):  args += ["--skip", s]
+    if extra_args:     args += list(extra_args)
+
+    out = _run_midas_module("midas_ff_pipeline.cli", args, timeout=14400)
+    payload = {"tool": "run_ff_pipeline", "result_dir": str(Path(result).expanduser().absolute()), **out}
+    return format_result(payload)
+
+
+@mcp.tool()
+async def refine_grain_lattice(
+    param_file: str,
+    block_nr: int = 0,
+    num_blocks: int = 1,
+    num_lines: int = 0,
+    num_procs: int = 0,
+    solver: str = "lbfgs",
+    mode: str = None,
+    loss: str = "pixel",
+    device: str = None,
+    dtype: str = None,
+    max_iter: int = 200,
+    ftol: float = 1e-7,
+    xtol: float = 1e-9,
+    csv: bool = False,
+    verbose: int = 0,
+) -> str:
+    """Refine grain position/orientation/strain with the PyTorch fitter
+    (midas_fit_grain — drop-in for FitPosOrStrainsOMP / FitPosOrStrainsGPU).
+
+    Mirrors the legacy C-binary positional argv:
+        param_file blockNr numBlocks numLines numProcs
+
+    Args:
+        param_file: paramstest.txt produced by FitSetupParamsAllZarr / ff_MIDAS.
+        block_nr: 0-based block index.
+        num_blocks: Total number of blocks.
+        num_lines: Number of grain seeds in SpotsToIndex.csv (0 = read from disk).
+        num_procs: CPU thread count for torch.set_num_threads (0 = auto).
+        solver: "lbfgs" | "adam" | "lm" | "nelder_mead" | "lm_batched".
+        mode: "iterative" | "all_at_once" (default: iterative if FitAllAtOnce=0).
+        loss: "pixel" (C parity) | "angular" | "internal_angle".
+        device: Override MIDAS_FIT_GRAIN_DEVICE ("cuda"|"mps"|"cpu").
+        dtype: Override MIDAS_FIT_GRAIN_DTYPE ("float32"|"float64").
+        max_iter: Outer-iteration cap per phase.
+        ftol: Relative-loss convergence threshold.
+        xtol: Parameter-delta convergence threshold.
+        csv: Also dump human-readable FitBest.csv next to the binary.
+        verbose: 0=warning, 1=info, 2=debug.
+    """
+    args = [param_file, block_nr, num_blocks, num_lines, num_procs,
+            "--solver", solver, "--loss", loss,
+            "--max-iter", max_iter, "--ftol", ftol, "--xtol", xtol]
+    if mode:    args += ["--mode", mode]
+    if device:  args += ["--device", device]
+    if dtype:   args += ["--dtype", dtype]
+    if csv:     args += ["--csv"]
+    for _ in range(min(verbose, 2)):
+        args += ["-v"]
+
+    out = _run_midas_module("midas_fit_grain.cli", args, timeout=3600)
+    payload = {"tool": "refine_grain_lattice",
+               "param_file": str(Path(param_file).expanduser().absolute()),
+               "block": f"{block_nr}/{num_blocks}",
+               **out}
+    return format_result(payload)
+
+
+@mcp.tool()
+async def preprocess_nf_data(
+    subcommand: str,
+    args: list = None,
+) -> str:
+    """Run the NF-HEDM PyTorch preprocessing umbrella CLI (midas_nf_preprocess).
+
+    Subcommands (mirror the standalone modules):
+      - hex-grid           : generate the voxel grid (port of MakeHexGrid)
+      - tomo-filter        : mask the grid by a tomography image / bbox
+      - diffr-spots        : forward-simulate diffraction spots (port of MakeDiffrSpots)
+      - process-images     : raw TIFF -> SpotsInfo.bin (port of ProcessImagesCombined)
+      - seed-orientations  : seed grain orientations
+
+    Args:
+        subcommand: Which subcommand to run (see list above).
+        args: Argv list for the subcommand. Pass exactly as you would on the
+              shell (e.g. ["--paramFN", "params.txt", "--output", "grid.bin"]).
+              Each subcommand has its own flag set — call with
+              args=["--help"] to discover them.
+    """
+    valid = {"hex-grid", "tomo-filter", "diffr-spots", "process-images", "seed-orientations"}
+    if subcommand not in valid:
+        return format_result({"tool": "preprocess_nf_data", "status": "error",
+                              "error": f"Unknown subcommand '{subcommand}'. "
+                                       f"Valid: {sorted(valid)}"})
+
+    cli_args = [subcommand] + [str(a) for a in (args or [])]
+    out = _run_midas_module("midas_nf_preprocess.cli", cli_args, timeout=3600)
+    payload = {"tool": "preprocess_nf_data", "subcommand": subcommand, **out}
+    return format_result(payload)
 
 
 # =============================================================================

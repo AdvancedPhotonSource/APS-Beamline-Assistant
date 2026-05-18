@@ -28,7 +28,7 @@ User (CLI / Gradio / Web UI)
                 |   (9 tools)         |
                 +---------------------+
                 |   midas server      |
-                |   (25 tools)        |
+                |   (37 tools)        |
                 +---------------------+
 ```
 
@@ -49,7 +49,7 @@ All three call `run_query()` as the single entry point.
 | `apexa_agents.py` | Agent definitions, ArgoProvider, AgentRunner, OrchestratorAgent |
 | `argo_mcp_client.py` | MCP client, tool registry, CLI session loop |
 | `beamline_core_server.py` | Core MCP server: file ops, shell commands, X-ray calculations |
-| `midas_comprehensive_server.py` | MIDAS MCP server: 25 tools for HEDM workflows, GSAS-II, CIF |
+| `midas_comprehensive_server.py` | MIDAS MCP server: 37 tools for HEDM workflows, validation, stress analysis, PyTorch v11 pipeline |
 | `servers.config` | Server configuration (`name:script_path` pairs) |
 | `.agents/skills/` | Agent Skills: canonical MIDAS workflow reference |
 
@@ -70,10 +70,11 @@ Keyword-score routing to specialist agents:
 
 | Agent | Keywords | Temperature |
 |---|---|---|
-| CalibrationAgent | calibrat, ceo2, beam center, lsd, detector distance | 0.3 |
-| AnalysisAgent | integrat, hedm, grain, gsas, refine, workflow (default fallback) | 0.5 |
+| CalibrationAgent | calibrat, ceo2, beam center, lsd, validate param, diagnose | 0.3 |
+| AnalysisAgent | integrat, hedm, grain, gsas, stress, von mises, schmid, d0 (default fallback) | 0.5 |
 | KnowledgeAgent | explain, what is, literature, best practice | 0.6 |
 | VisualizationAgent | plot, visualiz, view, show, lineout, caked, heatmap | 0.3 |
+| MotorAgent | motor, move, position, caget, caput, epics | 0.2 |
 
 ### _TOOL_PREAMBLE
 System prompt injected into every agent call. Instructs the model to use `TOOL_CALL:` / `ARGUMENTS:` text format. Without this, the model generates text instead of calling tools.
@@ -84,8 +85,9 @@ System prompt injected into every agent call. Instructs the model to use `TOOL_C
 `list_directory`, `read_file`, `write_file`, `get_file_info`, `run_command`,
 `check_environment`, `xray_calculate`, `validate_beamline_parameters`, `list_common_calibrants`
 
-### MIDAS Server (`midas_comprehensive_server.py`) -- 25 tools
-`midas_auto_calibrate`, `midas_integrate_2d_to_1d`, `midas_batch_integrate`,
+### MIDAS Server (`midas_comprehensive_server.py`) -- 37 tools
+
+**Workflows:** `midas_auto_calibrate`, `midas_integrate_2d_to_1d`, `midas_batch_integrate`,
 `run_gsas_refinement`, `run_live_analysis`, `fetch_cif_from_mp`,
 `run_ff_hedm_full_workflow`, `run_nf_hedm_reconstruction`, `run_pf_hedm_workflow`,
 `run_ff_calibration`, `match_grains`, `calculate_misorientation`,
@@ -95,6 +97,12 @@ System prompt injected into every agent call. Instructs the model to use `TOOL_C
 `run_midas_viewer`,
 `query_hedm_knowledge`, `get_material_properties`, `get_typical_hedm_parameters`,
 `estimate_parameters_from_image`
+
+**Parameter validation (midas-params):** `validate_parameter_file`, `diagnose_parameter_file`,
+`inspect_dataset_file`, `enumerate_bragg_rings`
+
+**Stress analysis (midas-stress):** `compute_grain_stress`, `get_material_stiffness`,
+`correct_d0_equilibrium`, `analyze_slip_systems`, `read_grains_summary`
 
 ## Tool Registry
 
@@ -127,14 +135,27 @@ The startup script reads this file, validates server existence, and passes them 
 
 ## MIDAS Environment
 
-Two Python env functions handle C++ vs Python MIDAS scripts:
+`get_midas_env()` sets up PATH, MIDAS_PATH, and PYTHONPATH for all MIDAS operations (C++ and Python). C++ binaries have @rpath set at build time so DYLD_LIBRARY_PATH is not needed.
 
-| Function | Used For | DYLD_LIBRARY_PATH |
+MIDAS v11 Python scripts use the `midas_env` conda environment (`~/miniconda3/envs/midas_env/bin/python`). APEXA uses `uv` -- the two environments are kept separate. All MIDAS tools invoke scripts via subprocess using `find_midas_python()`.
+
+### MIDAS Python Packages (Optional)
+
+Two optional packages in `$MIDAS_PATH/packages/` extend APEXA's capabilities:
+
+| Package | Install | What It Does |
 |---|---|---|
-| `get_midas_env()` | C++ binaries (IntegratorZarrOMP, DetectorMapper) | Set to MIDAS build libs |
-| `get_midas_python_env()` | Python scripts (integrator.py, AutoCalibrateZarr.py) | Not set (avoids h5py conflict) |
+| `midas-params` | `pip install -e $MIDAS_PATH/packages/midas_params` | Parameter file validation, LLM diagnosis, dataset inspection, Bragg ring enumeration |
+| `midas-stress` | `pip install -e $MIDAS_PATH/packages/midas_stress` | Stress/strain analysis from Grains.csv: Hooke's law, d0 correction, slip-system analysis |
 
-MIDAS v11 Python scripts use the `midas_env` conda environment (`~/miniconda3/envs/midas_env/bin/python`).
+Install in the **midas_env** conda environment (not the APEXA uv venv):
+```bash
+conda activate midas_env
+pip install -e $MIDAS_PATH/packages/midas_params
+pip install -e $MIDAS_PATH/packages/midas_stress
+```
+
+Run `validate_midas_installation` in APEXA to check if both packages are detected.
 
 ## Argo API
 
@@ -147,7 +168,7 @@ MIDAS v11 Python scripts use the `midas_env` conda environment (`~/miniconda3/en
 
 ### Available Models (all on PROD)
 - **OpenAI:** gpt4o (default, fastest ~0.8s), gpt4olatest, gpt41/mini/nano, gpto3mini, gpto4mini, gpt5/mini/nano, gpt51, gpt52, gpt54
-- **Anthropic:** claudeopus46/45/41/4, claudesonnet46/45/4/37, claudehaiku45
+- **Anthropic:** claudeopus47/46/45/41/4, claudesonnet46/45/4/37, claudehaiku45
 - **Google:** gemini25pro, gemini25flash
 
 ## CLI Features

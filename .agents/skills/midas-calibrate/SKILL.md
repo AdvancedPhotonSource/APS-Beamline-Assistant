@@ -53,6 +53,38 @@ midas_auto_calibrate(
 - **PYTHONPATH must include `MIDAS/utils/`** — handled automatically by `get_midas_env()`
 - **Use `midas_env` conda Python** — not system `python3`
 
+### `ImTransOpt` (image transformation) — auto-detected, but verify
+
+`ImTransOpt` controls flip/transpose of the raw image to align with the MIDAS
+lab frame. Per `MIDAS/manuals/README.md` it is **detector-mount specific** — there
+is *no* reliable extension-based rule (a Pilatus TIFF can need `2`, a GE file
+can need `0`, depending on how the detector is physically oriented).
+
+The `midas_auto_calibrate` tool resolves it in this order:
+
+1. **`image_transform` kwarg** — explicit user value wins.
+2. **`ImTransOpt` line in the supplied `parameters_file`** — re-used as-is.
+3. **Sibling `parameters.txt` / `Parameters.txt` / `params.txt` next to the image** — auto-picked.
+4. **Fallback: `0` (no transform) + warning** — agent should flag this to the user.
+
+Codes (from `MIDAS/manuals/README.md`):
+
+| `ImTransOpt` | Effect |
+|---|---|
+| `0` | No transform |
+| `1` | Flip left/right |
+| `2` | Flip top/bottom |
+| `3` | Transpose |
+
+> **If calibration converges to nonsense or rings are mirrored, ImTransOpt is
+> the first thing to suspect.** Verify against a physical fiducial (beam-stop wire,
+> fiducial dot) whose position on the detector you can predict.
+
+Pass multiple transforms space-separated (applied in order):
+```
+midas_auto_calibrate(..., image_transform="1 3")   # flip LR then transpose
+```
+
 ### Calibrant auto-detection from filename
 
 If the image filename contains these patterns, no param file needed for material/energy:
