@@ -13,6 +13,7 @@ import sys
 import os
 from pathlib import Path
 import numpy as np
+import xrayutilities as xu
 import re
 import subprocess
 import asyncio
