@@ -32,6 +32,7 @@ import os
 import re
 import sys
 import time
+from collections import Counter
 from pathlib import Path
 import httpx
 from dataclasses import dataclass, field
@@ -285,6 +286,13 @@ class APEXAAgent:
     instructions: str
     tool_names:   List[str]   # bare MCP tool names; empty list = all tools
     temperature:  float = 0.7
+    # Profile-Then-Reason mode: prepend a plan-first directive to the system
+    # prompt so the model emits ALL needed tool calls in one response (concurrent
+    # dispatch) and prefers a single compound tool over looping a primitive.
+    # Combined with the runtime fan-out guard, this prevents the failure mode
+    # where the model emits 22 xray_calculate calls instead of one
+    # enumerate_bragg_rings call.
+    use_planning: bool = False
 
 
 # ── Specialist Agents ────────────────────────────────────────────────────────
@@ -346,6 +354,7 @@ Calibration output is refined_MIDAS_params*.txt — NOT .poni files.""",
 ANALYSIS_AGENT = APEXAAgent(
     name        = "AnalysisAgent",
     temperature = 0.5,
+    use_planning = True,   # plan all tool calls up front; prefer compound tools
     tool_names  = [
         # Integration
         "midas_integrate_2d_to_1d",
@@ -786,6 +795,37 @@ PATH HANDLING — CRITICAL:
 
 """
 
+# Plan-first preamble for agents with use_planning=True. Prepended to the
+# system prompt so the model emits its entire tool plan in one response rather
+# than discovering the plan one tool at a time. This is the generic fix for the
+# fan-out failure mode (e.g., 22 xray_calculate calls instead of one
+# enumerate_bragg_rings call); it does not encode any per-tool rules.
+_PLAN_FIRST_PREAMBLE = """🧭 PLAN BEFORE YOU CALL.
+
+Before emitting ANY TOOL_CALL block, think through ALL the tools you will
+need to fully answer the user's request, then emit them ALL in a single
+response. The runner dispatches independent calls concurrently — there is
+NO benefit to emitting them one at a time, and doing so wastes turns.
+
+⚠️ COMPOUND OVER PRIMITIVE — REQUIRED:
+If you are about to emit the same tool more than twice with sequential
+parameters (e.g., xray_calculate for hkl=(1,1,1) then (2,0,0) then (2,2,0)
+…), STOP. There is almost always a compound tool whose description mentions
+"all", "enumerate", "list", "batch", "rings", "summary", or "report" that
+returns the full set in ONE call. Find it in the tool list above and use it.
+
+Examples of the WRONG pattern (do not do this):
+- 22 calls to xray_calculate(d_from_hkl, h, k, l)  → use enumerate_bragg_rings ONCE
+- 10 calls to read_file on different config files  → use diagnose_parameter_file ONCE
+- N calls to xray_calculate(d_from_hkl) on the same lattice → use enumerate_bragg_rings ONCE
+
+After you receive tool results, your DEFAULT next action is to ANSWER the
+user. Only emit another TOOL_CALL block if information you genuinely need
+is NOT in any prior tool result. Recomputing or "verifying" values that are
+already in a tool result is forbidden — trust the tool.
+
+"""
+
 # ── Agent Runner ─────────────────────────────────────────────────────────────
 
 ExecuteToolFn = Callable[[str, Dict], Awaitable[str]]
@@ -947,9 +987,14 @@ class AgentRunner:
 
         tools = self._filter_tools(agent.tool_names, all_tools)
 
-        # Build system message: strong preamble + agent-specific instructions
+        # Build system message: strong preamble + agent-specific instructions.
+        # Agents with use_planning=True get the plan-first preamble prepended,
+        # which (a) tells the model to batch all needed tool calls in one
+        # response and (b) explicitly forbids primitive-tool fan-out where a
+        # compound tool exists.
         cwd = str(Path.cwd())
-        system_content = _TOOL_PREAMBLE + f"\nCurrent working directory (CWD): {cwd}\n" + agent.instructions
+        plan_pre = _PLAN_FIRST_PREAMBLE if getattr(agent, "use_planning", False) else ""
+        system_content = plan_pre + _TOOL_PREAMBLE + f"\nCurrent working directory (CWD): {cwd}\n" + agent.instructions
 
         # Append tool catalog with parameters so the model knows what to call
         if tools:
@@ -1024,6 +1069,40 @@ class AgentRunner:
                 prose = self._strip_tool_calls_from_text(text)
                 if prose:
                     messages.append({"role": "assistant", "content": prose})
+
+                # ── Runtime fan-out guard ────────────────────────────────────
+                # Generic structural check: if the model emitted ≥3 calls to
+                # the SAME tool in one response, that is almost always a
+                # primitive-tool loop (e.g., xray_calculate per hkl) where a
+                # compound tool would do. Reject the batch, tell the model to
+                # find a compound tool, and let it retry. Skips fast-path
+                # tools that are legitimately repeated in one batch (none
+                # currently). This is per-tool-agnostic — no rules to update.
+                _tool_counts = Counter(tc.name for tc in text_calls)
+                _top_tool, _top_count = _tool_counts.most_common(1)[0]
+                if _top_count >= 3:
+                    print(f"  \033[33m⚠ fan-out guard:\033[0m {_top_count}× {_top_tool} — rejecting batch")
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            f"⛔ FAN-OUT DETECTED: you emitted {_top_count} calls to "
+                            f"`{_top_tool}` in one response. This is the failure mode "
+                            "this system is designed to prevent.\n\n"
+                            "A compound tool almost certainly exists that returns all of "
+                            "these values in ONE call. Search YOUR TOOL LIST above for a "
+                            "tool whose description mentions 'all', 'enumerate', 'list', "
+                            "'batch', 'rings', 'summary', 'report', or 'inspect' and use "
+                            f"THAT tool ONCE instead of {_top_tool} {_top_count} times.\n\n"
+                            "Examples of the right pattern:\n"
+                            "  • Per-hkl d-spacings → enumerate_bragg_rings (not many xray_calculate)\n"
+                            "  • Per-file inspection → diagnose_parameter_file or inspect_dataset_file\n"
+                            "  • Per-grain stats → read_grains_summary\n\n"
+                            "If you genuinely need primitive calls (e.g., one xray_calculate "
+                            "for a single user-asked d-spacing), emit AT MOST ONE call now, "
+                            "then ANSWER the user."
+                        ),
+                    })
+                    continue   # skip dispatch; let the model retry with a compound tool
 
                 _once_per_response = set()
                 _ONCE_TOOLS = {"run_midas_viewer"}
@@ -1179,7 +1258,40 @@ class AgentRunner:
                 continue
             return text or "Analysis complete."
 
-        # Extract last assistant text if iterations exhausted
+        # ── Forced finalize at iteration cap ─────────────────────────────────
+        # Loop exhausted without the model producing a tool-call-free final
+        # response. Falling through to "return last message" silently drops
+        # raw tool JSON onto the user. Instead, make ONE more LLM call with
+        # tools forbidden and a hard instruction to summarise what we already
+        # have. This guarantees a user-facing answer even when the model is
+        # mid-fan-out at the cap.
+        print(f"  \033[33m⚠ iteration cap reached — forcing finalize\033[0m")
+        messages.append({
+            "role": "user",
+            "content": (
+                "⛔ TOOL BUDGET EXHAUSTED. You have reached the maximum allowed "
+                "tool calls for this turn. You are now FORBIDDEN from emitting "
+                "any further TOOL_CALL blocks.\n\n"
+                "Write the FINAL answer for the user RIGHT NOW using only the "
+                "tool results above. Use markdown: **bold** the key values, "
+                "use bullet points for lists, and keep it concise. If the tool "
+                "results are incomplete, say so honestly — name what is missing "
+                "and what the user could ask for next. Do NOT apologise; do NOT "
+                "describe your process; just produce the answer."
+            ),
+        })
+        try:
+            final_response = await provider.chat(messages, agent.temperature)
+            final_text = final_response.content or ""
+            # Strip any TOOL_CALL: blocks that slipped through (the model
+            # sometimes ignores the no-tools instruction on the first try).
+            final_text = self._strip_tool_calls_from_text(final_text).strip()
+            if final_text:
+                return final_text
+        except Exception as e:
+            print(f"  \033[31m✗ finalize call failed: {e}\033[0m")
+
+        # True last resort: surface the last assistant text we have
         last = messages[-1]
         if isinstance(last.get("content"), str):
             return last["content"]
@@ -1434,9 +1546,94 @@ class OrchestratorAgent:
 
         return summary
 
+    # Patterns that mean "explain / recap / summarize what you JUST did".
+    # When matched on a query and we have at least one prior assistant turn
+    # in history, route to _explain_prior_turn() — a single no-tools LLM
+    # call — instead of re-executing the work in a specialist agent. Without
+    # this, queries like "how did you calculate that?" hit the Analysis
+    # agent's keyword set on "calculate" and the entire tool chain re-fires.
+    _EXPLAIN_PRIOR_PATTERNS = [
+        re.compile(r"^\s*(what\s+(was|is|did\s+you\s+get|are\s+the)\s+(the\s+)?(outcome|result|answer|finding|number|value|conclusion|summary))", re.I),
+        re.compile(r"^\s*(how\s+did\s+you|why\s+did\s+you|how\s+was\s+(it|that)\s+(calc|comput|deriv|obtain))", re.I),
+        re.compile(r"^\s*(explain\s+(that|how|why|what\s+you\s+(did|just)))", re.I),
+        re.compile(r"^\s*(walk\s+me\s+through|talk\s+me\s+through)", re.I),
+        re.compile(r"^\s*(summari[sz]e|recap|tl;?dr)\s+(that|this|the\s+(result|output|answer|previous))", re.I),
+        re.compile(r"^\s*(show\s+me\s+(the\s+)?(answer|result|outcome|summary)\s*(again)?)\s*\??\s*$", re.I),
+    ]
+
+    def _is_explain_prior(self, query: str) -> bool:
+        return any(p.search(query) for p in self._EXPLAIN_PRIOR_PATTERNS)
+
+    async def _explain_prior_turn(self, query: str, provider: ArgoProvider,
+                                  use_history: bool) -> str:
+        """Answer an explanation/recap follow-up using ONLY conversation
+        history. No tools. One LLM call. This collapses the cost of
+        questions like "what was the outcome?" or "how did you calculate
+        that?" from a full agent loop (often 10+ tool calls and 30+ s) to
+        a single sub-second answer.
+        """
+        history = self._select_history_for_explain()
+        if not history:
+            # No prior turn to explain — fall through to normal routing.
+            return ""
+
+        sys_msg = {
+            "role": "system",
+            "content": (
+                "You are APEXA. The user is asking you to EXPLAIN or RECAP what "
+                "you just did in the previous turn. You MUST answer ONLY from "
+                "the conversation history below. Do NOT call any tools. Do NOT "
+                "request new information. Do NOT re-execute the prior task.\n\n"
+                "If the user asks how a value was calculated, describe the tool(s) "
+                "you used and the inputs from the prior turn. If they ask for the "
+                "outcome, restate the result concisely. Use markdown: **bold** key "
+                "values; bullets for lists; ≤8 lines unless detail is requested."
+            ),
+        }
+        messages = [sys_msg] + history + [{"role": "user", "content": query}]
+        try:
+            resp = await provider.chat(messages, temperature=0.2)
+            text = (resp.content or "").strip()
+        except Exception as e:
+            return f"(could not generate explanation: {e})"
+
+        # Strip any TOOL_CALL: blocks that leaked through despite the
+        # no-tools instruction — we are NOT going to execute them here.
+        text = self.runner._strip_tool_calls_from_text(text).strip()
+        if not text:
+            return "(no prior result to explain)"
+
+        if use_history:
+            self.conversation_history.extend([
+                {"role": "user",      "content": query},
+                {"role": "assistant", "content": text},
+            ])
+            if len(self.conversation_history) > 12:
+                self.conversation_history = self.conversation_history[-12:]
+        return text
+
+    def _select_history_for_explain(self) -> List[Dict]:
+        """Return the most recent 6 messages (≈3 exchanges) for context.
+        Empty list if no usable history."""
+        if not self.conversation_history:
+            return []
+        return list(self.conversation_history[-6:])
+
     async def process(self, query: str, provider: ArgoProvider,
                       use_history: bool = True,
                       on_tool_result: OnToolResultFn = None) -> str:
+        # Explanation short-circuit: "what was the outcome?", "how did you
+        # calculate that?", "explain that", "recap", etc. Answers from
+        # conversation history without re-running any tools. Skipped if
+        # we have no prior turn to explain.
+        if self._is_explain_prior(query) and self.conversation_history:
+            explained = await self._explain_prior_turn(
+                query, provider, use_history=use_history,
+            )
+            if explained:
+                return explained
+            # else fall through to normal routing
+
         # Fast path: deterministic NL commands skip the LLM entirely
         fast = self._match_fast_path(query)
         if fast:
