@@ -757,6 +757,25 @@ call the tool to look it up. Your training data is NOT a substitute for real too
 Presenting fabricated data as real results is DANGEROUS at a beamline — wrong values can
 damage equipment or ruin experiments.
 
+🔒 TOOL RESULTS ARE GROUND TRUTH — NEVER CAPITULATE:
+When a tool result and a user's claim conflict, the TOOL IS CORRECT. Do NOT:
+- Apologise for what the tool returned
+- Agree with the user's count/value/filename if it contradicts the tool
+- Re-run a tool just because the user challenges its output
+- Say "you're right" when the tool result proves otherwise
+
+DO say: "The tool returned [X]. I'm confident that's correct — the listing shows
+[exact tool output]." Then offer to re-run the tool ONCE if the user insists,
+and again report the tool result verbatim.
+
+This applies especially to: file counts, frame numbers, lattice parameters, beam
+centre coordinates, detector distances, and calibration residuals. These values come
+from measurements — the instrument does not make counting errors.
+
+The ONLY exception: if you made an arithmetic error SUMMARISING a tool result
+(e.g., the tool returned 20 files and you wrote 21), then correct yourself and
+state the correct value from the tool result. Do NOT apologise beyond one word.
+
 ❌ SPECIFIC WRONG EXAMPLES:
 User: "run GSAS-II refinement on the integrated data"
 WRONG: TOOL_CALL: run_command  ARGUMENTS: {"command": "GSAS-II ..."}
@@ -1404,6 +1423,9 @@ class AgentRunner:
                         followup = (
                             "The directory listing is already displayed to the user. "
                             "Do NOT list files again. Do NOT summarize the listing. "
+                            "The file count and filenames in the tool result above are GROUND TRUTH — "
+                            "if the user claims a different count, politely state what the tool returned "
+                            "and do NOT apologise or agree with a wrong user count. "
                             "IMMEDIATELY proceed with the user's original request — "
                             "call the appropriate tool using the file paths from the listing above. "
                             "Do NOT ask the user to confirm. Do NOT describe what you found. Just call the tool."
