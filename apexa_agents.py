@@ -958,6 +958,87 @@ class AgentRunner:
         return has_marker and has_many_params
 
     @staticmethod
+    def _extract_dir_file_count(messages: List[Dict]) -> Optional[int]:
+        """Scan conversation messages for the most recent list_directory result
+        and return the total file count it reported, or None if not found.
+
+        Used by _check_count_hallucination to verify that the model's stated
+        file/frame count matches what the tool actually returned.
+        """
+        # list_directory results appear as user messages containing JSON with
+        # a "total_files" key, or as the compact listing text "[Tool Result
+        # for list_directory]".  Try both forms.
+        for msg in reversed(messages):
+            content = msg.get("content", "")
+            if not isinstance(content, str):
+                continue
+            if "[Tool Result for list_directory]" not in content and "list_directory" not in content:
+                continue
+            # Try JSON form first
+            m = re.search(r'"total_files"\s*:\s*(\d+)', content)
+            if m:
+                return int(m.group(1))
+            # Fall back to compact-listing summary line: "N directories, M files"
+            m = re.search(r'(\d+)\s+(?:directories?,\s*)?(\d+)\s+files?', content)
+            if m:
+                return int(m.group(2))
+        return None
+
+    @staticmethod
+    def _check_count_hallucination(text: str, messages: List[Dict]) -> Optional[str]:
+        """Return a rejection message if the model asserted a specific file /
+        frame count that contradicts what list_directory actually reported.
+
+        This catches the failure mode where the model reads '920 files' from
+        the tool result but writes '360 TIFF images' (or any other fabricated
+        number) because its training data associates 'aero' with 360-frame
+        HEDM rotation scans.
+
+        Returns None if no contradiction is found (including if no prior
+        list_directory result exists in the conversation).
+        """
+        actual = AgentRunner._extract_dir_file_count(messages)
+        if actual is None:
+            return None
+
+        # Extract ALL integers from the model's text that appear near
+        # count-like context words.  We cast a fairly wide net so we don't
+        # miss paraphrases like "135+ frames", "00000 to 00359", "N images".
+        count_patterns = [
+            # "360 TIFF images", "920 files", "135 frames"
+            re.compile(r'\b(\d+)\s*\+?\s*(?:tiff|tif|image|frame|file|scan|projection)s?\b', re.I),
+            # "numbered from 00000 to 00359"
+            re.compile(r'\b00000\s+to\s+0*(\d+)\b', re.I),
+            # "total frames: 360"
+            re.compile(r'(?:total|frame|file|image)\s+count[:\s]+(\d+)', re.I),
+            # "360° with 1° steps" → 360 could come from rotation claim; too
+            # broad — only flag if the number also appears in a file-count context
+            # (handled by the patterns above).
+        ]
+        claimed_counts = set()
+        for pat in count_patterns:
+            for m in pat.finditer(text):
+                claimed_counts.add(int(m.group(1)))
+
+        # Allow a ±1 tolerance (sometimes the agent drops header/footer rows).
+        for claimed in claimed_counts:
+            if abs(claimed - actual) > 1:
+                return (
+                    f"⛔ COUNT HALLUCINATION DETECTED.\n\n"
+                    f"You stated **{claimed}** files/frames but the `list_directory` "
+                    f"tool returned **{actual}** files.\n\n"
+                    "You MUST NOT invent counts, frame ranges, or angular steps from "
+                    "your training data. Report ONLY what the tool told you:\n"
+                    f"  • Total files: {actual}\n"
+                    "  • File naming pattern: (from the listing above)\n\n"
+                    "Rewrite your answer using only the tool result. "
+                    "Do NOT claim to know the omega range, frame count, or "
+                    "rotation geometry unless a parameter file or metadata tool "
+                    "confirmed it."
+                )
+        return None
+
+    @staticmethod
     def _select_history(history: List[Dict], max_msgs: int) -> List[Dict]:
         """Pick a compact slice of conversation history.
 
@@ -1026,15 +1107,39 @@ class AgentRunner:
             messages.extend(selected)
         messages.append({"role": "user", "content": query})
 
-        last_tool_name = None          # track repeated tool calls
+        last_tool_name = None          # track repeated tool calls (consecutive)
         _last_tool_args = None         # track repeated tool arguments
         repeat_count   = 0
+        # Cumulative tool-call counter across ALL iterations of this user turn.
+        # Catches iterative fan-out (model emits one primitive call per turn
+        # for N turns) which the per-response guard misses.  When any single
+        # tool reaches the threshold, we send the same compound-tool redirect.
+        _turn_tool_counts: Counter = Counter()
+        _FANOUT_THRESHOLD = 3          # same as per-response guard
 
         for _ in range(max_iterations):
             response = await provider.chat(messages, agent.temperature)
 
             # ── Mode 1: Native API tool_calls ──
             if response.tool_calls:
+                # Cross-iteration fan-out check for native tool_calls.
+                _turn_tool_counts.update(tc.name for tc in response.tool_calls)
+                _worst_tool, _worst_count = _turn_tool_counts.most_common(1)[0]
+                if _worst_count >= _FANOUT_THRESHOLD:
+                    print(f"  \033[33m⚠ cumulative fan-out:\033[0m {_worst_count}× {_worst_tool}")
+                    messages.append(self._assistant_message(response, provider.model))
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            f"⛔ CUMULATIVE FAN-OUT: you have now called `{_worst_tool}` "
+                            f"{_worst_count} times across this turn. "
+                            "Use the compound tool that returns all values in ONE call instead. "
+                            "Check your tool list for a tool whose description says 'all', "
+                            "'enumerate', 'batch', 'rings', 'summary', 'report', or 'inspect'. "
+                            "Call it ONCE and then ANSWER the user."
+                        ),
+                    })
+                    continue
                 messages.append(self._assistant_message(response, provider.model))
                 for tc in response.tool_calls:
                     print(f"  \033[36m▸\033[0m \033[1m{tc.name}\033[0m")
@@ -1070,16 +1175,16 @@ class AgentRunner:
                 if prose:
                     messages.append({"role": "assistant", "content": prose})
 
-                # ── Runtime fan-out guard ────────────────────────────────────
-                # Generic structural check: if the model emitted ≥3 calls to
-                # the SAME tool in one response, that is almost always a
-                # primitive-tool loop (e.g., xray_calculate per hkl) where a
-                # compound tool would do. Reject the batch, tell the model to
-                # find a compound tool, and let it retry. Skips fast-path
-                # tools that are legitimately repeated in one batch (none
-                # currently). This is per-tool-agnostic — no rules to update.
+                # ── Runtime fan-out guards ───────────────────────────────────
+                # Two complementary checks:
+                # (A) Per-response: ≥3 of the same tool in ONE model response
+                # (B) Cumulative: ≥3 of the same tool across ALL responses this
+                #     turn — catches iterative single-call-per-turn fan-out.
+                # Both are per-tool-agnostic structural checks; no per-tool rules.
                 _tool_counts = Counter(tc.name for tc in text_calls)
                 _top_tool, _top_count = _tool_counts.most_common(1)[0]
+
+                # (A) per-response check
                 if _top_count >= 3:
                     print(f"  \033[33m⚠ fan-out guard:\033[0m {_top_count}× {_top_tool} — rejecting batch")
                     messages.append({
@@ -1103,6 +1208,26 @@ class AgentRunner:
                         ),
                     })
                     continue   # skip dispatch; let the model retry with a compound tool
+
+                # (B) cumulative check — update turn counter AFTER per-response
+                # guard passes, then check cumulative totals.
+                _turn_tool_counts.update(_tool_counts)
+                _cum_top, _cum_count = _turn_tool_counts.most_common(1)[0]
+                if _cum_count >= _FANOUT_THRESHOLD and _cum_top == _top_tool and _top_count < _FANOUT_THRESHOLD:
+                    # Cumulative threshold crossed but NOT already caught by (A)
+                    print(f"  \033[33m⚠ cumulative fan-out:\033[0m {_cum_count}× {_cum_top}")
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            f"⛔ CUMULATIVE FAN-OUT: you have called `{_cum_top}` "
+                            f"{_cum_count} times across this turn in separate responses. "
+                            "You must find the compound tool that returns ALL of these "
+                            "values in ONE call. Look for a tool whose description says "
+                            "'all', 'enumerate', 'batch', 'rings', 'summary', 'report', "
+                            "or 'inspect'. Call it ONCE and then ANSWER the user."
+                        ),
+                    })
+                    continue
 
                 _once_per_response = set()
                 _ONCE_TOOLS = {"run_midas_viewer"}
@@ -1256,6 +1381,18 @@ class AgentRunner:
                     ),
                 })
                 continue
+
+            # Count-hallucination guard: check if the model stated a file/frame
+            # count that contradicts what list_directory actually returned.
+            # This catches "360 TIFF images" when the tool said "920 files".
+            if text:
+                count_rejection = self._check_count_hallucination(text, messages)
+                if count_rejection:
+                    print(f"  \033[33m⚠ count hallucination detected — rejecting\033[0m")
+                    messages.append({"role": "assistant", "content": text})
+                    messages.append({"role": "user", "content": count_rejection})
+                    continue
+
             return text or "Analysis complete."
 
         # ── Forced finalize at iteration cap ─────────────────────────────────
@@ -1409,11 +1546,13 @@ class OrchestratorAgent:
         self.conversation_history: List[Dict] = []
         self.logger    = InteractionLogger()
         self._last_agent: Optional[APEXAAgent] = None
+        self._last_turn_had_tool_error: bool = False
         self._execute  = execute_tool_fn
 
     def clear_history(self):
         self.conversation_history = []
         self._last_agent = None
+        self._last_turn_had_tool_error = False
 
     def _score_route(self, query: str) -> tuple:
         """Return (best_domain, scores_dict) — pure scoring, no fallback."""
@@ -1424,10 +1563,44 @@ class OrchestratorAgent:
         }
         return max(scores, key=scores.get), scores
 
+    # Pattern that recognises "retry with context" follow-ups — queries that
+    # are giving the agent a file path, folder, or file to work with, typically
+    # after a prior tool call failed (e.g., "the calibration was done in
+    # /home/…/test_cali").  When the prior turn had a tool error AND this
+    # pattern matches, we retain _last_agent rather than re-routing.
+    _PATH_CONTEXT_RE = re.compile(
+        r'(?:'
+        r'/[^\s]+'                     # absolute path  /home/…
+        r'|[a-zA-Z0-9_\-]+/[^\s]+'    # relative path  test_cali/…
+        r'|\bthis folder\b'
+        r'|\bthis directory\b'
+        r'|\bthis file\b'
+        r'|\buse this\b'
+        r'|\bhere is\b'
+        r'|\bwas done in\b'
+        r'|\bfound in\b'
+        r')',
+        re.I,
+    )
+
     def _route(self, query: str) -> APEXAAgent:
         best, scores = self._score_route(query)
 
         if scores[best] > 0:
+            # Stateful-routing bias: if the prior turn ended in a tool error
+            # AND the current query looks like "retry with this context" (it
+            # contains a path or folder reference), keep the prior agent rather
+            # than re-routing on keywords alone.  This prevents the failure
+            # mode where "the calibration was done in /home/…/test_cali" routes
+            # to CalibrationAgent (matching "calibration") when the user's
+            # intent was actually to supply context for a pending Visualization
+            # or Analysis retry.
+            if (self._last_turn_had_tool_error
+                    and self._last_agent is not None
+                    and self._PATH_CONTEXT_RE.search(query)
+                    and scores[best] <= 2):          # weak keyword signal only
+                return self._last_agent
+
             # Break ties: analysis wins by default (most general agent, handles
             # post-calibration workflows). Exception: a conceptual question stem
             # at the START of the query routes to knowledge so the KB tool fires.
@@ -1655,6 +1828,13 @@ class OrchestratorAgent:
             log_entry=log_entry,
             on_tool_result=on_tool_result,
         )
+
+        # Track whether this turn had any tool errors — used by _route() on
+        # the NEXT query to decide whether to bias toward the same agent when
+        # the user's follow-up looks like "retry with this context".
+        self._last_turn_had_tool_error = any(
+            not tc.success for tc in log_entry.tool_calls
+        ) if log_entry.tool_calls else False
 
         # Detect if the agent looped (>3 calls to a single tool = loop)
         n_calls = len(log_entry.tool_calls)
