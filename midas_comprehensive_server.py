@@ -2472,6 +2472,7 @@ async def midas_auto_calibrate(
     image_file: str,
     parameters_file: str = "",
     dark_file: str = "",
+    output_dir: str = "",
     lsd_guess: float = 1000000.0,
     bc_x_guess: float = 0.0,
     bc_y_guess: float = 0.0,
@@ -2531,6 +2532,11 @@ async def midas_auto_calibrate(
                         calibrant (CeO2/LaB6 from filename), energy (from keV in filename), distance (from mm in filename),
                         and pixel size (from detector shape). Only needed if filename lacks these hints.
         dark_file: Optional path to dark field image for background subtraction
+        output_dir: Optional output directory for calibration results (refined_MIDAS_params*.txt,
+                   autocal.log, calibrant_screen_out.csv). Created if it does not exist.
+                   Default: "" = write results alongside the source image file (original behaviour).
+                   Use this when calibrating multiple files in a batch so results from each file
+                   land in their own directory instead of clobbering each other.
         lsd_guess: Initial sample-to-detector distance guess in µm (default: 1000000 = auto-detect from ring ratios)
         bc_x_guess: Initial beam center X coordinate in pixels (default: 0.0 = auto-detect from ring geometry)
         bc_y_guess: Initial beam center Y coordinate in pixels (default: 0.0 = auto-detect from ring geometry)
@@ -2924,11 +2930,56 @@ async def midas_auto_calibrate(
         cmd.extend(["-BadPxIntensity", "-2"])
         cmd.extend(["-GapIntensity", "-1"])
 
+        # ── Output directory handling ─────────────────────────────────────────
+        # AutoCalibrateZarr.py writes all outputs (refined_MIDAS_params*.txt,
+        # autocal.log, calibrant_screen_out.csv) into the working directory
+        # (cwd). When output_dir is specified we:
+        #   1. Create the directory.
+        #   2. Symlink the image (and param/dark files if present) into it so
+        #      MIDAS can find them via relative paths.
+        #   3. Set cwd = output_dir so all outputs land there.
+        # This lets the caller batch-calibrate multiple files, one per subdir,
+        # without results clobbering each other.
+        work_dir = image_path.parent   # default: same dir as image
+
+        if output_dir:
+            out_path = Path(output_dir).expanduser().absolute()
+            out_path.mkdir(parents=True, exist_ok=True)
+            print(f"✓ Output directory: {out_path}", file=sys.stderr)
+
+            # Symlink image into output dir so MIDAS can read it from cwd.
+            img_link = out_path / image_path.name
+            if not img_link.exists() and not img_link.is_symlink():
+                img_link.symlink_to(image_path.resolve())
+                print(f"  ↳ symlink: {image_path.name} → {image_path.resolve()}", file=sys.stderr)
+
+            # Update the image path the command receives so MIDAS uses the link
+            cmd_image_path = img_link
+            # Replace the -dataFN argument already appended above
+            datafn_idx = cmd.index("-dataFN")
+            cmd[datafn_idx + 1] = str(cmd_image_path)
+
+            # Symlink param file if present
+            if param_path and param_path.exists():
+                p_link = out_path / param_path.name
+                if not p_link.exists() and not p_link.is_symlink():
+                    p_link.symlink_to(param_path.resolve())
+
+            # Symlink dark file if present
+            if dark_file:
+                dark_path_sym = Path(dark_file).expanduser().absolute()
+                if dark_path_sym.exists():
+                    d_link = out_path / dark_path_sym.name
+                    if not d_link.exists() and not d_link.is_symlink():
+                        d_link.symlink_to(dark_path_sym.resolve())
+
+            work_dir = out_path
+
         # ===== TRANSPARENCY: Show exact command being run =====
         cmd_str = " ".join(str(x) for x in cmd)
         print("="*70, file=sys.stderr)
         print("🔧 MIDAS AUTO-CALIBRATION COMMAND:", file=sys.stderr)
-        print(f"   Working directory: {image_path.parent}", file=sys.stderr)
+        print(f"   Working directory: {work_dir}", file=sys.stderr)
         print(f"   Python: {cmd[0]}", file=sys.stderr)
         print(f"   Script: {cmd[1]}", file=sys.stderr)
         print(f"   Parameters:", file=sys.stderr)
@@ -2940,7 +2991,7 @@ async def midas_auto_calibrate(
         # Run calibration with MIDAS environment
         result = subprocess.run(
             cmd,
-            cwd=str(image_path.parent),
+            cwd=str(work_dir),
             capture_output=True,
             text=True,
             timeout=600,  # 10 minute timeout
@@ -2970,11 +3021,12 @@ async def midas_auto_calibrate(
             })
 
         # v10 names the output refined_MIDAS_params_<material>.txt (e.g. _CeO2.txt)
-        # so glob for any matching file rather than hardcoding the name
+        # so glob for any matching file rather than hardcoding the name.
+        # Search in work_dir (= output_dir if specified, else image_path.parent).
         output = result.stdout
-        candidates = sorted(image_path.parent.glob("refined_MIDAS_params*.txt"),
+        candidates = sorted(work_dir.glob("refined_MIDAS_params*.txt"),
                             key=lambda p: p.stat().st_mtime, reverse=True)
-        refined_params_file = candidates[0] if candidates else image_path.parent / "refined_MIDAS_params.txt"
+        refined_params_file = candidates[0] if candidates else work_dir / "refined_MIDAS_params.txt"
 
         # AutoCalibrateZarr.py writes "Dark " (key with no value) when no dark file
         # is provided. ffGenerateZipRefactor.py crashes on empty-value lines.
