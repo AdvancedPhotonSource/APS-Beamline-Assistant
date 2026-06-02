@@ -826,6 +826,41 @@ already in a tool result is forbidden — trust the tool.
 
 """
 
+# Tools that are long-running, irreversible, or require a file/strategy choice.
+# Before any of these is dispatched, the runner requires that the model wrote
+# at least _STRATEGY_MIN_WORDS words of reasoning prose in the same response.
+# If not, the call is rejected and the model is asked to state its strategy
+# first. This is the APEXA equivalent of Claude Code's pattern of requiring
+# the model to explain before acting on any Bash/Edit call.
+#
+# Motor motion tools are deliberately excluded here — they have their own
+# hardware safety gate and their own confirmation flag (confirm_large_move).
+# Adding them here would double-gate and slow down valid motor commands.
+_PLAN_REQUIRED_TOOLS: frozenset = frozenset({
+    # Calibration (choice of file, calibrant, energy, Lsd)
+    "midas_auto_calibrate",
+    "run_ff_calibration",
+    # Integration (choice of data file, param file, output format)
+    "midas_integrate_2d_to_1d",
+    "midas_batch_integrate",
+    # Refinement (choice of data + CIF + limits)
+    "run_gsas_refinement",
+    # Combined pipeline (choice of backend, param file, data file, CIF)
+    "run_live_analysis",
+    # HEDM reconstruction workflows (long-running, choice of param file)
+    "run_ff_hedm_full_workflow",
+    "run_nf_hedm_reconstruction",
+    "run_pf_hedm_workflow",
+})
+
+# Minimum words of prose the model must write BEFORE a _PLAN_REQUIRED_TOOLS
+# call in the same response. 6 words ≈ a minimal choice statement:
+#   "Using att3 CeO2 for best SNR."
+# The primary target is the zero-prose case (model jumps straight to TOOL_CALL)
+# or near-zero trivial prose ("Calibrating now." = 2 words, no reasoning).
+# Any sentence that states a choice + a reason will clear this bar.
+_STRATEGY_MIN_WORDS = 6
+
 # ── Agent Runner ─────────────────────────────────────────────────────────────
 
 ExecuteToolFn = Callable[[str, Dict], Awaitable[str]]
@@ -1228,6 +1263,46 @@ class AgentRunner:
                         ),
                     })
                     continue
+
+                # ── Strategy gate (Claude-Code-style pre-action reasoning) ───
+                # If the response contains a tool from _PLAN_REQUIRED_TOOLS
+                # (long-running / irreversible / choice-dependent), require
+                # that the model wrote at least _STRATEGY_MIN_WORDS words of
+                # reasoning prose in the SAME response before the TOOL_CALL.
+                # If not, reject and ask for a strategy statement first.
+                #
+                # This mirrors how Claude Code works: the model must explain
+                # what it is about to do and why before executing any action
+                # that is hard to undo or requires a choice among inputs.
+                # The check is tool-agnostic — _PLAN_REQUIRED_TOOLS is the
+                # only configuration knob, no per-tool rules.
+                _plan_needed = [tc for tc in text_calls
+                                if tc.name in _PLAN_REQUIRED_TOOLS]
+                if _plan_needed:
+                    prose_words = len(prose.split()) if prose else 0
+                    if prose_words < _STRATEGY_MIN_WORDS:
+                        _tool_names_str = ", ".join(
+                            f"`{tc.name}`" for tc in _plan_needed
+                        )
+                        print(f"  \033[33m⚠ strategy gate:\033[0m {_tool_names_str} — no plan found ({prose_words} words)")
+                        messages.append({
+                            "role": "user",
+                            "content": (
+                                f"⛔ STRATEGY REQUIRED before calling {_tool_names_str}.\n\n"
+                                "This tool is long-running or irreversible. Before proceeding, "
+                                "write a brief strategy (2-4 sentences) that covers:\n"
+                                "  1. Which file(s) you selected and WHY (attenuation level, "
+                                "exposure time, signal quality considerations)\n"
+                                "  2. Which calibrant you are using and why it is appropriate\n"
+                                "  3. What parameters you will use and what outcome you expect\n"
+                                "  4. If multiple candidate files exist, state which you chose "
+                                "and whether you need the user to confirm\n\n"
+                                "After writing the strategy, emit the TOOL_CALL. "
+                                "Do NOT ask the user for permission on every step — "
+                                "state your reasoning and proceed unless a choice is genuinely ambiguous."
+                            ),
+                        })
+                        continue   # let the model retry with reasoning first
 
                 _once_per_response = set()
                 _ONCE_TOOLS = {"run_midas_viewer"}
