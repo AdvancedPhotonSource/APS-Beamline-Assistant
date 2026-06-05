@@ -814,34 +814,54 @@ PATH HANDLING — CRITICAL:
 
 """
 
-# Plan-first preamble for agents with use_planning=True. Prepended to the
-# system prompt so the model emits its entire tool plan in one response rather
-# than discovering the plan one tool at a time. This is the generic fix for the
-# fan-out failure mode (e.g., 22 xray_calculate calls instead of one
-# enumerate_bragg_rings call); it does not encode any per-tool rules.
-_PLAN_FIRST_PREAMBLE = """🧭 PLAN BEFORE YOU CALL.
+# Plan-first preamble for agents with use_planning=True (currently Analysis).
+# Teaches the model the REASON → ACT pattern used by Claude Code and modern
+# agentic harnesses: explore/observe first, write a structured plan, then
+# execute. The plan and execution happen in the same response — no extra
+# round-trips — but the plan MUST precede the first long-running tool call.
+_PLAN_FIRST_PREAMBLE = """🧭 REASON FIRST. EXECUTE SECOND.
 
-Before emitting ANY TOOL_CALL block, think through ALL the tools you will
-need to fully answer the user's request, then emit them ALL in a single
-response. The runner dispatches independent calls concurrently — there is
-NO benefit to emitting them one at a time, and doing so wastes turns.
+For any request involving more than one step or any choice among inputs,
+follow this pattern EXACTLY — in this order, in ONE response:
+
+┌─────────────────────────────────────────────────────────────────┐
+│ SITUATION: [what you observe — files present, calibrant types,  │
+│            conditions, what is already done vs. missing]        │
+│                                                                 │
+│ GAP: [what is needed before execution can start — e.g., no     │
+│       parameter file found; calibration must precede           │
+│       integration; which files are candidates and why]          │
+│                                                                 │
+│ PLAN:                                                           │
+│   Step 1. [action] — [rationale: why this file, why this order]│
+│   Step 2. [action] — [rationale]                               │
+│   Step N. ...                                                   │
+│                                                                 │
+│ Executing step 1:                                               │
+│ TOOL_CALL: tool_name                                            │
+│ ARGUMENTS: {...}                                                │
+└─────────────────────────────────────────────────────────────────┘
+
+Rules:
+- SITUATION and GAP must be filled from ACTUAL tool results or the
+  conversation history. NEVER fill them from training-data assumptions.
+- PLAN must name the specific files/calibrants chosen and WHY
+  (e.g., "att3 CeO2 — mid-range attenuation avoids saturation at att0
+  and underexposure at att6").
+- If the choice is genuinely ambiguous (multiple equally-valid options),
+  state both and ask ONE question. Do not ask permission on every step.
+- Emit ALL independent tool calls concurrently in the same TOOL_CALL block.
+- After each tool result, update your plan if needed, then continue.
 
 ⚠️ COMPOUND OVER PRIMITIVE — REQUIRED:
 If you are about to emit the same tool more than twice with sequential
-parameters (e.g., xray_calculate for hkl=(1,1,1) then (2,0,0) then (2,2,0)
-…), STOP. There is almost always a compound tool whose description mentions
-"all", "enumerate", "list", "batch", "rings", "summary", or "report" that
-returns the full set in ONE call. Find it in the tool list above and use it.
+parameters (e.g., xray_calculate for hkl=(1,1,1) then (2,0,0) …), STOP.
+A compound tool exists. Find it (description says "all", "enumerate",
+"batch", "rings", "summary") and use it ONCE.
 
-Examples of the WRONG pattern (do not do this):
-- 22 calls to xray_calculate(d_from_hkl, h, k, l)  → use enumerate_bragg_rings ONCE
-- 10 calls to read_file on different config files  → use diagnose_parameter_file ONCE
-- N calls to xray_calculate(d_from_hkl) on the same lattice → use enumerate_bragg_rings ONCE
-
-After you receive tool results, your DEFAULT next action is to ANSWER the
-user. Only emit another TOOL_CALL block if information you genuinely need
-is NOT in any prior tool result. Recomputing or "verifying" values that are
-already in a tool result is forbidden — trust the tool.
+After you receive tool results, your DEFAULT next action is to ANSWER or
+continue the plan. Only emit another TOOL_CALL block if information you
+genuinely need is NOT in any prior tool result.
 
 """
 
@@ -872,13 +892,29 @@ _PLAN_REQUIRED_TOOLS: frozenset = frozenset({
     "run_pf_hedm_workflow",
 })
 
-# Minimum words of prose the model must write BEFORE a _PLAN_REQUIRED_TOOLS
-# call in the same response. 6 words ≈ a minimal choice statement:
-#   "Using att3 CeO2 for best SNR."
-# The primary target is the zero-prose case (model jumps straight to TOOL_CALL)
-# or near-zero trivial prose ("Calibrating now." = 2 words, no reasoning).
-# Any sentence that states a choice + a reason will clear this bar.
-_STRATEGY_MIN_WORDS = 6
+# Strategy gate: before dispatching a _PLAN_REQUIRED_TOOLS call the runner
+# checks that the model wrote a plan in the REASON→ACT format. Detection
+# looks for any of these structural markers rather than raw word count,
+# so "Using att3." (a choice with no rationale) does NOT pass.
+# A plan passes if it contains at least one of:
+#   - "SITUATION:" or "GAP:" or "PLAN:" (explicit template markers)
+#   - "because" / "since" / "in order to" (causal reasoning)
+#   - "step 1" / "first," / "first I" (ordered sequence)
+#   - "no parameter file" / "calibrat" + "before integrat" (domain sequencing)
+# Word-count fallback: ≥20 words of prose regardless of markers (a complete
+# sentence with reasoning will naturally reach this).
+_STRATEGY_MIN_WORDS = 20   # fallback if no structural markers found
+_STRATEGY_MARKERS = re.compile(
+    r'(?:'
+    r'SITUATION:|GAP:|PLAN:'                          # explicit template
+    r'|(?:because|since|in order to|so that)\b'       # causal connective
+    r'|step\s+1\b|(?:^|\.\s+|\n)first[,\s]'          # sequence marker
+    r'|no\s+param(?:eter)?\s+file'                    # domain gap
+    r'|calibrat\w+\s+(?:before|first|must)'           # domain sequencing
+    r'|integrat\w+\s+(?:requires?|needs?)\s+calibrat' # domain dependency
+    r')',
+    re.I | re.MULTILINE,
+)
 
 # ── Agent Runner ─────────────────────────────────────────────────────────────
 
@@ -1299,29 +1335,38 @@ class AgentRunner:
                                 if tc.name in _PLAN_REQUIRED_TOOLS]
                 if _plan_needed:
                     prose_words = len(prose.split()) if prose else 0
-                    if prose_words < _STRATEGY_MIN_WORDS:
+                    has_markers = bool(_STRATEGY_MARKERS.search(prose)) if prose else False
+                    plan_ok = has_markers or prose_words >= _STRATEGY_MIN_WORDS
+                    if not plan_ok:
                         _tool_names_str = ", ".join(
                             f"`{tc.name}`" for tc in _plan_needed
                         )
-                        print(f"  \033[33m⚠ strategy gate:\033[0m {_tool_names_str} — no plan found ({prose_words} words)")
+                        print(f"  \033[33m⚠ strategy gate:\033[0m {_tool_names_str} — no plan ({prose_words}w, markers={has_markers})")
                         messages.append({
                             "role": "user",
                             "content": (
-                                f"⛔ STRATEGY REQUIRED before calling {_tool_names_str}.\n\n"
-                                "This tool is long-running or irreversible. Before proceeding, "
-                                "write a brief strategy (2-4 sentences) that covers:\n"
-                                "  1. Which file(s) you selected and WHY (attenuation level, "
-                                "exposure time, signal quality considerations)\n"
-                                "  2. Which calibrant you are using and why it is appropriate\n"
-                                "  3. What parameters you will use and what outcome you expect\n"
-                                "  4. If multiple candidate files exist, state which you chose "
-                                "and whether you need the user to confirm\n\n"
-                                "After writing the strategy, emit the TOOL_CALL. "
-                                "Do NOT ask the user for permission on every step — "
-                                "state your reasoning and proceed unless a choice is genuinely ambiguous."
+                                f"⛔ PLAN REQUIRED before calling {_tool_names_str}.\n\n"
+                                "This tool is long-running or irreversible. You must reason "
+                                "before acting. Write a structured plan using this format:\n\n"
+                                "SITUATION: [what you observe — which files are present, "
+                                "what conditions, what is already done vs. missing]\n\n"
+                                "GAP: [what must be resolved first — e.g., no parameter file "
+                                "found; calibration must precede integration]\n\n"
+                                "PLAN:\n"
+                                "  Step 1. [specific action] — [WHY: which file, which calibrant, "
+                                "which attenuation, and the reasoning behind that choice]\n"
+                                "  Step 2. [next action] — [rationale]\n\n"
+                                "Executing step 1:\n"
+                                "TOOL_CALL: ...\n\n"
+                                "Rules:\n"
+                                "- Name the EXACT file you chose and WHY (not just 'the best file')\n"
+                                "- If the choice is genuinely ambiguous, state BOTH options and "
+                                "ask ONE question — do NOT ask permission on every step\n"
+                                "- Proceed immediately after writing the plan; no round-trip needed\n"
+                                "- SITUATION and GAP must come from tool results, not assumptions"
                             ),
                         })
-                        continue   # let the model retry with reasoning first
+                        continue   # let the model retry with a real plan
 
                 _once_per_response = set()
                 _ONCE_TOOLS = {"run_midas_viewer"}
