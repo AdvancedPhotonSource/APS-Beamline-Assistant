@@ -164,9 +164,23 @@ class ArgoProvider:
         # Max tokens and params per model family
         if self.model.startswith("claude"):
             payload["max_tokens"] = 21000
-            # Haiku 4.5 and Sonnet 4.5/4.6 reject both temperature+top_p
-            if self.model not in ("claudesonnet45", "claudesonnet46", "claudehaiku45"):
+            # Claude Opus 4.7: no sampling params (temperature/top_p/top_k silently
+            # removed by Argo, but cleaner to not send them).  1M context window,
+            # 128K output.  Thinking mode available via output_config if needed.
+            if self.model == "claudeopus47":
+                payload.pop("temperature", None)
+            # Claude Opus 4.6: requires temperature + top_p (Argo rejects without them)
+            # Claude Haiku 4.5, Sonnet 4.5/4.6: reject temperature + top_p
+            elif self.model in ("claudesonnet45", "claudesonnet46", "claudehaiku45"):
+                pass   # no top_p for these models
+            else:
+                # claudeopus46, claudeopus45, claudeopus41, claudesonnet4, etc.
                 payload["top_p"] = 0.9
+        elif self.model == "gpt55":
+            # GPT-5.5: temperature must be exactly 1 (no other value accepted)
+            payload["temperature"] = 1
+            payload["max_completion_tokens"] = 16000
+            payload["top_p"] = 0.9
         elif self.model.startswith("gpto") or self.model.startswith("gpt5"):
             # o-series and GPT-5 family: use max_completion_tokens, no temperature/top_p
             # (Argo returns HTTP 400 if either is sent.)
