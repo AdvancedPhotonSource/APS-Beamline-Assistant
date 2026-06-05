@@ -1650,14 +1650,20 @@ class AgentRunner:
                         result = result[:8000] + "\n... [truncated]"
                     if tc.name == "list_directory":
                         followup = (
-                            "The directory listing is already displayed to the user. "
-                            "Do NOT list files again. Do NOT summarize the listing. "
-                            "The file count and filenames in the tool result above are GROUND TRUTH — "
-                            "if the user claims a different count, politely state what the tool returned "
-                            "and do NOT apologise or agree with a wrong user count. "
-                            "IMMEDIATELY proceed with the user's original request — "
-                            "call the appropriate tool using the file paths from the listing above. "
-                            "Do NOT ask the user to confirm. Do NOT describe what you found. Just call the tool."
+                            "The directory listing is displayed above. "
+                            "File count and filenames are GROUND TRUTH — do not dispute them, do not re-list. "
+                            "\n\n"
+                            "Now do TWO things in your response:\n"
+                            "1. DESCRIBE what you found (calibrant types, conditions, file counts — "
+                            "derived ONLY from the filenames and tool result, no training-data assumptions).\n"
+                            "2. PROPOSE a master plan: based on what you see, outline the full recommended "
+                            "analysis workflow in numbered steps (e.g., create output dirs → calibrate each "
+                            "file → compare residuals → integrate with best params → report). "
+                            "For each step: name the specific files/tools and the reason for that choice. "
+                            "End with: 'Type **go** to execute Phase 1, or tell me what to change.'\n\n"
+                            "Do NOT ask 'Would you like me to...?' — propose the plan and let the user "
+                            "redirect if needed. If the user's original request was a specific task "
+                            "(not just 'what's here'), skip the master plan and execute that task directly."
                         )
                     elif tc.name == "fetch_cif_from_mp":
                         followup = (
