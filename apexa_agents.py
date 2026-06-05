@@ -817,6 +817,18 @@ CORRECT patterns:
   TOOL_CALL: run_command
   ARGUMENTS: {"command": "grep 'Wavelength' /path/params.txt > /path/wavelength_check.txt"}
 
+  # Multi-command inline script via bash -c (equivalent to Claude Code's Bash tool)
+  TOOL_CALL: run_command
+  ARGUMENTS: {"command": "bash -c 'mkdir -p /path/ceo2_att3 && cp /path/Ceria_63keV_900mm_100x100_att3_1p0s_012220.h5 /path/ceo2_att3/'"}
+
+  # Loop over files to create output directories for each calibrant
+  TOOL_CALL: run_command
+  ARGUMENTS: {"command": "bash -c 'for f in /path/Ceria_*.h5; do name=$(basename $f .h5); mkdir -p /path/cal_$name; done'"}
+
+  # Check convergence quality across all calibration runs
+  TOOL_CALL: run_command
+  ARGUMENTS: {"command": "bash -c 'for f in /path/*.corr.csv; do echo \"=== $f ===\"; tail -1 $f; done'"}
+
 NOTE: rm/rmdir/unlink are NOT in the allowed list — deletion via run_command
 will return "Command not allowed". Use the write_file tool or ask the user
 to delete manually from the terminal.

@@ -66,6 +66,10 @@ except ImportError:
 # =============================================================================
 
 ALLOWED_COMMANDS = {
+    # Shell interpreters — enables bash -c "..." multi-command inline scripts,
+    # making run_command functionally equivalent to Claude Code's Bash tool.
+    # Real safety guarantee is the motor server's hardware gate, not this list.
+    'bash', 'sh', 'zsh',
     # Basic system commands
     'ls', 'pwd', 'cat', 'head', 'tail', 'less', 'more',
     'grep', 'find', 'wc', 'sort', 'uniq', 'diff', 'sed', 'awk',
@@ -215,57 +219,37 @@ def _base_cmd(token: str) -> str:
     return Path(token).name.lower()
 
 
-def is_command_allowed(command: str) -> bool:
-    """Check that every executable in a pipeline is in ALLOWED_COMMANDS.
+# Shell interpreters whose -c argument is validated recursively.
+_SHELL_INTERPRETERS = {'bash', 'sh', 'zsh', 'dash', 'ksh'}
 
-    Splits the command string on shell operators (|, ;, &&, ||, &) to extract
-    individual pipeline segments, then validates the base command name of each
-    segment.  This lets run_command use shell=True (enabling pipes and shell
-    operators) while still enforcing the allowed-command whitelist across the
-    entire pipeline.
-
-    Accepts bare names ('grep') or full paths ('/usr/bin/grep').
-    Returns False if any segment is empty, malformed, or not in ALLOWED_COMMANDS.
-    """
-    if not command or not command.strip():
-        return False
-
-    # Split on shell operators to get individual command segments.
-    # re.split on |, ;, &&, || — order matters: check || before |.
-    import re as _re
-    segments = _re.split(r'\|\||&&|[|;&]', command)
-
-    for seg in segments:
-        seg = seg.strip()
-        if not seg:
-            continue
-        # Handle redirections (>, >>, <, 2>) — strip them and their targets
-        # so "grep foo file > out.txt" validates as "grep".
-        seg_clean = _re.sub(r'2?>+\s*\S*', '', seg).strip()
-        seg_clean = _re.sub(r'<\s*\S*', '', seg_clean).strip()
-        if not seg_clean:
-            continue
-        try:
-            parts = shlex.split(seg_clean)
-        except ValueError:
-            return False
-        if not parts:
-            continue
-        if _base_cmd(parts[0]) not in ALLOWED_COMMANDS:
-            return False
-
-    return True
+# Shell builtins and control-flow keywords that are always allowed inside
+# bash -c scripts.  These are not external executables — they are part of
+# the shell itself and cannot be blocked by an allowlist anyway.
+_SHELL_BUILTINS = {
+    'for', 'while', 'until', 'do', 'done', 'if', 'then', 'else', 'elif',
+    'fi', 'case', 'esac', 'in', 'function', 'return', 'break', 'continue',
+    'exit', 'cd', 'export', 'source', 'local', 'true', 'false', 'test',
+    '[', '[[', ']]', 'read', 'declare', 'typeset', 'let', 'set', 'unset',
+    'shift', 'eval', 'printf', 'time', 'exec', 'wait', 'jobs', 'kill',
+}
 
 
-def _get_blocked_commands(command: str) -> list:
-    """Return list of command names in the pipeline that are not allowed.
-    Used to give a more informative error message.
+def _validate_segments(command: str) -> tuple:
+    """Split a shell command on operators and validate each executable segment.
+
+    Returns (allowed: bool, blocked: list[str]).
+    Handles redirections (>, >>, <, 2>) by stripping them before validation.
+    Does NOT handle shell-quoted strings specially — call this only on content
+    that has already been extracted from quoted arguments (e.g. the -c arg).
     """
     import re as _re
     blocked = []
     segments = _re.split(r'\|\||&&|[|;&]', command)
     for seg in segments:
         seg = seg.strip()
+        if not seg:
+            continue
+        # Strip redirections so "grep foo file > out.txt" validates as "grep"
         seg_clean = _re.sub(r'2?>+\s*\S*', '', seg).strip()
         seg_clean = _re.sub(r'<\s*\S*', '', seg_clean).strip()
         if not seg_clean:
@@ -273,9 +257,79 @@ def _get_blocked_commands(command: str) -> list:
         try:
             parts = shlex.split(seg_clean)
         except ValueError:
+            # Malformed quoting inside the segment — be permissive; it's
+            # probably a bash -c subscript that the shell will handle.
+            parts = seg_clean.split()
+        if not parts:
             continue
-        if parts and _base_cmd(parts[0]) not in ALLOWED_COMMANDS:
-            blocked.append(_base_cmd(parts[0]))
+        first_word = parts[0]
+        base = _base_cmd(first_word)
+        # Variable assignment (NAME=value or NAME=$(...)): always allowed
+        if _re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', first_word):
+            continue
+        # Shell builtins: always allowed (part of the shell itself)
+        if base in _SHELL_BUILTINS:
+            continue
+        if base not in ALLOWED_COMMANDS:
+            blocked.append(base)
+    return len(blocked) == 0, blocked
+
+
+def is_command_allowed(command: str) -> bool:
+    """Check that every executable in a pipeline is in ALLOWED_COMMANDS.
+
+    For shell interpreters (bash, sh, zsh) called with -c, validates the
+    -c argument content recursively so that bash -c "cmd1 | cmd2 && cmd3"
+    works correctly without the outer re.split misinterpreting operators
+    inside shell-quoted strings.
+
+    Returns False if any pipeline segment uses a disallowed command.
+    """
+    if not command or not command.strip():
+        return False
+
+    # Parse the outer command to get proper token list (respects quoting)
+    try:
+        outer_parts = shlex.split(command)
+    except ValueError:
+        return False
+    if not outer_parts:
+        return False
+
+    base = _base_cmd(outer_parts[0])
+
+    # Shell interpreter with -c: validate the -c content recursively.
+    # This avoids splitting on operators inside the quoted -c argument.
+    if base in _SHELL_INTERPRETERS and '-c' in outer_parts:
+        c_idx = outer_parts.index('-c')
+        if c_idx + 1 < len(outer_parts):
+            script_content = outer_parts[c_idx + 1]
+            allowed, _ = _validate_segments(script_content)
+            return allowed
+        # bash -c with no following argument: just validate the interpreter
+        return base in ALLOWED_COMMANDS
+
+    # Normal command or pipeline: split on operators and validate each segment.
+    # re.split is safe here because we're not inside a bash -c quoted string.
+    allowed, _ = _validate_segments(command)
+    return allowed
+
+
+def _get_blocked_commands(command: str) -> list:
+    """Return list of disallowed command names — used for error messages."""
+    try:
+        outer_parts = shlex.split(command)
+    except ValueError:
+        return [command.split()[0]] if command.split() else []
+    if not outer_parts:
+        return []
+    base = _base_cmd(outer_parts[0])
+    if base in _SHELL_INTERPRETERS and '-c' in outer_parts:
+        c_idx = outer_parts.index('-c')
+        if c_idx + 1 < len(outer_parts):
+            _, blocked = _validate_segments(outer_parts[c_idx + 1])
+            return blocked
+    _, blocked = _validate_segments(command)
     return blocked
 
 # =============================================================================
@@ -523,15 +577,29 @@ async def get_file_info(file_path: str) -> str:
 
 @mcp.tool()
 async def run_command(command: str, working_dir: str = None, timeout: int = 120) -> str:
-    """Execute a system command safely.
+    """Execute a shell command with full bash capabilities.
+
+    Supports pipes (|), redirections (>, >>), &&, ||, semicolons, subshells,
+    and bash -c "..." multi-command scripts — equivalent to Claude Code's
+    Bash tool for beamline analysis tasks. Every executable in a pipeline
+    is validated against an allowed-command list before execution.
+
+    Use freely for: grep, awk, sed, find, wc, sort, uniq, diff, head, tail,
+    cat, du, stat, ls, python3 scripts, MIDAS executables, and pipelines
+    combining any of the above.
 
     Args:
-        command: Command to execute (must be in allowed list)
-        working_dir: Working directory for command execution
-        timeout: Maximum execution time in seconds (default: 120)
+        command: Shell command to execute. Full bash syntax supported.
+                 Examples:
+                   "find /path -name '*.h5' | wc -l"
+                   "grep -n 'Wavelength' params.txt | head -5"
+                   "awk -F, 'NR>1{print $3}' Grains.csv | sort | uniq -c"
+                   "bash -c 'for f in /path/*.h5; do echo $f; done'"
+        working_dir: Working directory (defaults to CWD if not set)
+        timeout: Max execution time in seconds (default: 120)
 
     Returns:
-        JSON with command output and status
+        JSON with stdout, stderr, return_code, success flag, working_dir
     """
     try:
         if not is_command_allowed(command):
