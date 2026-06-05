@@ -861,6 +861,14 @@ Only generate text WITHOUT a TOOL_CALL when:
 - User asks a conceptual question ("what is HEDM?", "explain calibration")
 - User asks what you can do
 
+⚡ BE DECISIVE — DO NOT ASK FOR PERMISSION:
+When you have enough context to make a recommendation, MAKE IT and proceed.
+Do NOT end responses with "Would you like me to...?" or "Shall I...?" or
+"Do you want me to...?" — these stall the workflow and frustrate operators.
+Instead: state your recommendation, state why, then either execute it (if
+it passes the strategy gate) or say "Type 'go' to proceed."
+The operator is in charge — they will redirect you if your recommendation is wrong.
+
 PATH HANDLING — CRITICAL:
 - ALWAYS use ABSOLUTE paths in tool arguments
 - When the user says "test5", they mean "<CWD>/test5" (where <CWD> is shown below)
@@ -1262,7 +1270,14 @@ class AgentRunner:
         # for N turns) which the per-response guard misses.  When any single
         # tool reaches the threshold, we send the same compound-tool redirect.
         _turn_tool_counts: Counter = Counter()
+        # Also track unique argument sets per tool so we can distinguish
+        # legitimate multi-file reads from true fan-out.
+        _turn_tool_args: dict = {}     # tool_name → set of frozen arg strings
         _FANOUT_THRESHOLD = 3          # same as per-response guard
+        # Tools where calling N times with N DISTINCT arguments is legitimate
+        # (e.g. reading 3 different files).  For these, fan-out only fires
+        # when the same arguments recur, not when the call count exceeds threshold.
+        _MULTI_ARG_OK_TOOLS = {"read_file", "get_file_info", "run_command"}
 
         for _ in range(max_iterations):
             response = await provider.chat(messages, agent.temperature)
@@ -1375,22 +1390,38 @@ class AgentRunner:
                 # (B) cumulative check — update turn counter AFTER per-response
                 # guard passes, then check cumulative totals.
                 _turn_tool_counts.update(_tool_counts)
+                # Track unique argument fingerprints per tool so arg-diverse
+                # tools (read_file on different files) don't false-fire.
+                for tc in text_calls:
+                    args_key = json.dumps(tc.arguments, sort_keys=True)
+                    _turn_tool_args.setdefault(tc.name, set()).add(args_key)
+
                 _cum_top, _cum_count = _turn_tool_counts.most_common(1)[0]
                 if _cum_count >= _FANOUT_THRESHOLD and _cum_top == _top_tool and _top_count < _FANOUT_THRESHOLD:
-                    # Cumulative threshold crossed but NOT already caught by (A)
-                    print(f"  \033[33m⚠ cumulative fan-out:\033[0m {_cum_count}× {_cum_top}")
-                    messages.append({
-                        "role": "user",
-                        "content": (
-                            f"⛔ CUMULATIVE FAN-OUT: you have called `{_cum_top}` "
-                            f"{_cum_count} times across this turn in separate responses. "
-                            "You must find the compound tool that returns ALL of these "
-                            "values in ONE call. Look for a tool whose description says "
-                            "'all', 'enumerate', 'batch', 'rings', 'summary', 'report', "
-                            "or 'inspect'. Call it ONCE and then ANSWER the user."
-                        ),
-                    })
-                    continue
+                    # For tools where diverse args are legitimate, only fire
+                    # if the argument SET is smaller than the call count (i.e.
+                    # same args repeated, not different files each time).
+                    _unique_args = len(_turn_tool_args.get(_cum_top, set()))
+                    if _cum_top in _MULTI_ARG_OK_TOOLS and _unique_args >= _cum_count:
+                        pass   # diverse args — not true fan-out, let it through
+                    else:
+                        # Cumulative threshold crossed and NOT already caught by (A)
+                        print(f"  \033[33m⚠ cumulative fan-out:\033[0m {_cum_count}× {_cum_top}")
+                        if _cum_top == "run_command":
+                            _fanout_redirect = (
+                                f"⛔ CUMULATIVE FAN-OUT: you have called `run_command` "
+                                f"{_cum_count} times across this turn. "
+                                "Consolidate into ONE call using a bash -c script or pipes:\n"
+                                "  bash -c 'head -20 file1.csv; echo ---; head -20 file2.csv'"
+                            )
+                        else:
+                            _fanout_redirect = (
+                                f"⛔ CUMULATIVE FAN-OUT: you have called `{_cum_top}` "
+                                f"{_cum_count} times across this turn in separate responses. "
+                                "Use the compound tool that returns all values in ONE call."
+                            )
+                        messages.append({"role": "user", "content": _fanout_redirect})
+                        continue
 
                 # ── Strategy gate (Claude-Code-style pre-action reasoning) ───
                 # If the response contains a tool from _PLAN_REQUIRED_TOOLS
@@ -1989,6 +2020,14 @@ class OrchestratorAgent:
         re.compile(r"^\s*(walk\s+me\s+through|talk\s+me\s+through)", re.I),
         re.compile(r"^\s*(summari[sz]e|recap|tl;?dr)\s+(that|this|the\s+(result|output|answer|previous))", re.I),
         re.compile(r"^\s*(show\s+me\s+(the\s+)?(answer|result|outcome|summary)\s*(again)?)\s*\??\s*$", re.I),
+        # "how should I proceed", "what next", "what do I do", "what should I do",
+        # "where do I start", "what's the next step" — strategy questions answered
+        # from context, not by firing tool calls on files already listed.
+        re.compile(r"^\s*(how\s+(should|do|can)\s+(i|we|you)\s+(proceed|continue|start|begin|go\s+(?:from\s+here|ahead|next)))", re.I),
+        re.compile(r"^\s*(what\s+(should|do)\s+(i|we)\s+(do|try|run|use|pick|choose|start\s+with))", re.I),
+        re.compile(r"^\s*(what(?:'s|\s+is|\s+are)\s+(the\s+)?(next\s+step|best\s+(approach|way|option|start)|recommend))", re.I),
+        re.compile(r"^\s*(where\s+(do|should)\s+(i|we)\s+start)", re.I),
+        re.compile(r"^\s*ok[,.]?\s*(so\s+)?(how|what|where)\b", re.I),
     ]
 
     def _is_explain_prior(self, query: str) -> bool:
