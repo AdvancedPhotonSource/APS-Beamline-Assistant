@@ -1278,6 +1278,10 @@ class AgentRunner:
         # (e.g. reading 3 different files).  For these, fan-out only fires
         # when the same arguments recur, not when the call count exceeds threshold.
         _MULTI_ARG_OK_TOOLS = {"read_file", "get_file_info", "run_command"}
+        # Track which _PLAN_REQUIRED_TOOLS have been gate-rejected this turn.
+        # On a second rejection of the same tool, strengthen the message to
+        # emphasise that plan + TOOL_CALL must be in the SAME response.
+        _plan_gate_strikes: Counter = Counter()
 
         for _ in range(max_iterations):
             response = await provider.chat(messages, agent.temperature)
@@ -1445,31 +1449,43 @@ class AgentRunner:
                         _tool_names_str = ", ".join(
                             f"`{tc.name}`" for tc in _plan_needed
                         )
-                        print(f"  \033[33m⚠ strategy gate:\033[0m {_tool_names_str} — no plan ({prose_words}w, markers={has_markers})")
-                        messages.append({
-                            "role": "user",
-                            "content": (
-                                f"⛔ PLAN REQUIRED before calling {_tool_names_str}.\n\n"
-                                "This tool is long-running or irreversible. You must reason "
-                                "before acting. Write a structured plan using this format:\n\n"
-                                "SITUATION: [what you observe — which files are present, "
-                                "what conditions, what is already done vs. missing]\n\n"
-                                "GAP: [what must be resolved first — e.g., no parameter file "
-                                "found; calibration must precede integration]\n\n"
+                        _plan_gate_strikes.update(tc.name for tc in _plan_needed)
+                        _is_retry = any(
+                            _plan_gate_strikes[tc.name] > 1 for tc in _plan_needed
+                        )
+                        print(f"  \033[33m⚠ strategy gate:\033[0m {_tool_names_str} — no plan ({prose_words}w, markers={has_markers}, retry={_is_retry})")
+                        if _is_retry:
+                            _gate_msg = (
+                                f"⛔ PLAN STILL MISSING (second attempt on {_tool_names_str}).\n\n"
+                                "⚠️ CRITICAL: THE PLAN AND THE TOOL_CALL MUST BE IN THE SAME RESPONSE.\n"
+                                "You cannot send a plan and then wait — the runner does not continue "
+                                "from a plan-only response. Write the plan AND the TOOL_CALL together:\n\n"
+                                "SITUATION: ...\n"
+                                "GAP: ...\n"
                                 "PLAN:\n"
-                                "  Step 1. [specific action] — [WHY: which file, which calibrant, "
-                                "which attenuation, and the reasoning behind that choice]\n"
-                                "  Step 2. [next action] — [rationale]\n\n"
+                                "  Step 1. [exact file] — [reason]\n\n"
                                 "Executing step 1:\n"
-                                "TOOL_CALL: ...\n\n"
-                                "Rules:\n"
-                                "- Name the EXACT file you chose and WHY (not just 'the best file')\n"
-                                "- If the choice is genuinely ambiguous, state BOTH options and "
-                                "ask ONE question — do NOT ask permission on every step\n"
-                                "- Proceed immediately after writing the plan; no round-trip needed\n"
-                                "- SITUATION and GAP must come from tool results, not assumptions"
-                            ),
-                        })
+                                f"TOOL_CALL: {_plan_needed[0].name}\n"
+                                "ARGUMENTS: {...}\n\n"
+                                "The TOOL_CALL must appear at the END of this response, after the plan. "
+                                "Do NOT call raw MIDAS executables via run_command — use the dedicated "
+                                f"tool `{_plan_needed[0].name}` which handles all parameters correctly."
+                            )
+                        else:
+                            _gate_msg = (
+                                f"⛔ PLAN REQUIRED before calling {_tool_names_str}.\n\n"
+                                "Write a structured plan AND include the TOOL_CALL in the SAME response:\n\n"
+                                "SITUATION: [what you observe — files present, conditions, what's missing]\n\n"
+                                "GAP: [what must be resolved first]\n\n"
+                                "PLAN:\n"
+                                "  Step 1. [specific file] — [WHY: which calibrant, which attenuation, reason]\n\n"
+                                "Executing step 1:\n"
+                                f"TOOL_CALL: {_tool_names_str}\n"
+                                "ARGUMENTS: {{...}}\n\n"
+                                "Rules: name the EXACT file; plan + TOOL_CALL in ONE response; "
+                                "do NOT use run_command for MIDAS calibration workflows."
+                            )
+                        messages.append({"role": "user", "content": _gate_msg})
                         continue   # let the model retry with a real plan
 
                 _once_per_response = set()
@@ -1514,6 +1530,32 @@ class AgentRunner:
 
                     if tc.name == "run_command":
                         cmd_str = str(tc.arguments.get("command", "")).lower()
+                        # Guard: raw MIDAS calibration executables called directly
+                        # instead of through the midas_auto_calibrate tool.
+                        _MIDAS_CAL_BINS = [
+                            "autocalibrateZarr", "autocalibratezarr",
+                            "calibrantintegratoromp", "calibrantomp",
+                            "calibrantpanelshiftsomp", "fittiltbclsdsample",
+                        ]
+                        if any(kw in cmd_str for kw in _MIDAS_CAL_BINS):
+                            err = json.dumps({
+                                "error": "Do NOT call MIDAS calibration binaries directly via run_command. "
+                                         "Use TOOL_CALL: midas_auto_calibrate — it handles all parameters, "
+                                         "energy/wavelength conversion, and AutoCalibrateZarr.py correctly.",
+                                "correct_tool": "midas_auto_calibrate",
+                            })
+                            messages.append({
+                                "role": "user",
+                                "content": (
+                                    f"[Tool Result for {tc.name}]\n{err}\n\n"
+                                    "You bypassed the calibration tool. Use midas_auto_calibrate instead:\n"
+                                    "TOOL_CALL: midas_auto_calibrate\n"
+                                    "ARGUMENTS: {\"image_path\": \"/path/to/Ceria_*.h5\"}\n"
+                                    "The tool auto-detects energy, Lsd, and calibrant from the filename."
+                                ),
+                            })
+                            continue
+
                         if any(kw in cmd_str for kw in ["gsas", "refine", "rietveld", "gsas_ii_refine"]):
                             err = json.dumps({
                                 "error": "Do NOT use run_command for GSAS-II refinement. "
@@ -2013,6 +2055,7 @@ class OrchestratorAgent:
     # call — instead of re-executing the work in a specialist agent. Without
     # this, queries like "how did you calculate that?" hit the Analysis
     # agent's keyword set on "calculate" and the entire tool chain re-fires.
+    # "Explain what you just did" — recap prior computation.
     _EXPLAIN_PRIOR_PATTERNS = [
         re.compile(r"^\s*(what\s+(was|is|did\s+you\s+get|are\s+the)\s+(the\s+)?(outcome|result|answer|finding|number|value|conclusion|summary))", re.I),
         re.compile(r"^\s*(how\s+did\s+you|why\s+did\s+you|how\s+was\s+(it|that)\s+(calc|comput|deriv|obtain))", re.I),
@@ -2020,30 +2063,79 @@ class OrchestratorAgent:
         re.compile(r"^\s*(walk\s+me\s+through|talk\s+me\s+through)", re.I),
         re.compile(r"^\s*(summari[sz]e|recap|tl;?dr)\s+(that|this|the\s+(result|output|answer|previous))", re.I),
         re.compile(r"^\s*(show\s+me\s+(the\s+)?(answer|result|outcome|summary)\s*(again)?)\s*\??\s*$", re.I),
-        # "how should I proceed", "what next", "what do I do", "what should I do",
-        # "where do I start", "what's the next step" — strategy questions answered
-        # from context, not by firing tool calls on files already listed.
+    ]
+
+    # "What should I do next?" — recommend next step from context.
+    # These need a DIFFERENT handler than explain-prior: the system prompt
+    # must say "recommend from what you see" not "explain what you did",
+    # otherwise the model correctly says "I haven't done any analysis."
+    _RECOMMEND_NEXT_PATTERNS = [
         re.compile(r"^\s*(how\s+(should|do|can)\s+(i|we|you)\s+(proceed|continue|start|begin|go\s+(?:from\s+here|ahead|next)))", re.I),
         re.compile(r"^\s*(what\s+(should|do)\s+(i|we)\s+(do|try|run|use|pick|choose|start\s+with))", re.I),
         re.compile(r"^\s*(what(?:'s|\s+is|\s+are)\s+(the\s+)?(next\s+step|best\s+(approach|way|option|start)|recommend))", re.I),
         re.compile(r"^\s*(where\s+(do|should)\s+(i|we)\s+start)", re.I),
         re.compile(r"^\s*ok[,.]?\s*(so\s+)?(how|what|where)\b", re.I),
+        re.compile(r"^\s*(yes[,.]?\s*)?(proceed|go\s+ahead|continue|do\s+it|run\s+it)\s*\??\s*$", re.I),
     ]
 
     def _is_explain_prior(self, query: str) -> bool:
         return any(p.search(query) for p in self._EXPLAIN_PRIOR_PATTERNS)
 
-    async def _explain_prior_turn(self, query: str, provider: ArgoProvider,
-                                  use_history: bool) -> str:
-        """Answer an explanation/recap follow-up using ONLY conversation
-        history. No tools. One LLM call. This collapses the cost of
-        questions like "what was the outcome?" or "how did you calculate
-        that?" from a full agent loop (often 10+ tool calls and 30+ s) to
-        a single sub-second answer.
+    def _is_recommend_next(self, query: str) -> bool:
+        return any(p.search(query) for p in self._RECOMMEND_NEXT_PATTERNS)
+
+    async def _recommend_from_context(self, query: str, provider: ArgoProvider,
+                                      use_history: bool) -> str:
+        """Answer "how should I proceed?" from conversation context.
+
+        Different from _explain_prior_turn: the system prompt tells the model
+        to recommend the NEXT concrete action based on what it has already
+        observed (directory listing, calibration status, etc.) — not to recap
+        what it computed. This prevents the "I haven't done any analysis" failure.
         """
         history = self._select_history_for_explain()
         if not history:
-            # No prior turn to explain — fall through to normal routing.
+            return ""
+
+        sys_msg = {
+            "role": "system",
+            "content": (
+                "You are APEXA, an expert beamline assistant. The user is asking "
+                "what to do next. Answer from the CONVERSATION CONTEXT below — "
+                "the directory listing, file names, and any prior results are your "
+                "evidence. Do NOT call any tools in this response.\n\n"
+                "Your answer must:\n"
+                "1. State the SPECIFIC recommended next action (e.g., 'calibrate "
+                "using Ceria att3 because...' not 'you could calibrate')\n"
+                "2. Name the exact file(s) and tool you recommend\n"
+                "3. Give the reason in ONE sentence (which att level, why that calibrant)\n"
+                "4. End with: 'Type go to proceed' — do NOT ask 'Would you like me to?'\n\n"
+                "If context is insufficient to make a specific recommendation, ask "
+                "ONE clarifying question only."
+            ),
+        }
+        messages = [sys_msg] + history + [{"role": "user", "content": query}]
+        try:
+            resp = await provider.chat(messages, temperature=0.3)
+            text = self.runner._strip_tool_calls_from_text(resp.content or "").strip()
+        except Exception as e:
+            return f"(recommendation failed: {e})"
+        if not text:
+            return ""
+        if use_history:
+            self.conversation_history.extend([
+                {"role": "user",      "content": query},
+                {"role": "assistant", "content": text},
+            ])
+            if len(self.conversation_history) > 12:
+                self.conversation_history = self.conversation_history[-12:]
+        return text
+
+    async def _explain_prior_turn(self, query: str, provider: ArgoProvider,
+                                  use_history: bool) -> str:
+        """Answer an explanation/recap follow-up from conversation history."""
+        history = self._select_history_for_explain()
+        if not history:
             return ""
 
         sys_msg = {
@@ -2091,6 +2183,18 @@ class OrchestratorAgent:
     async def process(self, query: str, provider: ArgoProvider,
                       use_history: bool = True,
                       on_tool_result: OnToolResultFn = None) -> str:
+        # Recommendation short-circuit: "how should I proceed?", "what next?",
+        # "yes, proceed", etc. Gives a concrete next-step recommendation from
+        # context WITHOUT tool calls. Separate from explain-prior because the
+        # system prompt says "recommend from what you see" not "recap what you
+        # did" — prevents "I haven't done any analysis" response.
+        if self._is_recommend_next(query) and self.conversation_history:
+            rec = await self._recommend_from_context(
+                query, provider, use_history=use_history,
+            )
+            if rec:
+                return rec
+
         # Explanation short-circuit: "what was the outcome?", "how did you
         # calculate that?", "explain that", "recap", etc. Answers from
         # conversation history without re-running any tools. Skipped if
