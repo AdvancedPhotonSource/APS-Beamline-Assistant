@@ -776,6 +776,58 @@ The ONLY exception: if you made an arithmetic error SUMMARISING a tool result
 (e.g., the tool returned 20 files and you wrote 21), then correct yourself and
 state the correct value from the tool result. Do NOT apologise beyond one word.
 
+✅ SHELL UTILITIES VIA run_command — USE THESE FREELY:
+run_command is available for grep, awk, sed, find, wc, sort, uniq, diff,
+head, tail, cat, ls, du, stat, and other standard utilities.
+Use them whenever they are faster or more precise than a dedicated tool.
+
+⚠️ CRITICAL CONSTRAINT: run_command uses shell=False (no pipe operator |).
+Each call is ONE command with its flags and arguments — no piping between commands.
+
+CORRECT patterns:
+  # Count files matching a pattern
+  TOOL_CALL: run_command
+  ARGUMENTS: {"command": "find /path -name '*.h5' -type f"}
+
+  # Search inside a parameter file
+  TOOL_CALL: run_command
+  ARGUMENTS: {"command": "grep -n 'Wavelength\\|LatticeConstant\\|Lsd' /path/refined_params.txt"}
+
+  # Check file sizes to pick the best calibrant exposure
+  TOOL_CALL: run_command
+  ARGUMENTS: {"command": "ls -lh /path/Ceria_63keV_900mm_100x100_att3_1p0s_012220.h5"}
+
+  # Preview a CSV without reading the whole file
+  TOOL_CALL: run_command
+  ARGUMENTS: {"command": "head -n 5 /path/calibrant_screen_out.csv"}
+
+  # Find the most recently modified parameter file
+  TOOL_CALL: run_command
+  ARGUMENTS: {"command": "find /path -name 'refined_MIDAS_params*.txt' -newer /path/image.h5"}
+
+  # Count lines / entries in a results file
+  TOOL_CALL: run_command
+  ARGUMENTS: {"command": "wc -l /path/Grains.csv"}
+
+  # Extract a specific column from a CSV (awk)
+  TOOL_CALL: run_command
+  ARGUMENTS: {"command": "awk -F, 'NR>1 {print $3}' /path/calibrant_screen_out.csv"}
+
+  # Compare two parameter files
+  TOOL_CALL: run_command
+  ARGUMENTS: {"command": "diff /path/old_params.txt /path/new_params.txt"}
+
+WRONG — pipes don't work:
+  {"command": "grep 'Wavelength' /path/params.txt | head -n 1"}  ← INVALID
+  {"command": "find /path -name '*.h5' | wc -l"}                 ← INVALID
+
+For multi-step shell pipelines, emit MULTIPLE sequential run_command calls
+(one per step), using the output of each to inform the next.
+
+NOTE: rm/rmdir/unlink are NOT in the allowed list — deletion via run_command
+will return "Command not allowed". Use the write_file tool or ask the user
+to delete manually from the terminal.
+
 ❌ SPECIFIC WRONG EXAMPLES:
 User: "run GSAS-II refinement on the integrated data"
 WRONG: TOOL_CALL: run_command  ARGUMENTS: {"command": "GSAS-II ..."}
@@ -1453,38 +1505,31 @@ class AgentRunner:
                         # allow it through.
                         _RM_RE = re.compile(r'\brm\b|\brmdir\b|\bunlink\b', re.I)
                         if _RM_RE.search(cmd_str):
-                            # Check if this deletion was already confirmed —
-                            # look for a CONFIRMED: marker in the prose or a
-                            # prior user turn that explicitly okayed deletion.
-                            _confirmed = any(
-                                "confirmed:" in (m.get("content") or "").lower()
-                                or "yes, delete" in (m.get("content") or "").lower()
-                                or "go ahead" in (m.get("content") or "").lower()
-                                for m in messages[-4:]
-                                if m.get("role") == "user"
-                            )
-                            if not _confirmed:
-                                print(f"  \033[31m⛔ destructive gate:\033[0m rm in run_command — requires confirmation")
-                                messages.append({
-                                    "role": "user",
-                                    "content": (
-                                        "⛔ DESTRUCTIVE OPERATION BLOCKED.\n\n"
-                                        f"Your command contains `rm` (deletion): `{tc.arguments.get('command', '')}`\n\n"
-                                        "Deletion on beamline storage is IRREVERSIBLE — there is no recycle bin "
-                                        "and no undo. Before executing any deletion:\n\n"
-                                        "1. List the EXACT files that will be deleted (call list_directory or "
-                                        "use `find` / `ls` via run_command to preview, NOT rm -f)\n"
-                                        "2. Tell the user EXACTLY what will be removed and what will be kept\n"
-                                        "3. Use a SINGLE run_command with a glob pattern, NOT one rm per file\n"
-                                        "   Example: `rm -f /path/*.corr.csv /path/*.checkpoint.txt /path/*.png`\n"
-                                        "4. Write CONFIRMED: at the start of your next response ONLY after "
-                                        "the user explicitly approves\n\n"
-                                        "Do NOT proceed with deletion until you have listed the files and "
-                                        "the user has said 'yes' or 'go ahead'."
-                                    ),
-                                })
-                                forced_break = True
-                                break
+                            # rm/rmdir/unlink are NOT in ALLOWED_COMMANDS in
+                            # beamline_core_server.py — the tool will return
+                            # "Command not allowed: rm" regardless. Block here
+                            # early so the model doesn't hallucinate success
+                            # after receiving that error, and redirect to the
+                            # correct workflow.
+                            print(f"  \033[31m⛔ destructive gate:\033[0m rm blocked — not in ALLOWED_COMMANDS")
+                            messages.append({
+                                "role": "user",
+                                "content": (
+                                    "⛔ rm/rmdir IS NOT ALLOWED via run_command.\n\n"
+                                    f"Your command `{tc.arguments.get('command', '')}` will fail "
+                                    "because `rm` is not in the allowed command list for safety reasons. "
+                                    "Do NOT retry with rm — it will always be rejected.\n\n"
+                                    "To delete files on this beamline system, the correct approach is:\n"
+                                    "1. Tell the user EXACTLY which files you want to delete "
+                                    "(use find or ls via run_command to list them first)\n"
+                                    "2. Ask the user to delete them manually from the terminal:\n"
+                                    "   `rm -f /path/*.corr.csv /path/*.checkpoint.txt`\n"
+                                    "3. Or ask if there is a dedicated cleanup script for this workflow.\n\n"
+                                    "Do NOT claim files were deleted. They were NOT deleted."
+                                ),
+                            })
+                            forced_break = True
+                            break
 
                     to_execute.append(tc)
 
