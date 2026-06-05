@@ -1277,9 +1277,25 @@ class AgentRunner:
                 # (A) per-response check
                 if _top_count >= 3:
                     print(f"  \033[33m⚠ fan-out guard:\033[0m {_top_count}× {_top_tool} — rejecting batch")
-                    messages.append({
-                        "role": "user",
-                        "content": (
+                    # run_command fan-out: the fix is glob consolidation, not
+                    # a compound tool — give a more specific redirect.
+                    if _top_tool == "run_command":
+                        _fanout_msg = (
+                            f"⛔ FAN-OUT DETECTED: you emitted {_top_count} separate `run_command` "
+                            "calls. Shell commands must be consolidated into ONE call using "
+                            "glob patterns or a semicolon-separated sequence.\n\n"
+                            "Example — deleting multiple file types:\n"
+                            "  WRONG: 5 separate `rm file1.csv`, `rm file2.csv`, ...\n"
+                            "  RIGHT: `rm -f /path/*.corr.csv /path/*.checkpoint.txt /path/*.png`\n\n"
+                            "Example — running multiple operations:\n"
+                            "  WRONG: 3 separate run_command calls\n"
+                            "  RIGHT: `mkdir -p dir1 dir2 dir3 && cp file1 dir1/ && cp file2 dir2/`\n\n"
+                            "Rewrite as ONE run_command call now. Also note: if the command "
+                            "contains `rm`, you must list the files first and confirm with "
+                            "the user before deleting (previous calls may have been blocked)."
+                        )
+                    else:
+                        _fanout_msg = (
                             f"⛔ FAN-OUT DETECTED: you emitted {_top_count} calls to "
                             f"`{_top_tool}` in one response. This is the failure mode "
                             "this system is designed to prevent.\n\n"
@@ -1295,9 +1311,9 @@ class AgentRunner:
                             "If you genuinely need primitive calls (e.g., one xray_calculate "
                             "for a single user-asked d-spacing), emit AT MOST ONE call now, "
                             "then ANSWER the user."
-                        ),
-                    })
-                    continue   # skip dispatch; let the model retry with a compound tool
+                        )
+                    messages.append({"role": "user", "content": _fanout_msg})
+                    continue   # skip dispatch; let the model retry with consolidated command
 
                 # (B) cumulative check — update turn counter AFTER per-response
                 # guard passes, then check cumulative totals.
@@ -1425,6 +1441,51 @@ class AgentRunner:
                             })
                             continue
 
+                        # ── Destructive command gate ─────────────────────────
+                        # Detect rm/rmdir/unlink in run_command arguments.
+                        # Deletion is irreversible on beamline scratch storage
+                        # (no recycle bin, no undo).  Require confirmation:
+                        # the model must list EXACTLY what will be deleted and
+                        # ask once before any rm executes.
+                        # Exception: if the command is already preceded by a
+                        # confirmation marker in the prose (CONFIRMED: or
+                        # user-typed "yes, delete" / "go ahead" in prior turn),
+                        # allow it through.
+                        _RM_RE = re.compile(r'\brm\b|\brmdir\b|\bunlink\b', re.I)
+                        if _RM_RE.search(cmd_str):
+                            # Check if this deletion was already confirmed —
+                            # look for a CONFIRMED: marker in the prose or a
+                            # prior user turn that explicitly okayed deletion.
+                            _confirmed = any(
+                                "confirmed:" in (m.get("content") or "").lower()
+                                or "yes, delete" in (m.get("content") or "").lower()
+                                or "go ahead" in (m.get("content") or "").lower()
+                                for m in messages[-4:]
+                                if m.get("role") == "user"
+                            )
+                            if not _confirmed:
+                                print(f"  \033[31m⛔ destructive gate:\033[0m rm in run_command — requires confirmation")
+                                messages.append({
+                                    "role": "user",
+                                    "content": (
+                                        "⛔ DESTRUCTIVE OPERATION BLOCKED.\n\n"
+                                        f"Your command contains `rm` (deletion): `{tc.arguments.get('command', '')}`\n\n"
+                                        "Deletion on beamline storage is IRREVERSIBLE — there is no recycle bin "
+                                        "and no undo. Before executing any deletion:\n\n"
+                                        "1. List the EXACT files that will be deleted (call list_directory or "
+                                        "use `find` / `ls` via run_command to preview, NOT rm -f)\n"
+                                        "2. Tell the user EXACTLY what will be removed and what will be kept\n"
+                                        "3. Use a SINGLE run_command with a glob pattern, NOT one rm per file\n"
+                                        "   Example: `rm -f /path/*.corr.csv /path/*.checkpoint.txt /path/*.png`\n"
+                                        "4. Write CONFIRMED: at the start of your next response ONLY after "
+                                        "the user explicitly approves\n\n"
+                                        "Do NOT proceed with deletion until you have listed the files and "
+                                        "the user has said 'yes' or 'go ahead'."
+                                    ),
+                                })
+                                forced_break = True
+                                break
+
                     to_execute.append(tc)
 
                 # ── Execute all approved calls concurrently. Tools emitted in one
@@ -1551,12 +1612,16 @@ class AgentRunner:
                 "⛔ TOOL BUDGET EXHAUSTED. You have reached the maximum allowed "
                 "tool calls for this turn. You are now FORBIDDEN from emitting "
                 "any further TOOL_CALL blocks.\n\n"
-                "Write the FINAL answer for the user RIGHT NOW using only the "
-                "tool results above. Use markdown: **bold** the key values, "
-                "use bullet points for lists, and keep it concise. If the tool "
-                "results are incomplete, say so honestly — name what is missing "
-                "and what the user could ask for next. Do NOT apologise; do NOT "
-                "describe your process; just produce the answer."
+                "Write the FINAL answer for the user RIGHT NOW. "
+                "CRITICAL RULES for this final answer:\n"
+                "1. If any tool calls were BLOCKED by a guard (fan-out, destructive, "
+                "strategy gate), say so EXPLICITLY — do NOT claim success for "
+                "operations that were blocked. Say 'X was blocked and did not execute.'\n"
+                "2. Report only what ACTUALLY executed based on the tool results above.\n"
+                "3. If an operation is partially complete (some files deleted, some not), "
+                "state exactly what was done and what remains.\n"
+                "4. Use markdown: **bold** key values, bullet points for lists.\n"
+                "5. Do NOT apologise; do NOT describe your process; just report facts."
             ),
         })
         try:
