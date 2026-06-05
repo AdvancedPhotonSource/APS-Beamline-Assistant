@@ -210,23 +210,73 @@ def format_file_info(path: Path) -> dict:
     except Exception as e:
         return {"error": str(e)}
 
-def is_command_allowed(command: str) -> bool:
-    """Check if command is in allowed list.
+def _base_cmd(token: str) -> str:
+    """Return the bare command name from a full path or bare name."""
+    return Path(token).name.lower()
 
-    Validates the base command name (first token) against ALLOWED_COMMANDS.
-    Accepts bare names ('python3') or full paths ('/usr/bin/python3').
+
+def is_command_allowed(command: str) -> bool:
+    """Check that every executable in a pipeline is in ALLOWED_COMMANDS.
+
+    Splits the command string on shell operators (|, ;, &&, ||, &) to extract
+    individual pipeline segments, then validates the base command name of each
+    segment.  This lets run_command use shell=True (enabling pipes and shell
+    operators) while still enforcing the allowed-command whitelist across the
+    entire pipeline.
+
+    Accepts bare names ('grep') or full paths ('/usr/bin/grep').
+    Returns False if any segment is empty, malformed, or not in ALLOWED_COMMANDS.
     """
-    try:
-        cmd_parts = shlex.split(command)
-    except ValueError:
-        # Malformed quoting
+    if not command or not command.strip():
         return False
-    if not cmd_parts:
-        return False
-    # Accept bare name ("python") or full path ("/usr/bin/python", "/opt/.../bin/python3")
-    first = cmd_parts[0]
-    base_command = Path(first).name.lower()
-    return base_command in ALLOWED_COMMANDS
+
+    # Split on shell operators to get individual command segments.
+    # re.split on |, ;, &&, || — order matters: check || before |.
+    import re as _re
+    segments = _re.split(r'\|\||&&|[|;&]', command)
+
+    for seg in segments:
+        seg = seg.strip()
+        if not seg:
+            continue
+        # Handle redirections (>, >>, <, 2>) — strip them and their targets
+        # so "grep foo file > out.txt" validates as "grep".
+        seg_clean = _re.sub(r'2?>+\s*\S*', '', seg).strip()
+        seg_clean = _re.sub(r'<\s*\S*', '', seg_clean).strip()
+        if not seg_clean:
+            continue
+        try:
+            parts = shlex.split(seg_clean)
+        except ValueError:
+            return False
+        if not parts:
+            continue
+        if _base_cmd(parts[0]) not in ALLOWED_COMMANDS:
+            return False
+
+    return True
+
+
+def _get_blocked_commands(command: str) -> list:
+    """Return list of command names in the pipeline that are not allowed.
+    Used to give a more informative error message.
+    """
+    import re as _re
+    blocked = []
+    segments = _re.split(r'\|\||&&|[|;&]', command)
+    for seg in segments:
+        seg = seg.strip()
+        seg_clean = _re.sub(r'2?>+\s*\S*', '', seg).strip()
+        seg_clean = _re.sub(r'<\s*\S*', '', seg_clean).strip()
+        if not seg_clean:
+            continue
+        try:
+            parts = shlex.split(seg_clean)
+        except ValueError:
+            continue
+        if parts and _base_cmd(parts[0]) not in ALLOWED_COMMANDS:
+            blocked.append(_base_cmd(parts[0]))
+    return blocked
 
 # =============================================================================
 # SECTION 1: FILESYSTEM OPERATIONS
@@ -485,24 +535,22 @@ async def run_command(command: str, working_dir: str = None, timeout: int = 120)
     """
     try:
         if not is_command_allowed(command):
-            cmd_name = command.split()[0] if command.split() else command
+            blocked = _get_blocked_commands(command)
             return format_result({
-                "error": f"Command not allowed: {cmd_name}",
+                "error": f"Command not allowed: {', '.join(blocked) if blocked else command.split()[0]}",
+                "detail": "Every executable in the pipeline must be in the allowed list.",
                 "allowed_commands": "Use check_environment to see allowed commands"
             })
 
         cwd = working_dir if working_dir and Path(working_dir).exists() else None
 
-        # Parse command into argument list — prevents shell injection
-        # (pipes, semicolons, $() etc. are treated as literal strings)
-        try:
-            cmd_args = shlex.split(command)
-        except ValueError as e:
-            return format_result({"error": f"Invalid command syntax: {e}"})
-
+        # shell=True enables pipes (|), semicolons (;), &&, ||, redirections
+        # (>, >>), and other shell operators.  Security is preserved by
+        # is_command_allowed() which validates every pipeline segment's base
+        # executable against ALLOWED_COMMANDS before reaching this point.
         result = subprocess.run(
-            cmd_args,
-            shell=False,
+            command,
+            shell=True,
             capture_output=True,
             text=True,
             timeout=timeout,

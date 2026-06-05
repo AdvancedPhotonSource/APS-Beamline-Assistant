@@ -781,48 +781,41 @@ run_command is available for grep, awk, sed, find, wc, sort, uniq, diff,
 head, tail, cat, ls, du, stat, and other standard utilities.
 Use them whenever they are faster or more precise than a dedicated tool.
 
-⚠️ CRITICAL CONSTRAINT: run_command uses shell=False (no pipe operator |).
-Each call is ONE command with its flags and arguments — no piping between commands.
+Pipes (|), semicolons (;), &&, ||, and redirections (>, >>) all work.
+Each executable in the pipeline must be in the allowed list.
 
 CORRECT patterns:
-  # Count files matching a pattern
+  # Count .h5 files in a directory
   TOOL_CALL: run_command
-  ARGUMENTS: {"command": "find /path -name '*.h5' -type f"}
+  ARGUMENTS: {"command": "find /path -name '*.h5' -type f | wc -l"}
 
-  # Search inside a parameter file
+  # Search inside a parameter file and preview
   TOOL_CALL: run_command
   ARGUMENTS: {"command": "grep -n 'Wavelength\\|LatticeConstant\\|Lsd' /path/refined_params.txt"}
 
-  # Check file sizes to pick the best calibrant exposure
-  TOOL_CALL: run_command
-  ARGUMENTS: {"command": "ls -lh /path/Ceria_63keV_900mm_100x100_att3_1p0s_012220.h5"}
-
-  # Preview a CSV without reading the whole file
-  TOOL_CALL: run_command
-  ARGUMENTS: {"command": "head -n 5 /path/calibrant_screen_out.csv"}
-
   # Find the most recently modified parameter file
   TOOL_CALL: run_command
-  ARGUMENTS: {"command": "find /path -name 'refined_MIDAS_params*.txt' -newer /path/image.h5"}
+  ARGUMENTS: {"command": "find /path -name 'refined_MIDAS_params*.txt' | sort -t_ -k1 | tail -n 1"}
 
-  # Count lines / entries in a results file
+  # Count unique grain orientations in a CSV
   TOOL_CALL: run_command
-  ARGUMENTS: {"command": "wc -l /path/Grains.csv"}
+  ARGUMENTS: {"command": "awk -F, 'NR>1 {print $3}' /path/Grains.csv | sort | uniq | wc -l"}
 
-  # Extract a specific column from a CSV (awk)
+  # Preview a large file and filter for errors
   TOOL_CALL: run_command
-  ARGUMENTS: {"command": "awk -F, 'NR>1 {print $3}' /path/calibrant_screen_out.csv"}
+  ARGUMENTS: {"command": "grep -i 'error\\|warning\\|failed' /path/autocal.log | head -n 20"}
+
+  # Check sizes of all result files
+  TOOL_CALL: run_command
+  ARGUMENTS: {"command": "ls -lh /path/*.csv && du -sh /path/integration/"}
 
   # Compare two parameter files
   TOOL_CALL: run_command
   ARGUMENTS: {"command": "diff /path/old_params.txt /path/new_params.txt"}
 
-WRONG — pipes don't work:
-  {"command": "grep 'Wavelength' /path/params.txt | head -n 1"}  ← INVALID
-  {"command": "find /path -name '*.h5' | wc -l"}                 ← INVALID
-
-For multi-step shell pipelines, emit MULTIPLE sequential run_command calls
-(one per step), using the output of each to inform the next.
+  # Save grep output to a file
+  TOOL_CALL: run_command
+  ARGUMENTS: {"command": "grep 'Wavelength' /path/params.txt > /path/wavelength_check.txt"}
 
 NOTE: rm/rmdir/unlink are NOT in the allowed list — deletion via run_command
 will return "Command not allowed". Use the write_file tool or ask the user
