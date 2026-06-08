@@ -861,7 +861,8 @@ RULES:
 1. For ANY X-ray calculation → TOOL_CALL: xray_calculate
 2. For file listing → TOOL_CALL: list_directory
 3. For reading files → TOOL_CALL: read_file
-4. For calibration → TOOL_CALL: midas_auto_calibrate
+4. For calibration → TOOL_CALL: midas_auto_calibrate  ARGUMENTS: {"image_file": "/path/to/file.h5"}
+   (parameter is image_file, NOT data_file — always use image_file)
 5. For integration → TOOL_CALL: midas_integrate_2d_to_1d
 6. For GSAS-II refinement → TOOL_CALL: run_gsas_refinement (needs .zarr.zip + CIF)
 7. For combined integration + refinement → TOOL_CALL: run_live_analysis
@@ -1288,14 +1289,32 @@ class AgentRunner:
         # legitimate multi-file reads from true fan-out.
         _turn_tool_args: dict = {}     # tool_name → set of frozen arg strings
         _FANOUT_THRESHOLD = 3          # same as per-response guard
-        # Tools where calling N times with N DISTINCT arguments is legitimate
-        # (e.g. reading 3 different files).  For these, fan-out only fires
-        # when the same arguments recur, not when the call count exceeds threshold.
-        _MULTI_ARG_OK_TOOLS = {"read_file", "get_file_info", "run_command"}
+        # Tools where calling N times with N DISTINCT arguments is legitimate.
+        # Fan-out only fires when the SAME arguments recur, not on distinct inputs.
+        # midas_auto_calibrate is included: calibrating 7 files with 7 different
+        # paths is the correct multi-file pattern (no "batch calibrate" tool exists).
+        _MULTI_ARG_OK_TOOLS = {
+            "read_file", "get_file_info", "run_command",
+            "midas_auto_calibrate", "midas_integrate_2d_to_1d",
+            "run_gsas_refinement",
+        }
         # Track which _PLAN_REQUIRED_TOOLS have been gate-rejected this turn.
         # On a second rejection of the same tool, strengthen the message to
         # emphasise that plan + TOOL_CALL must be in the SAME response.
         _plan_gate_strikes: Counter = Counter()
+        # Whether the conversation history contains a plan from a prior turn.
+        # Used to skip the strategy gate when the user approved an existing plan.
+        _prior_plan_in_history = any(
+            bool(_STRATEGY_MARKERS.search(m.get("content") or ""))
+            for m in (history or [])
+            if m.get("role") == "assistant"
+        )
+        _approval_re = re.compile(
+            r'\b(yes|go|proceed|ok|sure|start|execute|run\s+it|do\s+it|'
+            r'go\s+with\s+this|go\s+ahead|sounds\s+good|let\'?s\s+do\s+it)\b',
+            re.I,
+        )
+        _query_is_approval = bool(_approval_re.search(query)) and len(query.split()) <= 10
 
         for _ in range(max_iterations):
             response = await provider.chat(messages, agent.temperature)
@@ -1364,8 +1383,17 @@ class AgentRunner:
                 _tool_counts = Counter(tc.name for tc in text_calls)
                 _top_tool, _top_count = _tool_counts.most_common(1)[0]
 
-                # (A) per-response check
-                if _top_count >= 3:
+                # (A) per-response check — arg-diversity aware
+                _per_resp_args = {
+                    tc.name: set(json.dumps(tc.arguments, sort_keys=True)
+                                 for tc in text_calls if tc.name == _top_tool)
+                }
+                _per_resp_unique = len(_per_resp_args.get(_top_tool, set()))
+                _per_resp_fanout = (
+                    _top_count >= 3
+                    and not (_top_tool in _MULTI_ARG_OK_TOOLS and _per_resp_unique >= _top_count)
+                )
+                if _per_resp_fanout:
                     print(f"  \033[33m⚠ fan-out guard:\033[0m {_top_count}× {_top_tool} — rejecting batch")
                     # run_command fan-out: the fix is glob consolidation, not
                     # a compound tool — give a more specific redirect.
@@ -1403,7 +1431,8 @@ class AgentRunner:
                             "then ANSWER the user."
                         )
                     messages.append({"role": "user", "content": _fanout_msg})
-                    continue   # skip dispatch; let the model retry with consolidated command
+                    continue   # skip dispatch; retry with consolidated command or compound tool
+                # end (A)
 
                 # (B) cumulative check — update turn counter AFTER per-response
                 # guard passes, then check cumulative totals.
@@ -1458,7 +1487,16 @@ class AgentRunner:
                 if _plan_needed:
                     prose_words = len(prose.split()) if prose else 0
                     has_markers = bool(_STRATEGY_MARKERS.search(prose)) if prose else False
-                    plan_ok = has_markers or prose_words >= _STRATEGY_MIN_WORDS
+                    # Prior-plan bypass: if the conversation history already
+                    # contains a structured plan (SITUATION/GAP/PLAN markers in
+                    # a prior assistant turn) AND the current query is a short
+                    # approval ("yes", "go with this", "proceed", etc.), the user
+                    # has approved the plan — do not require it to be re-written.
+                    plan_ok = (
+                        has_markers
+                        or prose_words >= _STRATEGY_MIN_WORDS
+                        or (_prior_plan_in_history and _query_is_approval)
+                    )
                     if not plan_ok:
                         _tool_names_str = ", ".join(
                             f"`{tc.name}`" for tc in _plan_needed
@@ -1564,8 +1602,9 @@ class AgentRunner:
                                     f"[Tool Result for {tc.name}]\n{err}\n\n"
                                     "You bypassed the calibration tool. Use midas_auto_calibrate instead:\n"
                                     "TOOL_CALL: midas_auto_calibrate\n"
-                                    "ARGUMENTS: {\"image_path\": \"/path/to/Ceria_*.h5\"}\n"
-                                    "The tool auto-detects energy, Lsd, and calibrant from the filename."
+                                    "ARGUMENTS: {\"image_file\": \"/path/to/Ceria_att3_*.h5\"}\n"
+                                    "The tool auto-detects energy, Lsd, and calibrant from the filename.\n"
+                                    "Required parameter name: image_file (NOT data_file, NOT image_path)."
                                 ),
                             })
                             continue
