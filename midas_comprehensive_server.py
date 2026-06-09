@@ -4000,18 +4000,95 @@ async def estimate_parameters_from_image(
 # MIDAS VIEWER LAUNCHER
 # =============================================================================
 
-# Map of viewer short names → relative paths in MIDAS repo
+# Map of viewer short names → relative paths in MIDAS repo.
+# CLI conventions per viewer (from script headers — verified against MIDAS repo):
+#
+#   plot_calibrant_results   positional: [file.corr.csv]  — Qt GUI, detach
+#   plot_lineout_results     positional: [directory]       — Qt GUI, detach
+#   plot_lineout_comparison  positional: file.lineout.xy [integrator.xy]
+#                            flag:       --paramFN params.txt
+#   plot_integrator_peaks    positional: file.caked.hdf.zarr.zip [options]
+#   plot_caked_peaks         positional: /path/to/results/ OR zarr.zip — Qt GUI, detach
+#   viz_caking               positional: zarr.zip          — Dash web app, detach
+#   live_viewer              flags: --lineout lineout.bin [--fit fit.bin]
+#                                   [--nRBins N] [--nPeaks N]
+#   interactiveFFplotting    positional: directory         — Qt GUI, detach
+#   ff_asym_qt               no required args (opens file dialog)
+#   nf_qt                    positional: [.mic file]       — Qt GUI, detach
+#   PlotFFNF                 positional: directory
+#   plot_phase_id_results    positional: file
 _VIEWER_SCRIPTS = {
     "plot_calibrant_results":   "gui/viewers/plot_calibrant_results.py",
     "plot_lineout_results":     "gui/viewers/plot_lineout_results.py",
     "plot_lineout_comparison":  "gui/viewers/plot_lineout_comparison.py",
     "plot_integrator_peaks":    "gui/viewers/plot_integrator_peaks.py",
     "plot_caked_peaks":         "gui/viewers/plot_caked_peaks.py",
+    "viz_caking":               "gui/viewers/viz_caking.py",
     "live_viewer":              "gui/viewers/live_viewer.py",
     "interactiveFFplotting":    "gui/viewers/interactiveFFplotting.py",
     "ff_asym_qt":               "gui/ff_asym_qt.py",
     "nf_qt":                    "gui/nf_qt.py",
+    "PlotFFNF":                 "gui/viewers/PlotFFNF.py",
+    "plot_phase_id_results":    "gui/viewers/plot_phase_id_results.py",
 }
+
+# Viewers that are pure Qt GUIs: launched detached — do NOT wait for them.
+_GUI_VIEWERS = {
+    "plot_calibrant_results", "plot_lineout_results", "plot_caked_peaks",
+    "interactiveFFplotting", "ff_asym_qt", "nf_qt", "PlotFFNF",
+    "plot_phase_id_results",
+}
+
+# Viewers launched as web apps (Dash/Plotly): also detached, open browser.
+_WEB_VIEWERS = {"viz_caking"}
+
+def _build_viewer_cmd(viewer: str, script_path: Path,
+                      data_file: str, param_file: str,
+                      extra_args: str) -> list:
+    """Build the correct command for each viewer based on its CLI signature."""
+    data_path = Path(data_file).expanduser().absolute()
+    cmd: list = []
+
+    if viewer == "live_viewer":
+        # live_viewer uses --lineout / --fit flags, not positional args
+        cmd = [str(script_path), "--lineout", str(data_path)]
+        if param_file:
+            # param_file repurposed as fit.bin path for live_viewer
+            fit_path = Path(param_file).expanduser().absolute()
+            if fit_path.exists():
+                cmd.extend(["--fit", str(fit_path)])
+
+    elif viewer == "plot_lineout_comparison":
+        # positional: calibrant.lineout.xy [integrator.xy] --paramFN params.txt
+        cmd = [str(script_path), str(data_path)]
+        if param_file:
+            param_path = Path(param_file).expanduser().absolute()
+            if param_path.exists():
+                # If param_file is a .txt it's the parameter file; if .xy it's
+                # the second lineout positional arg
+                if param_path.suffix.lower() in (".txt",):
+                    cmd.extend(["--paramFN", str(param_path)])
+                else:
+                    cmd.insert(2, str(param_path))  # second positional
+
+    elif viewer == "plot_integrator_peaks":
+        # positional: zarr.zip [--min-height N --prominence N ...]
+        cmd = [str(script_path), str(data_path)]
+
+    elif viewer == "viz_caking":
+        # Dash app — positional: zarr.zip
+        cmd = [str(script_path), str(data_path)]
+
+    else:
+        # Default: positional data file (calibrant, lineout, caked, ff_asym, nf)
+        # Most Qt viewers accept just the path as the first positional arg
+        cmd = [str(script_path), str(data_path)]
+
+    if extra_args:
+        import shlex as _shlex
+        cmd.extend(_shlex.split(extra_args))
+
+    return cmd
 
 @mcp.tool()
 async def run_midas_viewer(
@@ -4022,31 +4099,40 @@ async def run_midas_viewer(
 ) -> str:
     """Launch a MIDAS viewer/plotting script on a data file.
 
-    Handles all path resolution internally — finds MIDAS installation,
-    midas_env Python, and builds the full command automatically.
+    GUI viewers (Qt) are launched detached — the window opens and APEXA
+    returns immediately without waiting for it to close. Web viewers (Dash)
+    are also launched detached; they print a localhost URL to stderr.
+    Non-GUI viewers (plot_integrator_peaks, plot_lineout_comparison) run
+    to completion and return their output.
 
     Available viewers:
-    - plot_calibrant_results: Plot calibration fit (*_corr.csv)
-    - plot_lineout_results: Plot 1D lineout (*_lineout.xy)
-    - plot_lineout_comparison: Compare lineouts with ring overlay
-    - plot_integrator_peaks: Interactive caked data viewer (*_caked.hdf.zarr.zip)
-    - plot_caked_peaks: Peak fitting viewer (*_caked_peaks.h5)
-    - live_viewer: Real-time GPU streaming viewer (*_lineout.bin)
-    - interactiveFFplotting: FF-HEDM grain viewer (Grains.csv + .zarr)
-    - ff_asym_qt: Raw 2D diffraction image viewer
-    - nf_qt: NF-HEDM microstructure viewer (.mic/.map)
+    - plot_calibrant_results:  Calibration ring fit (*_corr.csv) [Qt GUI]
+    - plot_lineout_results:    1D lineout viewer (*_lineout.xy or directory) [Qt GUI]
+    - plot_lineout_comparison: Lineout vs calibrant rings (*_lineout.xy --paramFN params.txt)
+    - plot_integrator_peaks:   Peak fitting on caked data (*_caked.hdf.zarr.zip)
+    - plot_caked_peaks:        Caked peak-fit viewer (*_caked.hdf.zarr.zip or dir) [Qt GUI]
+    - viz_caking:              Dash web viewer for zarr caked data (*_caked.hdf.zarr.zip)
+    - live_viewer:             Real-time GPU stream viewer (--lineout lineout.bin)
+    - interactiveFFplotting:   FF-HEDM grain map viewer (directory with Grains.csv) [Qt GUI]
+    - ff_asym_qt:              Raw 2D diffraction image viewer [Qt GUI]
+    - nf_qt:                   NF-HEDM microstructure viewer (.mic file) [Qt GUI]
+    - PlotFFNF:                FF+NF overlay viewer (directory) [Qt GUI]
+    - plot_phase_id_results:   Phase identification results viewer [Qt GUI]
 
     Args:
-        viewer: Viewer name (e.g. "plot_calibrant_results", "plot_lineout_results")
-        data_file: Path to the data file to visualize
-        param_file: Optional parameter file (enables 2θ/Q axes in lineout viewers)
-        extra_args: Optional extra command-line arguments (e.g. "--nRBins 2000")
+        viewer:     Viewer name (see list above)
+        data_file:  Path to the primary input file or directory
+        param_file: Secondary input — meaning depends on viewer:
+                    - plot_lineout_comparison: path to params.txt (for ring overlay)
+                                               OR second lineout .xy file
+                    - live_viewer:             path to fit.bin (peak evolution panel)
+                    - others: ignored
+        extra_args: Extra CLI flags forwarded verbatim (e.g. "--nRBins 2000 --nPeaks 5")
 
     Returns:
-        JSON with command executed, stdout/stderr, and status
+        JSON confirming the viewer was launched and the command used
     """
     try:
-        # Resolve viewer script
         rel_path = _VIEWER_SCRIPTS.get(viewer)
         if not rel_path:
             return format_result({
@@ -4061,53 +4147,80 @@ async def run_midas_viewer(
             return format_result({
                 "tool": "run_midas_viewer",
                 "status": "error",
-                "error": f"Viewer script not found: {script_path}",
+                "error": (
+                    f"Viewer script not found: {script_path}\n"
+                    f"Make sure MIDAS is up to date: cd $MIDAS_PATH && git pull"
+                ),
             })
 
-        # Resolve data file
         data_path = Path(data_file).expanduser().absolute()
         if not data_path.exists():
             return format_result({
                 "tool": "run_midas_viewer",
                 "status": "error",
-                "error": f"Data file not found: {data_path}",
+                "error": f"Data file/directory not found: {data_path}",
             })
 
-        # Find the right Python (midas_env conda Python)
         midas_python = find_midas_python()
-
-        # Build command
-        cmd = [midas_python, str(script_path), str(data_path)]
-
-        if param_file:
-            param_path = Path(param_file).expanduser().absolute()
-            if param_path.exists():
-                cmd.extend(["--paramFN", str(param_path)])
-
-        if extra_args:
-            cmd.extend(extra_args.split())
-
+        viewer_args = _build_viewer_cmd(viewer, script_path,
+                                        str(data_path), param_file, extra_args)
+        cmd = [midas_python] + viewer_args
         env = get_midas_env()
 
         print(f"  Launching viewer: {viewer} → {data_path.name}", file=sys.stderr)
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120, env=env)
+        print(f"  Command: {' '.join(cmd)}", file=sys.stderr)
 
-        return format_result({
-            "tool": "run_midas_viewer",
-            "status": "success" if result.returncode == 0 else "error",
-            "viewer": viewer,
-            "data_file": str(data_path),
-            "command": " ".join(cmd),
-            "return_code": result.returncode,
-            "stdout": result.stdout[-500:] if result.stdout else "",
-            "stderr": result.stderr[-500:] if result.stderr else "",
-        })
+        is_gui = viewer in _GUI_VIEWERS
+        is_web = viewer in _WEB_VIEWERS
+
+        if is_gui or is_web:
+            # Detach — open the window and return immediately.
+            # Do NOT use capture_output or wait() — that blocks until the GUI closes.
+            proc = subprocess.Popen(
+                cmd,
+                env=env,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,   # detach from APEXA's process group
+            )
+            return format_result({
+                "tool": "run_midas_viewer",
+                "status": "launched",
+                "viewer": viewer,
+                "data_file": str(data_path),
+                "command": " ".join(cmd),
+                "pid": proc.pid,
+                "message": (
+                    f"{'Web app' if is_web else 'GUI window'} launched "
+                    f"(PID {proc.pid}). "
+                    + ("Check your browser for the Dash URL (usually http://127.0.0.1:8050)."
+                       if is_web else
+                       "The window should appear on your display shortly.")
+                ),
+            })
+
+        else:
+            # Non-GUI: run to completion (plot_integrator_peaks, plot_lineout_comparison,
+            # live_viewer in non-interactive mode).
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=300, env=env
+            )
+            return format_result({
+                "tool": "run_midas_viewer",
+                "status": "success" if result.returncode == 0 else "error",
+                "viewer": viewer,
+                "data_file": str(data_path),
+                "command": " ".join(cmd),
+                "return_code": result.returncode,
+                "stdout": result.stdout[-1000:] if result.stdout else "",
+                "stderr": result.stderr[-500:] if result.stderr else "",
+            })
 
     except subprocess.TimeoutExpired:
         return format_result({
             "tool": "run_midas_viewer",
             "status": "error",
-            "error": "Viewer timed out after 120s",
+            "error": "Viewer timed out after 300s (non-GUI mode only).",
         })
     except Exception as e:
         return format_result({
