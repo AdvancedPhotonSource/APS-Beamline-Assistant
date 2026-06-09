@@ -612,19 +612,21 @@ Do NOT read data files — the viewer GUI displays the data. Your job is to LAUN
 
 ⚠️ CRITICAL: Call run_midas_viewer EXACTLY ONCE per request. Pick the single BEST viewer. NEVER launch multiple viewers.
 
-STEP 1: Find the data file.
-  - If the user says "integration results" or "caked output" → list the integration/ subdirectory first
-  - Integration outputs (*_lineout.xy, *_caked.hdf.zarr.zip, *_lineout.bin) are in <dir>/integration/
-  - Calibration outputs (*_corr.csv) are in the parent directory
-  - Always prefer .zarr.zip over plain .hdf — the zarr archive is the complete output
-  - Call list_directory on the CORRECT subdirectory, not just the parent
+STEP 1: Find the data file. Call list_directory ONCE on the most specific path given.
+  - If the user gives an integration/ path → list that directory directly. Do NOT also list the parent.
+  - Integration outputs (*_lineout.xy, *.zarr.zip, *_lineout.bin) are in <dir>/integration/
+  - Calibration outputs (*_corr.csv) are in the calibration directory
+  - Always prefer *.zarr.zip over plain *.hdf or *.caked.hdf — the zarr archive is the complete output
+  - ONE list_directory call is sufficient. If the user gave the path, trust it.
 STEP 2: Match the file to the correct viewer — pick ONE:
 
 | File pattern | viewer name | When to use |
 |---|---|---|
 | *_corr.csv | plot_calibrant_results | Calibration fit, calibration QC, lattice-vs-η |
-| *_lineout.xy (2-col from MIDAS integrator) | plot_lineout_comparison | 1D profile from midas_integrate / integrator.py — 2 columns (2θ, intensity) |
-| *_lineout.xy (4-col from extract_lineouts) | plot_lineout_results | Only for output of extract_lineouts.py — 4 columns (2θ, raw, bg, corrected) |
+| *.zarr.zip (integration output) | plot_caked_peaks | BEST for integration results — shows 2D heatmap + 1D profile together |
+| *_lineout.xy (2-col from MIDAS integrator) | plot_caked_peaks on the *.zarr.zip | No dedicated viewer for 2-col lineout; use zarr viewer instead |
+| *_lineout.xy (4-col from extract_lineouts) | plot_lineout_results | Only for extract_lineouts.py output — 4 columns (2θ, raw, bg, corrected) |
+| compare calibrant vs sample lineouts | plot_lineout_comparison | Use --paramFN for ring position overlay |
 | *_lineout.bin (live) | live_viewer | Real-time GPU streaming monitor |
 | *_caked.hdf.zarr.zip | plot_caked_peaks | Caked data, integrated image, 2D heatmap (PREFERRED for caked data) |
 | *_caked_peaks.h5 | plot_caked_peaks | Peak fitting results |
@@ -635,9 +637,10 @@ STEP 2: Match the file to the correct viewer — pick ONE:
 DISAMBIGUATION — when the user request is ambiguous, pick ONE using these rules:
 - "calibrated image" / "calibration results" / "calibration fit" → plot_calibrant_results
 - "caked image" / "caked data" / "integrated data" / "integration result" → plot_caked_peaks
-- "lineout" / "1D profile" / "diffraction pattern" from MIDAS integrator (2-col .xy) → plot_lineout_comparison
-- "lineout" from extract_lineouts.py (4-col .xy with bg/corrected columns) → plot_lineout_results
-- When in doubt: check first line of file — if it has 2 columns use plot_lineout_comparison, if 4 columns use plot_lineout_results
+- "integration results" / "show integration" / "lineout" / "1D profile" → plot_caked_peaks on *.zarr.zip (NOT plot_lineout_results — that only works with 4-col extract_lineouts.py output)
+- "compare lineouts" / "calibrant vs sample" → plot_lineout_comparison
+- "peak fitting results" (4-col .xy from extract_lineouts.py) → plot_lineout_results
+- RULE: whenever a *.zarr.zip exists alongside a *_lineout.xy, always prefer the zarr viewer (plot_caked_peaks) — it shows more information
 - "raw image" / "diffraction image" / "detector image" → ff_asym_qt
 - "grain map" / "grain results" / "FF results" → interactiveFFplotting
 - "microstructure" / "NF results" → nf_qt
@@ -1528,16 +1531,18 @@ class AgentRunner:
                         else:
                             _gate_msg = (
                                 f"⛔ PLAN REQUIRED before calling {_tool_names_str}.\n\n"
-                                "Write a structured plan AND include the TOOL_CALL in the SAME response:\n\n"
-                                "SITUATION: [what you observe — files present, conditions, what's missing]\n\n"
-                                "GAP: [what must be resolved first]\n\n"
-                                "PLAN:\n"
-                                "  Step 1. [specific file] — [WHY: which calibrant, which attenuation, reason]\n\n"
-                                "Executing step 1:\n"
-                                f"TOOL_CALL: {_tool_names_str}\n"
-                                "ARGUMENTS: {{...}}\n\n"
-                                "Rules: name the EXACT file; plan + TOOL_CALL in ONE response; "
-                                "do NOT use run_command for MIDAS calibration workflows."
+                                "Write a brief strategy (1-3 sentences) AND the TOOL_CALL in the SAME response.\n\n"
+                                "For a simple parameter change + proceed (e.g. 'no dark file'), one sentence is enough:\n"
+                                "  'Proceeding without dark subtraction using the same calibration geometry.'\n"
+                                "  TOOL_CALL: midas_auto_calibrate\n"
+                                "  ARGUMENTS: {...}\n\n"
+                                "For a multi-file or first-time setup, use the full structure:\n"
+                                "  SITUATION: [what files/conditions exist]\n"
+                                "  GAP: [what must be resolved first]\n"
+                                "  PLAN: Step 1. [specific file] — [reason]\n"
+                                "  Executing step 1:\n"
+                                f"  TOOL_CALL: {_tool_names_str}\n\n"
+                                "Rules: name the EXACT file; plan + TOOL_CALL in ONE response."
                             )
                         messages.append({"role": "user", "content": _gate_msg})
                         continue   # let the model retry with a real plan
