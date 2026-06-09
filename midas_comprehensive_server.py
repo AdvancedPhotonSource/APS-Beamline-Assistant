@@ -4079,9 +4079,15 @@ def _build_viewer_cmd(viewer: str, script_path: Path,
         # Dash app — positional: zarr.zip
         cmd = [str(script_path), str(data_path)]
 
+    elif viewer == "plot_lineout_results":
+        # Takes a DIRECTORY and scans for *_lineout.xy files with a dropdown.
+        # If the user passed a .xy file, use its parent directory so the
+        # viewer can discover all lineouts in that folder.
+        target = data_path if data_path.is_dir() else data_path.parent
+        cmd = [str(script_path), str(target)]
+
     else:
-        # Default: positional data file (calibrant, lineout, caked, ff_asym, nf)
-        # Most Qt viewers accept just the path as the first positional arg
+        # Default: positional data file (calibrant, caked, ff_asym, nf)
         cmd = [str(script_path), str(data_path)]
 
     if extra_args:
