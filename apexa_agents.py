@@ -1385,8 +1385,8 @@ class AgentRunner:
 
                 # (A) per-response check — arg-diversity aware
                 _per_resp_args = {
-                    tc.name: set(json.dumps(tc.arguments, sort_keys=True)
-                                 for tc in text_calls if tc.name == _top_tool)
+                    _top_tool: set(json.dumps(tc2.arguments, sort_keys=True)
+                                   for tc2 in text_calls if tc2.name == _top_tool)
                 }
                 _per_resp_unique = len(_per_resp_args.get(_top_tool, set()))
                 _per_resp_fanout = (

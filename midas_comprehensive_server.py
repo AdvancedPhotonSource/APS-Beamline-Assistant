@@ -601,8 +601,43 @@ async def run_ff_hedm_full_workflow(
 
         print(f"Starting FF-HEDM workflow: layers {start_layer}-{end_layer}", file=sys.stderr)
 
-        # Execute workflow
-        result = run_python_script("ff_MIDAS.py", args, cwd=str(result_path), timeout=7200)
+        # ── Native path: midas-pipeline CLI (preferred when midas-suite installed) ──
+        # `midas-pipeline run --scan-mode ff` is the new unified orchestrator
+        # replacing ff_MIDAS.py. Same output layout (LayerNr_*/Grains.csv),
+        # same paramstest.txt input — fully compatible downstream.
+        # Fall back to ff_MIDAS.py if midas-pipeline is not on PATH.
+        import shutil as _shutil
+        _native_disabled = os.environ.get("APEXA_USE_NATIVE_MIDAS") == "0"
+        _pipeline_bin = _shutil.which("midas-pipeline")
+        if _pipeline_bin and not _native_disabled:
+            pipeline_cmd = [
+                _pipeline_bin, "run",
+                "--scan-mode", "ff",
+                "--params", param_path,
+                "--result", str(result_path),
+                "--n-cpus", str(n_cpus),
+                "--machine", machine_name or "local",
+                "--device", "cuda" if use_gpu else "cpu",
+                "--start-layer", str(start_layer),
+                "--end-layer", str(end_layer),
+            ]
+            if resume_file:
+                pipeline_cmd += ["--resume", resume_file]
+            if restart_from:
+                pipeline_cmd += ["--restart-from", restart_from]
+            print(f"[engine] midas-pipeline: {' '.join(pipeline_cmd[1:4])}…",
+                  file=sys.stderr)
+            result = subprocess.run(
+                pipeline_cmd, cwd=str(result_path),
+                capture_output=True, text=True, timeout=7200,
+                env=get_midas_python_env(),
+            )
+        else:
+            # Fallback: legacy ff_MIDAS.py subprocess
+            if not _pipeline_bin:
+                print("[engine] midas-pipeline not on PATH — falling back to ff_MIDAS.py",
+                      file=sys.stderr)
+            result = run_python_script("ff_MIDAS.py", args, cwd=str(result_path), timeout=7200)
 
         # Check for output files
         output_info = {
@@ -1925,7 +1960,7 @@ async def validate_midas_installation(
             exe_path = bin_path / exe
             validation["executables"][exe] = exe_path.exists()
 
-        # Check Python workflows
+        # Check Python workflows (legacy scripts — may be superseded by pip packages)
         workflow_scripts = {
             "ff_MIDAS.py": midas_root / "FF_HEDM" / "ff_MIDAS.py",
             "pf_MIDAS.py": midas_root / "FF_HEDM" / "pf_MIDAS.py",
@@ -1937,7 +1972,25 @@ async def validate_midas_installation(
         for script, path in workflow_scripts.items():
             validation["python_modules"][script] = path.exists()
 
-        # Check Python dependencies
+        # Check native pip packages (midas-suite — preferred over legacy scripts)
+        try:
+            from apexa_midas_native import native_engine_status
+            native_status = native_engine_status()
+            validation["native_packages"] = native_status
+            n_installed = sum(1 for v in native_status.values() if v["installed"])
+            n_total = len(native_status)
+            validation["native_summary"] = (
+                f"{n_installed}/{n_total} midas-suite packages installed"
+            )
+            # Report which CLIs are available
+            import shutil as _sh
+            for cli in ("midas-pipeline", "midas-autocalibrate",
+                        "midas-integrate", "midas-calibrate"):
+                validation[f"cli_{cli.replace('-', '_')}"] = bool(_sh.which(cli))
+        except Exception as _ne:
+            validation["native_packages"] = {"error": str(_ne)}
+
+        # Check Python dependencies (both legacy and native paths)
         required_packages = [
             "numpy", "scipy", "matplotlib", "fabio",
             "h5py", "zarr", "numcodecs", "parsl", "numba"
@@ -2336,11 +2389,12 @@ async def midas_integrate_2d_to_1d(
         _strip_empty_value_lines(param_path)
 
         # ── Native engine attempt (Strategy C: PyTorch compute + dual-format) ──
-        # OPT-IN ONLY: subprocess (integrator.py) is the default path; set
-        # APEXA_USE_NATIVE_MIDAS=1 to try the native pip-package path first.
-        # Native path is also skipped when bright_file is set (no flat-field
-        # support yet) or csv_output is requested (no export-csv sidecars yet).
-        if (os.environ.get("APEXA_USE_NATIVE_MIDAS") == "1"
+        # Native-first: if midas_integrate is pip-installed (midas-suite),
+        # run the pure-Python/PyTorch engine. Fall back to integrator.py
+        # when the package is missing or the hardware/size gate fails.
+        # Set APEXA_USE_NATIVE_MIDAS=0 to force the subprocess path.
+        _native_disabled = os.environ.get("APEXA_USE_NATIVE_MIDAS") == "0"
+        if (not _native_disabled
                 and not bright_file and not csv_output):
             try:
                 from apexa_midas_native import (
@@ -2597,11 +2651,12 @@ async def midas_auto_calibrate(
         print(f"{'='*70}\n", file=sys.stderr)
 
         # ── Native engine attempt ──────────────────────────────────────────
-        # OPT-IN ONLY: subprocess (AutoCalibrateZarr.py) is the default path;
-        # set APEXA_USE_NATIVE_MIDAS=1 to try the native pip-package path
-        # first. Native path is also skipped when parameters_file is empty
-        # (no filename-based auto-detect yet) or when image_transform is set.
-        if (os.environ.get("APEXA_USE_NATIVE_MIDAS") == "1"
+        # Native-first: if midas_calibrate is pip-installed (midas-suite),
+        # run the pure-Python engine. Fall back to AutoCalibrateZarr.py
+        # when the package is missing or the hardware gate fails (CPU-only).
+        # Set APEXA_USE_NATIVE_MIDAS=0 to force the subprocess path.
+        _native_disabled = os.environ.get("APEXA_USE_NATIVE_MIDAS") == "0"
+        if (not _native_disabled
                 and parameters_file and not image_transform):
             try:
                 from apexa_midas_native import (
