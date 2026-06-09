@@ -4113,8 +4113,10 @@ async def run_midas_viewer(
 
     Available viewers:
     - plot_calibrant_results:  Calibration ring fit (*_corr.csv) [Qt GUI]
-    - plot_lineout_results:    1D lineout viewer (*_lineout.xy or directory) [Qt GUI]
-    - plot_lineout_comparison: Lineout vs calibrant rings (*_lineout.xy --paramFN params.txt)
+    - plot_lineout_results:    Qt GUI for 4-column *_lineout.xy from extract_lineouts.py
+                               (NOT for 2-col MIDAS integrator lineouts — use plot_lineout_comparison)
+    - plot_lineout_comparison: 2-col lineout vs calibrant rings (*_lineout.xy --paramFN params.txt)
+                               Works with MIDAS integrator lineouts (2-column format)
     - plot_integrator_peaks:   Peak fitting on caked data (*_caked.hdf.zarr.zip)
     - plot_caked_peaks:        Caked peak-fit viewer (*_caked.hdf.zarr.zip or dir) [Qt GUI]
     - viz_caking:              Dash web viewer for zarr caked data (*_caked.hdf.zarr.zip)

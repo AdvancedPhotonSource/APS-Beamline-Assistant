@@ -623,8 +623,8 @@ STEP 2: Match the file to the correct viewer — pick ONE:
 | File pattern | viewer name | When to use |
 |---|---|---|
 | *_corr.csv | plot_calibrant_results | Calibration fit, calibration QC, lattice-vs-η |
-| *_lineout.xy | plot_lineout_results | 1D diffraction profile, lineout, peaks |
-| *_lineout.xy (compare) | plot_lineout_comparison | Compare calibrant vs integrator lineouts |
+| *_lineout.xy (2-col from MIDAS integrator) | plot_lineout_comparison | 1D profile from midas_integrate / integrator.py — 2 columns (2θ, intensity) |
+| *_lineout.xy (4-col from extract_lineouts) | plot_lineout_results | Only for output of extract_lineouts.py — 4 columns (2θ, raw, bg, corrected) |
 | *_lineout.bin (live) | live_viewer | Real-time GPU streaming monitor |
 | *_caked.hdf.zarr.zip | plot_caked_peaks | Caked data, integrated image, 2D heatmap (PREFERRED for caked data) |
 | *_caked_peaks.h5 | plot_caked_peaks | Peak fitting results |
@@ -635,7 +635,9 @@ STEP 2: Match the file to the correct viewer — pick ONE:
 DISAMBIGUATION — when the user request is ambiguous, pick ONE using these rules:
 - "calibrated image" / "calibration results" / "calibration fit" → plot_calibrant_results
 - "caked image" / "caked data" / "integrated data" / "integration result" → plot_caked_peaks
-- "lineout" / "1D profile" / "diffraction pattern" → plot_lineout_results
+- "lineout" / "1D profile" / "diffraction pattern" from MIDAS integrator (2-col .xy) → plot_lineout_comparison
+- "lineout" from extract_lineouts.py (4-col .xy with bg/corrected columns) → plot_lineout_results
+- When in doubt: check first line of file — if it has 2 columns use plot_lineout_comparison, if 4 columns use plot_lineout_results
 - "raw image" / "diffraction image" / "detector image" → ff_asym_qt
 - "grain map" / "grain results" / "FF results" → interactiveFFplotting
 - "microstructure" / "NF results" → nf_qt
