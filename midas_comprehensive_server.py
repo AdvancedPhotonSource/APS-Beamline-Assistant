@@ -577,11 +577,13 @@ async def run_ff_hedm_full_workflow(
         # path) instead of the actual MIDAS location. This guard catches the
         # specific hallucination pattern without blocking legitimate local
         # MIDAS installs (e.g., ~/Git/MIDAS or /Users/.../Git/MIDAS).
-        import re as _re
+        # Use module-level re — do NOT import re inside this function
+        # (import re as _re inside a try block causes Python to treat 're' as
+        # a local name, breaking all module-level re.* calls in the function)
         _HALLUCINATION_PATTERNS = [
-            _re.compile(r'~/opt/MIDAS'),          # the most common hallucination
-            _re.compile(r'/opt/MIDAS(?:/|$)'),     # /opt/MIDAS on Linux
-            _re.compile(r'~[/\\]MIDAS(?:/|$)'),   # ~/MIDAS bare
+            re.compile(r'~/opt/MIDAS'),
+            re.compile(r'/opt/MIDAS(?:/|$)'),
+            re.compile(r'~[/\\]MIDAS(?:/|$)'),
         ]
         for _pat in _HALLUCINATION_PATTERNS:
             for _argname, _argval in [
