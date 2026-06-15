@@ -683,7 +683,7 @@ async def run_ff_hedm_full_workflow(
         proc = subprocess.run(
             cmd,
             capture_output=True, text=True, timeout=14400,
-            env=get_midas_python_env(),
+            env=get_midas_env(),
         )
 
         # ── Collect outputs ──────────────────────────────────────────────────
@@ -822,7 +822,7 @@ async def run_pf_hedm_workflow(
 
         proc = subprocess.run(
             cmd, capture_output=True, text=True, timeout=14400,
-            env=get_midas_python_env(),
+            env=get_midas_env(),
         )
 
         # midas-pipeline pf writes LayerNr_1/Grains.csv (per layer)
@@ -1136,7 +1136,7 @@ async def run_nf_hedm_reconstruction(
 
         proc = subprocess.run(
             cmd, capture_output=True, text=True, timeout=28800,
-            env=get_midas_python_env(),
+            env=get_midas_env(),
         )
 
         # Locate consolidated HDF5 and Grains.mic outputs
