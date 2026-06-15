@@ -1268,7 +1268,7 @@ class APEXAClient:
 
         # Determine environment based on model (dev models require dev endpoint)
         self.anl_username = os.getenv("ANL_USERNAME")
-        self.selected_model = os.getenv("ARGO_MODEL", "gpt5mini")
+        self.selected_model = os.getenv("ARGO_MODEL", "gpt54")
 
         # All current models on PROD (March 2026 Argo update)
         # Future beta models: add to DEV_ONLY_MODELS in apexa_agents.py
@@ -1284,7 +1284,7 @@ class APEXAClient:
 
         self.available_models = {
             "OpenAI": {
-                "gpt4o":       "GPT-4o (128K ctx, 16K out) — fastest, default",
+                "gpt4o":       "GPT-4o (128K ctx, 16K out) — fastest",
                 "gpt4olatest": "GPT-4o latest (128K ctx, 16K out)",
                 "gpt41":       "GPT-4.1 (1M ctx, 16K out)",
                 "gpt41mini":   "GPT-4.1 Mini (1M ctx, 16K out)",
@@ -1296,11 +1296,11 @@ class APEXAClient:
                 "gpt5nano":    "GPT-5 Nano (272K ctx, 128K out)",
                 "gpt51":       "GPT-5.1 (400K ctx, 128K out)",
                 "gpt52":       "GPT-5.2 (400K ctx, 128K out)",
-                "gpt54":       "GPT-5.4 (1M ctx, 128K out) — good for planning",
+                "gpt54":       "GPT-5.4 (1M ctx, 128K out) — DEFAULT; best all-round",
                 "gpt55":       "GPT-5.5 (1M ctx, 128K out) — temp=1 only; ~2× gpt54 cost",
             },
             "Anthropic": {
-                "claudeopus47":  "Claude Opus 4.7 (1M ctx, 128K out) — best planning; no temp/top_p",
+                "claudeopus47":  "Claude Opus 4.7 (1M ctx, 128K out) — best planning; use for complex sessions",
                 "claudeopus46":  "Claude Opus 4.6 (200K ctx, 128K out) — requires temp+top_p",
                 "claudeopus45":  "Claude Opus 4.5 (200K ctx, 64K out)",
                 "claudeopus41":  "Claude Opus 4.1 (200K ctx, 32K out)",
