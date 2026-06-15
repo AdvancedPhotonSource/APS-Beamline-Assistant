@@ -638,6 +638,9 @@ async def run_ff_hedm_full_workflow(
                 return format_result({"tool": "run_ff_hedm_full_workflow",
                                       "status": "error", "error": data_path})
             cmd += ["--zarr", data_path]
+            # When a zarr is provided directly, RawFolder/FileStem/StartNr/EndNr
+            # are not needed — skip midas-params preflight to avoid spurious errors
+            cmd += ["--skip-validation"]
 
         if detectors_json:
             valid_det, det_path = validate_file(detectors_json)
