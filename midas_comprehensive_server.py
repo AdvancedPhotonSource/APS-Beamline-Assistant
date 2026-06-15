@@ -518,299 +518,305 @@ def run_python_script(script_name: str, args: list, cwd: str = None,
 async def run_ff_hedm_full_workflow(
     result_folder: str,
     param_file: str,
-    data_file: str,
-    n_cpus: int = 32,
+    data_file: str = "",
+    n_cpus: int = 4,
     start_layer: int = 1,
     end_layer: int = 1,
-    do_peak_search: bool = True,
-    grains_seed_file: str = None,
-    machine_name: str = "local",
-    convert_files: bool = True,
-    use_gpu: bool = False,
-    resume_file: str = None,
-    restart_from: str = None
+    indexer_backend: str = "python",
+    refine_backend: str = "python",
+    device: str = "cpu",
+    skip_stages: str = "",
+    resume_from: str = "",
+    grains_seed_file: str = "",
+    detectors_json: str = "",
 ) -> str:
-    """Run complete FF-HEDM production workflow using ff_MIDAS.py.
+    """Run complete FF-HEDM grain reconstruction using midas-pipeline.
 
-    This executes the full Far-Field High Energy Diffraction Microscopy workflow:
-    1. Data conversion to Zarr format (if convert_files=True)
-    2. HKL generation (GetHKLListZarr)
-    3. Peak search (PeaksFittingOMPZarrRefactor)
-    4. Peak merging (MergeOverlappingPeaksAllZarr)
-    5. Data preparation (CalcRadiusAllZarr, FitSetupZarr)
-    6. Data binning (SaveBinData)
-    7. Indexing (IndexerOMP or IndexerGPU if use_gpu=True)
-    8. Refinement (FitPosOrStrainsOMP or FitPosOrStrainsGPU if use_gpu=True)
-    9. Post-processing (ProcessGrains)
+    Orchestrates the full Far-Field HEDM pipeline via `midas-pipeline run
+    --scan-mode ff` from the midas-suite Python package. Stages (in order):
+      zip_convert → hkl → peakfit → merge_overlaps → calc_radius →
+      transforms → binning → indexing → refinement → process_grains →
+      consolidation
+    Output: LayerNr_<N>/Grains.csv with grain positions, orientations,
+    completeness.
 
     Args:
-        result_folder: Output directory for results
-        param_file: Path to Parameters.txt file
-        data_file: Input data file (.zip or raw format)
-        n_cpus: Number of CPU cores to use
-        start_layer: Starting layer number
-        end_layer: Ending layer number
-        do_peak_search: Whether to perform peak search (set False if peaks exist)
-        grains_seed_file: Optional seed grains file for indexing
-        machine_name: Machine config (local, orthrosnew, umich, polaris)
-        convert_files: Whether to convert raw data to Zarr
-        use_gpu: Use GPU executables (IndexerGPU, FitPosOrStrainsGPU) — v10 feature
-        resume_file: Path to checkpoint file to resume from (--resume flag) — v10 feature
-        restart_from: Step name to restart workflow from (--restartFrom flag) — v10 feature
+        result_folder: Output directory. LayerNr_<N>/ subdirs created here.
+        param_file: Path to Parameters.txt / paramstest.txt produced by
+                    midas_auto_calibrate or midas-params build_paramstest.
+        data_file: Path to .MIDAS.zip archive (single detector, single layer).
+                   Leave empty if detectors_json is provided for multi-detector.
+        n_cpus: CPU cores (default 4). Use more for production runs.
+        start_layer: First layer number (default 1).
+        end_layer: Last layer number (default 1 = single layer).
+        indexer_backend: "python" (in-process, GPU-capable) or "c-omp"
+                         (bundled C binary, requires OpenMP; faster on CPU).
+                         Default: python.
+        refine_backend: "python" (PyTorch, differentiable, GPU) or "c-omp".
+                        Default: python.
+        device: "cpu", "cuda", or "mps". Default: cpu.
+        skip_stages: Comma-separated stage names to skip, e.g.
+                     "refinement,process_grains". Valid names:
+                     zip_convert, hkl, peakfit, merge_overlaps, calc_radius,
+                     transforms, binning, indexing, refinement, process_grains,
+                     consolidation.
+        resume_from: Stage name to resume from (e.g. "indexing"). The pipeline
+                     reads completed-stage state from the result_folder.
+        grains_seed_file: Optional Grains.csv seed file (NF→FF handoff).
+        detectors_json: Path to detectors.json for multi-detector runs.
 
     Returns:
-        JSON with workflow status, output files, and grain statistics
+        JSON with status, layer-by-layer grain counts, output file paths,
+        and the exact midas-pipeline command that was run.
     """
     try:
-        # Validate inputs
-        result_path = Path(result_folder).expanduser()
+        import shutil as _shutil
+        result_path = Path(result_folder).expanduser().absolute()
         result_path.mkdir(parents=True, exist_ok=True)
 
         valid, param_path = validate_file(param_file)
         if not valid:
-            return format_result({"error": param_path, "status": "failed"})
+            return format_result({"tool": "run_ff_hedm_full_workflow",
+                                  "status": "error", "error": param_path})
 
-        valid, data_path = validate_file(data_file)
-        if not valid:
-            return format_result({"error": data_path, "status": "failed"})
+        _pipeline_bin = _shutil.which("midas-pipeline")
+        if not _pipeline_bin:
+            return format_result({
+                "tool": "run_ff_hedm_full_workflow",
+                "status": "error",
+                "error": (
+                    "midas-pipeline not found. Install with: "
+                    "pip install 'midas-suite[ff]'  (or uv add 'midas-suite[ff]')"
+                ),
+            })
 
-        # Build command
-        args = [
-            "-resultFolder", str(result_path),
-            "-paramFN", param_path,
-            "-dataFN", data_path,
-            "-nCPUs", str(n_cpus),
-            "-machineName", machine_name,
-            "-startLayerNr", str(start_layer),
-            "-endLayerNr", str(end_layer),
-            "-doPeakSearch", "1" if do_peak_search else "0",
-            "-convertFiles", "1" if convert_files else "0"
+        cmd = [
+            _pipeline_bin, "run",
+            "--scan-mode", "ff",
+            "--params", param_path,
+            "--result", str(result_path),
+            "--n-cpus", str(n_cpus),
+            "--device", device,
+            "--indexer-backend", indexer_backend,
+            "--refine-backend", refine_backend,
+            "--layers", f"{start_layer}-{end_layer}",
         ]
 
-        if use_gpu:
-            args.append("-useGPU")
-        if resume_file:
-            args.extend(["--resume", resume_file])
-        if restart_from:
-            args.extend(["--restartFrom", restart_from])
+        if data_file:
+            valid_d, data_path = validate_file(data_file)
+            if not valid_d:
+                return format_result({"tool": "run_ff_hedm_full_workflow",
+                                      "status": "error", "error": data_path})
+            cmd += ["--zarr", data_path]
+
+        if detectors_json:
+            valid_det, det_path = validate_file(detectors_json)
+            if valid_det:
+                cmd += ["--detectors", det_path]
 
         if grains_seed_file:
-            valid, seed_path = validate_file(grains_seed_file)
-            if valid:
-                args.extend(["-grainsFile", seed_path])
+            valid_s, seed_path = validate_file(grains_seed_file)
+            if valid_s:
+                cmd += ["--ff-grains-file", seed_path]
 
-        print(f"Starting FF-HEDM workflow: layers {start_layer}-{end_layer}", file=sys.stderr)
-
-        # ── Native path: midas-pipeline CLI (preferred when midas-suite installed) ──
-        # `midas-pipeline run --scan-mode ff` is the new unified orchestrator
-        # replacing ff_MIDAS.py. Same output layout (LayerNr_*/Grains.csv),
-        # same paramstest.txt input — fully compatible downstream.
-        # Fall back to ff_MIDAS.py if midas-pipeline is not on PATH.
-        import shutil as _shutil
-        _native_disabled = os.environ.get("APEXA_USE_NATIVE_MIDAS") == "0"
-        _pipeline_bin = _shutil.which("midas-pipeline")
-        if _pipeline_bin and not _native_disabled:
-            pipeline_cmd = [
-                _pipeline_bin, "run",
-                "--scan-mode", "ff",
-                "--params", param_path,
-                "--result", str(result_path),
-                "--n-cpus", str(n_cpus),
-                "--machine", machine_name or "local",
-                "--device", "cuda" if use_gpu else "cpu",
-                "--start-layer", str(start_layer),
-                "--end-layer", str(end_layer),
-            ]
-            if resume_file:
-                pipeline_cmd += ["--resume", resume_file]
-            if restart_from:
-                pipeline_cmd += ["--restart-from", restart_from]
-            print(f"[engine] midas-pipeline: {' '.join(pipeline_cmd[1:4])}…",
-                  file=sys.stderr)
-            result = subprocess.run(
-                pipeline_cmd, cwd=str(result_path),
-                capture_output=True, text=True, timeout=7200,
-                env=get_midas_python_env(),
+        # With the python refiner, midas-process-grains 0.4.6 cannot find
+        # OrientPosFit.bin (python writes to layer root; c-omp writes to
+        # Results/). Skip those stages automatically so the pipeline succeeds.
+        # The indexing + refinement outputs (IndexBest.bin, OrientPosFit.bin)
+        # are still produced and useful. Use refine_backend="c-omp" to get
+        # Grains.csv from process_grains.
+        _effective_skip = set(s.strip() for s in (skip_stages or "").split(",") if s.strip())
+        if refine_backend == "python":
+            _effective_skip.update({"process_grains", "consolidation"})
+            if _effective_skip - {"process_grains", "consolidation"}:
+                pass  # user-provided skips also applied
+            print(
+                "[FF-HEDM] python refiner: auto-skipping process_grains + consolidation "
+                "(midas-process-grains 0.4.6 expects c-omp output layout). "
+                "Use refine_backend='c-omp' to get Grains.csv.",
+                file=sys.stderr,
             )
-        else:
-            # Fallback: legacy ff_MIDAS.py subprocess
-            if not _pipeline_bin:
-                print("[engine] midas-pipeline not on PATH — falling back to ff_MIDAS.py",
-                      file=sys.stderr)
-            result = run_python_script("ff_MIDAS.py", args, cwd=str(result_path), timeout=7200)
+        for stage in _effective_skip:
+            cmd += ["--skip", stage]
 
-        # Check for output files
-        output_info = {
-            "grains_csv": None,
-            "zarr_archive": None,
-            "layer_outputs": []
-        }
+        if resume_from:
+            cmd += ["--resume", "from", "--from", resume_from]
 
+        cmd_str = " ".join(cmd)
+        print(f"[FF-HEDM] {cmd_str}", file=sys.stderr)
+
+        proc = subprocess.run(
+            cmd,
+            capture_output=True, text=True, timeout=14400,
+            env=get_midas_python_env(),
+        )
+
+        # ── Collect outputs ──────────────────────────────────────────────────
+        layer_outputs = []
         for layer in range(start_layer, end_layer + 1):
             layer_dir = result_path / f"LayerNr_{layer}"
-            if layer_dir.exists():
-                grains_file = layer_dir / "GrainsReconstructed.csv"
-                if grains_file.exists():
-                    output_info["layer_outputs"].append({
-                        "layer": layer,
-                        "grains_file": str(grains_file),
-                        "file_size_kb": grains_file.stat().st_size / 1024
-                    })
-
-                    # Try to count grains
+            if not layer_dir.exists():
+                continue
+            # midas-pipeline writes Grains.csv (process_grains stage)
+            for grains_name in ("Grains.csv", "GrainsReconstructed.csv",
+                                "Grains_consolidated.csv"):
+                gf = layer_dir / grains_name
+                if gf.exists():
+                    n_grains = 0
                     try:
-                        with open(grains_file, 'r') as f:
-                            n_grains = sum(1 for line in f) - 1  # Subtract header
-                        output_info["layer_outputs"][-1]["n_grains"] = n_grains
-                    except:
+                        lines = gf.read_text().splitlines()
+                        # Skip % header lines
+                        n_grains = sum(
+                            1 for l in lines
+                            if l.strip() and not l.startswith("%")
+                        )
+                    except Exception:
                         pass
+                    layer_outputs.append({
+                        "layer": layer,
+                        "grains_file": str(gf),
+                        "n_grains": n_grains,
+                    })
+                    break
 
-        # Look for Zarr archive
-        zarr_files = list(result_path.glob("*.MIDAS.zip"))
-        if zarr_files:
-            output_info["zarr_archive"] = str(zarr_files[0])
-
+        ok = proc.returncode == 0
         return format_result({
             "tool": "run_ff_hedm_full_workflow",
-            "status": "completed" if result["success"] else "failed",
-            "workflow": "FF-HEDM Full Production",
-            "execution": result,
-            "parameters": {
-                "result_folder": str(result_path),
-                "param_file": param_path,
-                "data_file": data_path,
-                "n_cpus": n_cpus,
-                "layers": f"{start_layer}-{end_layer}",
-                "machine": machine_name
-            },
-            "output": output_info,
-            "total_layers_processed": len(output_info["layer_outputs"]),
-            "total_grains_found": sum(l.get("n_grains", 0) for l in output_info["layer_outputs"])
+            "status": "success" if ok else "error",
+            "engine": "midas-pipeline",
+            "command": cmd_str,
+            "return_code": proc.returncode,
+            "stdout": proc.stdout[-3000:] if proc.stdout else "",
+            "stderr": proc.stderr[-2000:] if proc.stderr else "",
+            "result_folder": str(result_path),
+            "layers": f"{start_layer}-{end_layer}",
+            "layer_outputs": layer_outputs,
+            "total_grains": sum(l["n_grains"] for l in layer_outputs),
         })
 
+    except subprocess.TimeoutExpired:
+        return format_result({"tool": "run_ff_hedm_full_workflow",
+                              "status": "error",
+                              "error": "Pipeline timed out (>4 h). Use resume_from to restart."})
     except Exception as e:
-        return format_result({
-            "tool": "run_ff_hedm_full_workflow",
-            "status": "error",
-            "error": str(e)
-        })
+        return format_result({"tool": "run_ff_hedm_full_workflow",
+                              "status": "error", "error": str(e)})
 
 @mcp.tool()
 async def run_pf_hedm_workflow(
+    result_folder: str,
     param_file: str,
-    positions_file: str,
-    n_cpus: int = 32,
-    one_solution_per_voxel: bool = True,
-    normalize_intensities: str = "none",
-    do_peak_search: bool = True,
-    machine_name: str = "local",
-    use_gpu: bool = False,
-    resume_file: str = None,
-    restart_from: str = None,
-    do_tomo: bool = False
+    n_scans: int = 1,
+    scan_step_um: float = 0.0,
+    beam_size_um: float = 0.0,
+    n_cpus: int = 4,
+    device: str = "cpu",
+    indexer_backend: str = "python",
+    refine_backend: str = "python",
+    one_sol_per_vox: bool = True,
+    skip_stages: str = "",
+    resume_from: str = "",
 ) -> str:
-    """Run Point-Focus HEDM scanning workflow using pf_MIDAS.py.
+    """Run Point-Focus (scanning) HEDM via midas-pipeline --scan-mode pf.
 
-    Point-Focus HEDM is used for scanning experiments with a focused beam.
-    Produces 3D orientation maps with better spatial resolution than FF-HEDM.
+    PF-HEDM uses a focused line/point beam that steps across the sample,
+    producing voxel-level 3D orientation maps with sub-beam spatial resolution.
+    Requires n_scans > 1 (one .MIDAS.zip per scan position, discovered via
+    the RawFolder / FileStem convention in Parameters.txt).
 
     Args:
-        param_file: Path to Parameters.txt file
-        positions_file: CSV file with scan positions (x, y, z coordinates)
-        n_cpus: Number of CPU cores to use
-        one_solution_per_voxel: Limit to one orientation per voxel
-        normalize_intensities: Normalization method (none, max, sum)
-        do_peak_search: Whether to perform peak search
-        machine_name: Machine config (local, orthrosnew, umich, polaris)
-        use_gpu: Use GPU executables — v10 feature
-        resume_file: Path to checkpoint file to resume from (--resume flag) — v10 feature
-        restart_from: Step name to restart from (--restartFrom flag) — v10 feature
-        do_tomo: Enable tomographic reconstruction mode — v10 feature
+        result_folder: Output directory.
+        param_file: Parameters.txt with RawFolder, FileStem, nScans, etc.
+        n_scans: Number of scan positions.
+        scan_step_um: Y-step between scan positions in µm.
+        beam_size_um: Beam half-width in µm (used for scan-position filter).
+        n_cpus: CPU cores.
+        device: "cpu", "cuda", or "mps".
+        indexer_backend: "python" or "c-omp".
+        refine_backend: "python" or "c-omp".
+        one_sol_per_vox: One orientation per voxel (default True).
+        skip_stages: Comma-separated stages to skip.
+        resume_from: Stage name to restart from.
 
     Returns:
-        JSON with workflow status and 3D orientation map data
+        JSON with status, grain count, orientation-map file path.
     """
     try:
-        # Validate inputs
+        import shutil as _shutil
+        result_path = Path(result_folder).expanduser().absolute()
+        result_path.mkdir(parents=True, exist_ok=True)
+
         valid, param_path = validate_file(param_file)
         if not valid:
-            return format_result({"error": param_path, "status": "failed"})
+            return format_result({"tool": "run_pf_hedm_workflow",
+                                  "status": "error", "error": param_path})
 
-        valid, pos_path = validate_file(positions_file)
-        if not valid:
-            return format_result({"error": pos_path, "status": "failed"})
+        _pipeline_bin = _shutil.which("midas-pipeline")
+        if not _pipeline_bin:
+            return format_result({
+                "tool": "run_pf_hedm_workflow",
+                "status": "error",
+                "error": "midas-pipeline not found. Install: pip install 'midas-suite[ff]'",
+            })
 
-        # Build command
-        args = [
-            "-paramFile", param_path,
-            "-nCPUs", str(n_cpus),
-            "-machineName", machine_name,
-            "-doPeakSearch", "1" if do_peak_search else "0",
-            "-oneSolPerVox", "1" if one_solution_per_voxel else "0",
-            "-normalizeIntensities", normalize_intensities
+        cmd = [
+            _pipeline_bin, "run",
+            "--scan-mode", "pf",
+            "--params", param_path,
+            "--result", str(result_path),
+            "--n-scans", str(n_scans),
+            "--n-cpus", str(n_cpus),
+            "--device", device,
+            "--indexer-backend", indexer_backend,
+            "--refine-backend", refine_backend,
         ]
+        if scan_step_um > 0:
+            cmd += ["--scan-step", str(scan_step_um)]
+        if beam_size_um > 0:
+            cmd += ["--beam-size", str(beam_size_um)]
+        if one_sol_per_vox:
+            cmd += ["--one-sol-per-vox", "1"]
+        for stage in (skip_stages or "").split(","):
+            if stage.strip():
+                cmd += ["--skip", stage.strip()]
+        if resume_from:
+            cmd += ["--resume", "from", "--from", resume_from]
 
-        if use_gpu:
-            args.append("-useGPU")
-        if do_tomo:
-            args.append("-doTomo")
-        if resume_file:
-            args.extend(["--resume", resume_file])
-        if restart_from:
-            args.extend(["--restartFrom", restart_from])
+        cmd_str = " ".join(cmd)
+        print(f"[PF-HEDM] {cmd_str}", file=sys.stderr)
 
-        print("Starting PF-HEDM scanning workflow", file=sys.stderr)
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=14400,
+            env=get_midas_python_env(),
+        )
 
-        # Execute workflow
-        result_dir = Path(param_path).parent
-        result = run_python_script("pf_MIDAS.py", args, cwd=str(result_dir), timeout=7200)
+        # midas-pipeline pf writes LayerNr_1/Grains.csv (per layer)
+        layer_outputs = []
+        for gf in sorted(result_path.glob("LayerNr_*/Grains.csv")):
+            lines = gf.read_text().splitlines()
+            n = sum(1 for l in lines if l.strip() and not l.startswith("%"))
+            layer_outputs.append({"grains_file": str(gf), "n_grains": n})
 
-        # Check for outputs
-        output_info = {
-            "grains_csv": None,
-            "scanning_positions": None,
-            "n_positions": 0
-        }
-
-        # Count positions
-        try:
-            import csv
-            with open(pos_path, 'r') as f:
-                output_info["n_positions"] = sum(1 for row in csv.reader(f)) - 1
-        except:
-            pass
-
-        # Look for output grains file
-        grains_file = result_dir / "Grains.csv"
-        if grains_file.exists():
-            output_info["grains_csv"] = str(grains_file)
-            try:
-                with open(grains_file, 'r') as f:
-                    output_info["n_solutions"] = sum(1 for line in f) - 1
-            except:
-                pass
-
+        ok = proc.returncode == 0
         return format_result({
             "tool": "run_pf_hedm_workflow",
-            "status": "completed" if result["success"] else "failed",
-            "workflow": "PF-HEDM Scanning",
-            "execution": result,
-            "parameters": {
-                "param_file": param_path,
-                "positions_file": pos_path,
-                "n_cpus": n_cpus,
-                "one_solution_per_voxel": one_solution_per_voxel,
-                "machine": machine_name
-            },
-            "output": output_info
+            "status": "success" if ok else "error",
+            "engine": "midas-pipeline --scan-mode pf",
+            "command": cmd_str,
+            "return_code": proc.returncode,
+            "stdout": proc.stdout[-3000:] if proc.stdout else "",
+            "stderr": proc.stderr[-2000:] if proc.stderr else "",
+            "result_folder": str(result_path),
+            "layer_outputs": layer_outputs,
+            "total_grains": sum(l["n_grains"] for l in layer_outputs),
         })
 
+    except subprocess.TimeoutExpired:
+        return format_result({"tool": "run_pf_hedm_workflow", "status": "error",
+                              "error": "Pipeline timed out (>4 h)."})
     except Exception as e:
-        return format_result({
-            "tool": "run_pf_hedm_workflow",
-            "status": "error",
-            "error": str(e)
-        })
+        return format_result({"tool": "run_pf_hedm_workflow",
+                              "status": "error", "error": str(e)})
 
 @mcp.tool()
 async def run_ff_calibration(
@@ -1009,140 +1015,133 @@ async def match_grains(
 @mcp.tool()
 async def run_nf_hedm_reconstruction(
     param_file: str,
-    n_cpus: int = 10,
-    ff_seed_orientations: bool = True,
-    ff_grains_file: str = None,
+    result_folder: str = "",
+    n_cpus: int = 4,
+    device: str = "auto",
+    ff_seed_orientations: bool = False,
     do_image_processing: bool = True,
-    refine_parameters: bool = False,
-    multi_grid_points: bool = False,
-    machine_name: str = "local",
-    n_nodes: int = 1,
-    use_gpu: bool = False,
-    resume_file: str = None,
-    restart_from: str = None
+    start_layer: int = 1,
+    end_layer: int = 1,
+    min_confidence: float = 0.6,
+    resume_from: str = "",
 ) -> str:
-    """Run complete NF-HEDM microstructure reconstruction using nf_MIDAS.py.
+    """Run NF-HEDM voxel-level microstructure reconstruction.
 
-    Near-Field HEDM produces voxel-by-voxel 3D orientation maps with
-    higher spatial resolution than FF-HEDM.
+    Uses midas-nf-pipeline (pure-Python) from midas-suite. Produces
+    a voxel orientation map (Grains.mic / consolidated HDF5) from
+    near-field diffraction images.
 
-    Two modes:
-    1. Reconstruction mode (refine_parameters=False):
-       - Pre-processing: GetHKLListNF, GenSeedOrientationsFF2NFHEDM
-       - Grid creation: MakeHexGrid
-       - Spot simulation: MakeDiffrSpots
-       - Image processing: MedianImageLibTiff, ProcessImagesCombined
-       - Fitting: FitOrientationOMP or FitOrientationGPU (if use_gpu=True)
-       - Post-processing: ParseMic
-
-    2. Parameter refinement mode (refine_parameters=True):
-       - Refines experimental geometry using FitOrientationParameters
+    Pipeline stages (pure Python, no compiled binaries needed):
+      image_processing → spot_search → seed_generation → loop_0_unseeded
+      [→ loop_N_seeded ...] → parse_mic → mic2grains → consolidate
 
     Args:
-        param_file: Path to NF-HEDM Parameters.txt file
-        n_cpus: Number of CPU cores to use
-        ff_seed_orientations: Use FF-HEDM results as seed orientations
-        ff_grains_file: Path to FF-HEDM Grains.csv (if ff_seed_orientations=True)
-        do_image_processing: Perform image processing (median filter, background)
-        refine_parameters: Run parameter refinement instead of reconstruction
-        multi_grid_points: Use multiple grid points for parameter refinement
-        machine_name: Machine config (local, orthrosnew, umich, polaris)
-        n_nodes: Number of compute nodes for HPC
-        use_gpu: Use FitOrientationGPU (-gpuFit flag) — v10 feature
-        resume_file: Path to checkpoint file to resume from (--resume flag) — v10 feature
-        restart_from: Step name to restart from (--restartFrom flag) — v10 feature
+        param_file: Path to NF-HEDM Parameters.txt. Must contain at least:
+                    DataDirectory, FileStem, NrFilesPerSweep, Wavelength,
+                    Lsd, BC, NrPixels, px, OmegaStart/End/Step, RingThresh,
+                    LatticeConstant, SpaceGroup, Rsample, Hbeam.
+        result_folder: Output directory (overrides OutputDirectory in params).
+                       LayerNr_<N>/ subdirs created here.
+        n_cpus: CPU cores for image processing and orientation fitting.
+        device: "auto" (GPU if available, else CPU), "cpu", "cuda".
+        ff_seed_orientations: Seed with FF-HEDM Grains.csv (default False).
+        do_image_processing: Run ProcessImagesCombined (default True).
+        start_layer: First layer number.
+        end_layer: Last layer number.
+        min_confidence: Confidence threshold for Mic2GrainsList (default 0.6).
+        resume_from: Stage label to restart from (e.g. "loop_1_seeded").
 
     Returns:
-        JSON with reconstruction status and Grains.mic output info
+        JSON with status, consolidated HDF5 path, voxel count, and the
+        midas-nf-pipeline command that was run.
     """
     try:
-        # Validate param file
+        import shutil as _shutil
         valid, param_path = validate_file(param_file)
         if not valid:
-            return format_result({"error": param_path, "status": "failed"})
+            return format_result({"tool": "run_nf_hedm_reconstruction",
+                                  "status": "error", "error": param_path})
 
-        # Validate FF grains file if using seeds
-        if ff_seed_orientations and ff_grains_file:
-            valid, ff_path = validate_file(ff_grains_file)
-            if not valid:
-                return format_result({
-                    "error": f"FF grains file not found: {ff_grains_file}",
-                    "status": "failed"
-                })
+        _nf_bin = _shutil.which("midas-nf-pipeline")
+        if not _nf_bin:
+            return format_result({
+                "tool": "run_nf_hedm_reconstruction",
+                "status": "error",
+                "error": (
+                    "midas-nf-pipeline not found. "
+                    "Install: pip install 'midas-suite' (includes midas-nf-pipeline)"
+                ),
+            })
 
-        # Build command
-        args = [
-            "-paramFN", param_path,
-            "-nCPUs", str(n_cpus),
-            "-machineName", machine_name,
-            "-nNodes", str(n_nodes),
-            "-refineParameters", "1" if refine_parameters else "0",
-            "-ffSeedOrientations", "1" if ff_seed_orientations else "0",
-            "-doImageProcessing", "1" if do_image_processing else "0",
-            "-multiGridPoints", "1" if multi_grid_points else "0"
+        cmd = [
+            _nf_bin, "run",
+            param_path,
+            "--n-cpus", str(n_cpus),
+            "--device", device,
+            "--start-layer", str(start_layer),
+            "--end-layer", str(end_layer),
+            "--min-confidence", str(min_confidence),
         ]
+        if result_folder:
+            rp = Path(result_folder).expanduser().absolute()
+            rp.mkdir(parents=True, exist_ok=True)
+            cmd += ["--result-folder", str(rp)]
+        else:
+            rp = Path(param_path).parent
 
-        if use_gpu:
-            args.append("-gpuFit")
-        if resume_file:
-            args.extend(["--resume", resume_file])
-        if restart_from:
-            args.extend(["--restartFrom", restart_from])
+        if ff_seed_orientations:
+            cmd += ["--ff-seed-orientations"]
+        if not do_image_processing:
+            cmd += ["--no-image-processing"]
+        if resume_from:
+            cmd += ["--resume", resume_from, "--restart-from", resume_from]
 
-        mode = "Parameter Refinement" if refine_parameters else "Full Reconstruction"
-        print(f"Starting NF-HEDM {mode}", file=sys.stderr)
+        cmd_str = " ".join(cmd)
+        print(f"[NF-HEDM] {cmd_str}", file=sys.stderr)
 
-        # Execute workflow
-        work_dir = Path(param_path).parent
-        result = run_python_script("nf_MIDAS.py", args, cwd=str(work_dir), timeout=14400)
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=28800,
+            env=get_midas_python_env(),
+        )
 
-        # Check for output files
-        output_info = {
-            "grains_mic": None,
-            "n_voxels": 0,
-            "reconstruction_complete": False
-        }
+        # Locate consolidated HDF5 and Grains.mic outputs
+        h5_files = sorted(rp.glob("**/*.h5")) + sorted(rp.glob("**/*.hdf5"))
+        mic_files = sorted(rp.glob("**/Grains.mic"))
+        grains_csvs = sorted(rp.glob("**/GrainsLayer*.csv"))
 
-        mic_file = work_dir / "Grains.mic"
-        if mic_file.exists():
-            output_info["grains_mic"] = str(mic_file)
-            output_info["file_size_mb"] = mic_file.stat().st_size / (1024 * 1024)
-            output_info["reconstruction_complete"] = True
-
-            # Try to count voxels
+        voxel_count = 0
+        for mic in mic_files:
             try:
-                with open(mic_file, 'r') as f:
-                    output_info["n_voxels"] = sum(1 for line in f if not line.startswith('%'))
-            except:
+                lines = mic.read_text().splitlines()
+                voxel_count += sum(
+                    1 for l in lines if l.strip() and not l.startswith("%")
+                )
+            except Exception:
                 pass
 
-        # Check for logs
-        log_dir = work_dir / "midas_log"
-        if log_dir.exists():
-            output_info["log_directory"] = str(log_dir)
-            output_info["log_files"] = [f.name for f in log_dir.glob("*.log")]
-
+        ok = proc.returncode == 0
         return format_result({
             "tool": "run_nf_hedm_reconstruction",
-            "status": "completed" if result["success"] else "failed",
-            "workflow": f"NF-HEDM {mode}",
-            "execution": result,
-            "parameters": {
-                "param_file": param_path,
-                "n_cpus": n_cpus,
-                "ff_seed_orientations": ff_seed_orientations,
-                "mode": mode,
-                "machine": machine_name
-            },
-            "output": output_info
+            "status": "success" if ok else "error",
+            "engine": "midas-nf-pipeline",
+            "command": cmd_str,
+            "return_code": proc.returncode,
+            "stdout": proc.stdout[-3000:] if proc.stdout else "",
+            "stderr": proc.stderr[-2000:] if proc.stderr else "",
+            "result_folder": str(rp),
+            "consolidated_h5": str(h5_files[0]) if h5_files else None,
+            "grains_mic_files": [str(m) for m in mic_files],
+            "grains_layer_csvs": [str(g) for g in grains_csvs],
+            "total_voxels": voxel_count,
         })
 
+    except subprocess.TimeoutExpired:
+        return format_result({"tool": "run_nf_hedm_reconstruction", "status": "error",
+                              "error": "NF pipeline timed out (>8 h)."})
     except Exception as e:
-        return format_result({
-            "tool": "run_nf_hedm_reconstruction",
-            "status": "error",
-            "error": str(e)
-        })
+        return format_result({"tool": "run_nf_hedm_reconstruction",
+                              "status": "error", "error": str(e)})
+
 
 @mcp.tool()
 async def convert_nf_to_dream3d(
