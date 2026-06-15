@@ -1928,16 +1928,6 @@ class APEXAClient:
                     else:
                         print(f"  {C.RED}✗{C.RESET} Invalid model: {model_name}")
                         print(f"  {C.DIM}Type {C.RESET}{C.CYAN}models{C.RESET}{C.DIM} to see available{C.RESET}")
-                elif user_input.startswith('run '):
-                    # 'run <shell command>' — pass directly to the core server.
-                    # Do NOT intercept FF-HEDM or integrator keywords here;
-                    # those are handled by the LLM agent via the MIDAS MCP tools.
-                    command = user_input[4:].strip()
-                    if "core" in self.sessions:
-                        result = await self.execute_tool_call("run_command", {"command": command})
-                        print(f"\n{result}\n")
-                    else:
-                            print("Core server not connected")
                 elif user_input == 'ls' or (user_input.startswith('ls ') and not user_input[3:].lstrip().startswith('-')):
                     path = user_input[2:].strip() or "."
                     if "core" in self.sessions:
