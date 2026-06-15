@@ -1374,18 +1374,6 @@ class APEXAClient:
 
     async def execute_tool_call(self, tool_name: str, arguments: Dict[str, Any]) -> str:
 
-        # ===== ERROR PREVENTION =====
-        # Validate parameters before execution
-        if "ff_hedm" in tool_name:
-            is_valid, error_msg = self.error_preventor.validate_ff_hedm_params(arguments)
-            if not is_valid:
-                print(f"✗ Validation Error: {error_msg}")
-                return json.dumps({
-                    "status": "validation_error",
-                    "error": error_msg,
-                    "suggestion": "Please check your parameters and try again"
-                })
-
         # ===== SMART CACHING =====
         # Check cache for expensive read-only operations
         cacheable_operations = ["filesystem_read_file", "filesystem_list_directory"]
@@ -1941,42 +1929,14 @@ class APEXAClient:
                         print(f"  {C.RED}✗{C.RESET} Invalid model: {model_name}")
                         print(f"  {C.DIM}Type {C.RESET}{C.CYAN}models{C.RESET}{C.DIM} to see available{C.RESET}")
                 elif user_input.startswith('run '):
+                    # 'run <shell command>' — pass directly to the core server.
+                    # Do NOT intercept FF-HEDM or integrator keywords here;
+                    # those are handled by the LLM agent via the MIDAS MCP tools.
                     command = user_input[4:].strip()
-
-                    # Check if this is a special command like FF-HEDM
-                    if 'ff-hedm' in command.lower() or 'ff_hedm' in command.lower():
-                        # Extract directory if provided
-                        dir_match = re.search(r'in\s+([~/.\w/-]+)', command)
-                        if dir_match:
-                            example_dir = dir_match.group(1)
-                        else:
-                            example_dir = "~/opt/MIDAS/FF_HEDM/Example"
-
-                        # Extract CPU count if provided
-                        cpu_match = re.search(r'(\d+)\s*cpu', command.lower())
-                        n_cpus = int(cpu_match.group(1)) if cpu_match else None
-
-                        print(f"Running FF-HEDM workflow in {example_dir}...")
-                        if "midas" in self.sessions:
-                            result = await self.execute_tool_call(
-                                "run_ff_hedm_full_workflow",
-                                {"example_dir": example_dir, "n_cpus": n_cpus}
-                            )
-                            print(f"\n{result}\n")
-                        else:
-                            print("MIDAS server not connected")
-
-                    elif 'integrator' in command.lower() or 'batch' in command.lower():
-                        # Integrator batch command
-                        print("Use the interactive query instead:")
-                        print('APEXA> Run batch integration on /path/to/data with calib_file.txt')
-
+                    if "core" in self.sessions:
+                        result = await self.execute_tool_call("run_command", {"command": command})
+                        print(f"\n{result}\n")
                     else:
-                        # Regular shell command via core server
-                        if "core" in self.sessions:
-                            result = await self.execute_tool_call("run_command", {"command": command})
-                            print(f"\n{result}\n")
-                        else:
                             print("Core server not connected")
                 elif user_input == 'ls' or (user_input.startswith('ls ') and not user_input[3:].lstrip().startswith('-')):
                     path = user_input[2:].strip() or "."
