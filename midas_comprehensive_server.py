@@ -571,6 +571,29 @@ async def run_ff_hedm_full_workflow(
     """
     try:
         import shutil as _shutil
+
+        # ── Anti-hallucination: reject MIDAS default example paths ───────────
+        # The model sometimes substitutes training-data paths (~/opt/MIDAS/...)
+        # instead of using the paths provided in the prompt. Catch this early
+        # so the user sees a clear redirect rather than a cryptic OS error.
+        _MIDAS_DEFAULT_PATHS = (
+            "FF_HEDM/Example", "opt/MIDAS", "MIDAS/Example",
+            "~/opt/MIDAS", "/opt/MIDAS",
+        )
+        for _bad in _MIDAS_DEFAULT_PATHS:
+            for _arg in (result_folder, param_file, data_file):
+                if _bad in str(_arg):
+                    return format_result({
+                        "tool": "run_ff_hedm_full_workflow",
+                        "status": "error",
+                        "error": (
+                            f"Path '{_arg}' looks like a MIDAS default example path. "
+                            "Use the EXACT absolute paths from the user's directory listing — "
+                            "not paths from MIDAS training data. Re-read the directory listing "
+                            "result above and use those actual file paths."
+                        ),
+                    })
+
         result_path = Path(result_folder).expanduser().absolute()
         result_path.mkdir(parents=True, exist_ok=True)
 
