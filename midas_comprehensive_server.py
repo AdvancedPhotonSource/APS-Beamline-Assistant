@@ -572,25 +572,32 @@ async def run_ff_hedm_full_workflow(
     try:
         import shutil as _shutil
 
-        # ── Anti-hallucination: reject MIDAS default example paths ───────────
-        # The model sometimes substitutes training-data paths (~/opt/MIDAS/...)
-        # instead of using the paths provided in the prompt. Catch this early
-        # so the user sees a clear redirect rather than a cryptic OS error.
-        _MIDAS_DEFAULT_PATHS = (
-            "FF_HEDM/Example", "opt/MIDAS", "MIDAS/Example",
-            "~/opt/MIDAS", "/opt/MIDAS",
-        )
-        for _bad in _MIDAS_DEFAULT_PATHS:
-            for _arg in (result_folder, param_file, data_file):
-                if _bad in str(_arg):
+        # ── Anti-hallucination: reject fabricated default MIDAS paths ────────
+        # The model sometimes substitutes ~/opt/MIDAS (a common training-data
+        # path) instead of the actual MIDAS location. This guard catches the
+        # specific hallucination pattern without blocking legitimate local
+        # MIDAS installs (e.g., ~/Git/MIDAS or /Users/.../Git/MIDAS).
+        import re as _re
+        _HALLUCINATION_PATTERNS = [
+            _re.compile(r'~/opt/MIDAS'),          # the most common hallucination
+            _re.compile(r'/opt/MIDAS(?:/|$)'),     # /opt/MIDAS on Linux
+            _re.compile(r'~[/\\]MIDAS(?:/|$)'),   # ~/MIDAS bare
+        ]
+        for _pat in _HALLUCINATION_PATTERNS:
+            for _argname, _argval in [
+                ("result_folder", result_folder),
+                ("param_file", param_file),
+                ("data_file", data_file),
+            ]:
+                if _pat.search(str(_argval)):
                     return format_result({
                         "tool": "run_ff_hedm_full_workflow",
                         "status": "error",
                         "error": (
-                            f"Path '{_arg}' looks like a MIDAS default example path. "
-                            "Use the EXACT absolute paths from the user's directory listing — "
-                            "not paths from MIDAS training data. Re-read the directory listing "
-                            "result above and use those actual file paths."
+                            f"{_argname}='{_argval}' looks like a fabricated default path "
+                            "(~/opt/MIDAS is not where MIDAS is installed on this machine). "
+                            "Use the EXACT absolute paths from the directory listing above. "
+                            f"The actual MIDAS installation is at {str(MIDAS_ROOT)}."
                         ),
                     })
 
