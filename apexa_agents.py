@@ -450,11 +450,20 @@ PARAMETER VALIDATION — When the user asks to validate, diagnose, or check a pa
    - "pf-hedm" / "point-focus" → pipeline="pf"
    - Default to "ri" for integration/calibration queries, "ff" for HEDM workflow queries.
 
-PRE-WORKFLOW VALIDATION — ONLY before heavyweight HEDM reconstruction (ff, nf, pf):
-1. Call validate_parameter_file ONLY before run_ff_hedm_full_workflow, run_nf_hedm_reconstruction, or run_pf_hedm_workflow
-2. Do NOT validate before simple operations like midas_integrate_2d_to_1d, midas_auto_calibrate, or run_gsas_refinement — just run them directly
-3. If errors are found, call diagnose_parameter_file and fix issues before proceeding
-4. If the user has a dataset file, call inspect_dataset_file to verify consistency
+PRE-WORKFLOW VALIDATION — rules for heavyweight HEDM reconstruction (ff, nf, pf):
+1. SKIP validate_parameter_file entirely when data_file (.MIDAS.zip or .zarr.zip) is explicitly provided.
+   The tool passes --skip-validation to midas-pipeline automatically; file-discovery keys
+   (RawFolder, FileStem, StartNr, EndNr) are not required in zarr mode.
+   → Just call run_ff_hedm_full_workflow directly with the provided paths.
+
+2. CALL validate_parameter_file ONLY when no data_file is given AND the user has only
+   a Parameters.txt + raw frame directory. If validation fails on file-discovery keys
+   and a zarr is available, skip to the zarr path (rule 1 above).
+
+3. Do NOT validate before: midas_integrate_2d_to_1d, midas_auto_calibrate, run_gsas_refinement
+
+4. If validation finds real geometry errors (wrong Lsd, BC, Wavelength, SpaceGroup),
+   call diagnose_parameter_file and fix those before proceeding.
 
 When the user says "retry", "rerun", or "redo" → call the requested tool IMMEDIATELY. Do NOT validate first.
 

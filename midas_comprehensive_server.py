@@ -687,32 +687,59 @@ async def run_ff_hedm_full_workflow(
         )
 
         # ── Collect outputs ──────────────────────────────────────────────────
+        # Works for both c-omp backend (Grains.csv produced by process_grains)
+        # and python backend (Grains.csv skipped; grain count from IndexBest.bin).
         layer_outputs = []
         for layer in range(start_layer, end_layer + 1):
             layer_dir = result_path / f"LayerNr_{layer}"
             if not layer_dir.exists():
                 continue
-            # midas-pipeline writes Grains.csv (process_grains stage)
+            info: dict = {"layer": layer, "layer_dir": str(layer_dir)}
+
+            # 1. Grains.csv — present when process_grains ran (c-omp backend)
             for grains_name in ("Grains.csv", "GrainsReconstructed.csv",
                                 "Grains_consolidated.csv"):
                 gf = layer_dir / grains_name
                 if gf.exists():
-                    n_grains = 0
                     try:
                         lines = gf.read_text().splitlines()
-                        # Skip % header lines
-                        n_grains = sum(
-                            1 for l in lines
-                            if l.strip() and not l.startswith("%")
-                        )
+                        n = sum(1 for l in lines
+                                if l.strip() and not l.startswith("%"))
                     except Exception:
-                        pass
-                    layer_outputs.append({
-                        "layer": layer,
-                        "grains_file": str(gf),
-                        "n_grains": n_grains,
-                    })
+                        n = 0
+                    info["grains_file"] = str(gf)
+                    info["n_grains"] = n
                     break
+
+            # 2. IndexBest.bin — always written by the indexer regardless of backend.
+            #    15 float64 columns per seed; column 14 = nMatches (>0 = solution).
+            #    Use this as the grain count when Grains.csv is absent.
+            ib_path = layer_dir / "IndexBest.bin"
+            if ib_path.exists() and "n_grains" not in info:
+                try:
+                    import numpy as _np
+                    ib = _np.fromfile(ib_path, dtype=_np.float64)
+                    if ib.size > 0 and ib.size % 15 == 0:
+                        ib = ib.reshape(-1, 15)
+                        solved = int((ib[:, 14] > 0).sum())
+                        info["n_grains"] = solved
+                        info["n_seeds"] = len(ib)
+                        info["best_nMatches"] = float(ib[:, 14].max())
+                        info["note"] = (
+                            "process_grains skipped (python refiner); "
+                            "n_grains = seeds with nMatches>0 from IndexBest.bin. "
+                            "Re-run with refine_backend='c-omp' to get Grains.csv."
+                        )
+                except Exception:
+                    pass
+
+            # 3. OrientPosFit.bin — tells us refinement ran
+            if (layer_dir / "OrientPosFit.bin").exists():
+                info["refinement_complete"] = True
+            if (layer_dir / "Results" / "OrientPosFit.bin").exists():
+                info["refinement_complete"] = True
+
+            layer_outputs.append(info)
 
         ok = proc.returncode == 0
         return format_result({
@@ -725,8 +752,9 @@ async def run_ff_hedm_full_workflow(
             "stderr": proc.stderr[-2000:] if proc.stderr else "",
             "result_folder": str(result_path),
             "layers": f"{start_layer}-{end_layer}",
+            "refine_backend": refine_backend,
             "layer_outputs": layer_outputs,
-            "total_grains": sum(l["n_grains"] for l in layer_outputs),
+            "total_grains": sum(l.get("n_grains", 0) for l in layer_outputs),
         })
 
     except subprocess.TimeoutExpired:
