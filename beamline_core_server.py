@@ -516,6 +516,236 @@ async def read_file(file_path: str, encoding: str = "utf-8", max_size: int = 102
     except Exception as e:
         return format_result({"error": f"Error reading file: {str(e)}"})
 
+
+# ── read_document helpers ───────────────────────────────────────────────────
+# Each returns (text, meta_dict, error_str). Prefer a real parser library when
+# installed; fall back to a dependency-free zipfile+XML scrape for OOXML/ODF so
+# the tool works on a fresh checkout before `uv sync` adds the nicer libs.
+
+def _ooxml_xml_fallback(path, member_prefix: str):
+    """Universal OOXML/ODF text scrape: strip tags from matching zip members.
+
+    Lossy (no layout) but dependency-free — used when python-pptx/docx/openpyxl
+    are not installed. member_prefix selects the relevant parts of the archive
+    (e.g. 'ppt/slides/', 'word/document.xml', 'content.xml').
+    """
+    import zipfile
+    import re as _re
+    try:
+        chunks = []
+        with zipfile.ZipFile(str(path)) as z:
+            names = sorted(
+                n for n in z.namelist()
+                if n.startswith(member_prefix) and n.endswith(".xml")
+            )
+            # ODF stores everything in a single content.xml (exact match).
+            if not names and member_prefix.endswith(".xml"):
+                names = [member_prefix] if member_prefix in z.namelist() else []
+            for n in names:
+                raw = z.read(n).decode("utf-8", errors="ignore")
+                # Turn paragraph/row/break tags into whitespace, then drop tags.
+                raw = _re.sub(r"</(w:p|a:p|text:p|row|tr)>", "\n", raw)
+                raw = _re.sub(r"<[^>]+>", " ", raw)
+                raw = _re.sub(r"[ \t]+", " ", raw)
+                raw = _re.sub(r"\n\s+", "\n", raw).strip()
+                if raw:
+                    chunks.append(raw)
+        return "\n".join(chunks), {}, None
+    except Exception as e:
+        return None, {}, f"zip/xml fallback failed: {e}"
+
+
+def _extract_pdf(path):
+    try:
+        try:
+            from pypdf import PdfReader  # maintained successor
+        except ImportError:
+            from PyPDF2 import PdfReader  # deprecated but widely installed
+    except ImportError:
+        return None, {}, "PDF support needs pypdf or PyPDF2 (pip install pypdf)"
+    try:
+        reader = PdfReader(str(path))
+        pages = []
+        for page in reader.pages:
+            try:
+                pages.append(page.extract_text() or "")
+            except Exception:
+                pages.append("")
+        return "\n\n".join(pages), {"pages": len(reader.pages)}, None
+    except Exception as e:
+        return None, {}, f"PDF parse failed: {e}"
+
+
+def _extract_pptx(path):
+    try:
+        from pptx import Presentation
+    except ImportError:
+        return _ooxml_xml_fallback(path, "ppt/slides/")
+    try:
+        prs = Presentation(str(path))
+        out = []
+        for i, slide in enumerate(prs.slides, 1):
+            out.append(f"--- Slide {i} ---")
+            for shape in slide.shapes:
+                if shape.has_text_frame:
+                    for para in shape.text_frame.paragraphs:
+                        line = "".join(r.text for r in para.runs)
+                        if line.strip():
+                            out.append(line)
+                if shape.has_table:
+                    for row in shape.table.rows:
+                        out.append("\t".join(c.text for c in row.cells))
+            notes = getattr(slide, "notes_slide", None) if slide.has_notes_slide else None
+            if notes and notes.notes_text_frame and notes.notes_text_frame.text.strip():
+                out.append(f"[notes] {notes.notes_text_frame.text.strip()}")
+        return "\n".join(out), {"slides": len(prs.slides)}, None
+    except Exception:
+        return _ooxml_xml_fallback(path, "ppt/slides/")
+
+
+def _extract_docx(path):
+    try:
+        from docx import Document
+    except ImportError:
+        return _ooxml_xml_fallback(path, "word/document.xml")
+    try:
+        doc = Document(str(path))
+        out = [p.text for p in doc.paragraphs if p.text.strip()]
+        for table in doc.tables:
+            for row in table.rows:
+                out.append("\t".join(c.text for c in row.cells))
+        return "\n".join(out), {"paragraphs": len(doc.paragraphs)}, None
+    except Exception:
+        return _ooxml_xml_fallback(path, "word/document.xml")
+
+
+def _extract_xlsx(path):
+    try:
+        import openpyxl
+    except ImportError:
+        return _ooxml_xml_fallback(path, "xl/")
+    try:
+        wb = openpyxl.load_workbook(str(path), read_only=True, data_only=True)
+        out = []
+        for ws in wb.worksheets:
+            out.append(f"--- Sheet: {ws.title} ---")
+            for row in ws.iter_rows(values_only=True):
+                cells = ["" if v is None else str(v) for v in row]
+                if any(c.strip() for c in cells):
+                    out.append("\t".join(cells))
+        return "\n".join(out), {"sheets": len(wb.worksheets)}, None
+    except Exception:
+        return _ooxml_xml_fallback(path, "xl/")
+
+
+def _extract_html(path):
+    import re as _re
+    raw = Path(path).read_text(encoding="utf-8", errors="ignore")
+    raw = _re.sub(r"(?is)<(script|style).*?</\1>", " ", raw)
+    raw = _re.sub(r"(?i)</(p|div|br|li|tr|h[1-6])>", "\n", raw)
+    raw = _re.sub(r"<[^>]+>", " ", raw)
+    raw = _re.sub(r"[ \t]+", " ", raw)
+    return _re.sub(r"\n\s+", "\n", raw).strip(), {}, None
+
+
+def _extract_rtf(path):
+    import re as _re
+    raw = Path(path).read_text(encoding="utf-8", errors="ignore")
+    raw = _re.sub(r"\\par[d]?", "\n", raw)
+    raw = _re.sub(r"\\'[0-9a-fA-F]{2}", "", raw)
+    raw = _re.sub(r"\\[a-zA-Z]+-?\d* ?", "", raw)
+    raw = raw.replace("{", "").replace("}", "")
+    return _re.sub(r"\n\s+", "\n", raw).strip(), {}, None
+
+
+@mcp.tool()
+async def read_document(file_path: str, max_chars: int = 100000,
+                        max_size: int = 52428800) -> str:
+    """Read text from documents of many formats — logbooks, slides, spreadsheets.
+
+    Use this (not read_file) for binary/office documents: experiment logbooks
+    (PDF), methodology slides (PPTX), reports (DOCX), data tables (XLSX),
+    OpenDocument files, HTML, and RTF. read_file only handles plain text.
+
+    Supported: .pdf, .pptx, .docx, .xlsx, .odt/.odp/.ods, .html/.htm, .rtf,
+    .csv/.tsv, and any plain-text/code/markup file. Office/ODF formats use a
+    proper parser when installed (pypdf, python-pptx, python-docx, openpyxl)
+    and fall back to a dependency-free zip+XML text scrape otherwise.
+
+    Args:
+        file_path: Path to the document.
+        max_chars: Max characters of extracted text to return (default 100000).
+        max_size:  Max file size to open, bytes (default 50 MB).
+
+    Returns:
+        JSON with extracted text, detected format, and any format metadata
+        (page/slide/sheet counts), plus a truncated flag.
+    """
+    try:
+        path = Path(file_path).expanduser().resolve()
+        if not path.exists():
+            return format_result({"error": f"File does not exist: {path}"})
+        if not path.is_file():
+            return format_result({"error": f"Path is not a file: {file_path}"})
+
+        size = path.stat().st_size
+        if size > max_size:
+            return format_result({"error": f"File too large ({size} bytes > {max_size} limit)"})
+
+        ext = path.suffix.lower()
+        TEXT_EXT = {".txt", ".md", ".markdown", ".rst", ".csv", ".tsv", ".json",
+                    ".yaml", ".yml", ".xml", ".log", ".ini", ".cfg", ".conf",
+                    ".toml", ".py", ".c", ".h", ".cpp", ".cc", ".hpp", ".sh",
+                    ".js", ".ts", ".tex", ".bib", ".m", ".f", ".f90"}
+
+        if ext == ".pdf":
+            text, meta, err = _extract_pdf(path)
+        elif ext == ".pptx":
+            text, meta, err = _extract_pptx(path)
+        elif ext == ".docx":
+            text, meta, err = _extract_docx(path)
+        elif ext == ".xlsx":
+            text, meta, err = _extract_xlsx(path)
+        elif ext in (".odt", ".odp", ".ods"):
+            text, meta, err = _ooxml_xml_fallback(path, "content.xml")
+        elif ext in (".html", ".htm"):
+            text, meta, err = _extract_html(path)
+        elif ext == ".rtf":
+            text, meta, err = _extract_rtf(path)
+        elif ext in TEXT_EXT:
+            text, meta, err = path.read_text(encoding="utf-8", errors="replace"), {}, None
+        else:
+            # Unknown extension: try as text, but refuse true binary.
+            with open(path, "rb") as f:
+                if b"\x00" in f.read(1024):
+                    return format_result({
+                        "error": f"Unsupported binary format '{ext}'. Supported: "
+                                 "pdf, pptx, docx, xlsx, odt/odp/ods, html, rtf, "
+                                 "csv/tsv, and plain text/code.",
+                        "file_path": str(path),
+                    })
+            text, meta, err = path.read_text(encoding="utf-8", errors="replace"), {}, None
+
+        if err:
+            return format_result({"tool": "read_document", "status": "error",
+                                  "file_path": str(path), "format": ext, "error": err})
+
+        text = text or ""
+        return format_result({
+            "tool": "read_document",
+            "file_path": str(path),
+            "format": ext.lstrip(".") or "text",
+            "size": size,
+            "char_count": len(text),
+            "truncated": len(text) > max_chars,
+            **meta,
+            "content": text[:max_chars],
+        })
+
+    except Exception as e:
+        return format_result({"error": f"Error reading document: {str(e)}"})
+
+
 @mcp.tool()
 async def write_file(file_path: str, content: str, encoding: str = "utf-8", append: bool = False) -> str:
     """Write content to a file.
