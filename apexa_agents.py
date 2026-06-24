@@ -1462,41 +1462,13 @@ class AgentRunner:
                     continue   # skip dispatch; retry with consolidated command or compound tool
                 # end (A)
 
-                # (B) cumulative check — update turn counter AFTER per-response
-                # guard passes, then check cumulative totals.
-                _turn_tool_counts.update(_tool_counts)
-                # Track unique argument fingerprints per tool so arg-diverse
-                # tools (read_file on different files) don't false-fire.
-                for tc in text_calls:
-                    args_key = json.dumps(tc.arguments, sort_keys=True)
-                    _turn_tool_args.setdefault(tc.name, set()).add(args_key)
-
-                _cum_top, _cum_count = _turn_tool_counts.most_common(1)[0]
-                if _cum_count >= _FANOUT_THRESHOLD and _cum_top == _top_tool and _top_count < _FANOUT_THRESHOLD:
-                    # For tools where diverse args are legitimate, only fire
-                    # if the argument SET is smaller than the call count (i.e.
-                    # same args repeated, not different files each time).
-                    _unique_args = len(_turn_tool_args.get(_cum_top, set()))
-                    if _cum_top in _MULTI_ARG_OK_TOOLS and _unique_args >= _cum_count:
-                        pass   # diverse args — not true fan-out, let it through
-                    else:
-                        # Cumulative threshold crossed and NOT already caught by (A)
-                        print(f"  \033[33m⚠ cumulative fan-out:\033[0m {_cum_count}× {_cum_top}")
-                        if _cum_top == "run_command":
-                            _fanout_redirect = (
-                                f"⛔ CUMULATIVE FAN-OUT: you have called `run_command` "
-                                f"{_cum_count} times across this turn. "
-                                "Consolidate into ONE call using a bash -c script or pipes:\n"
-                                "  bash -c 'head -20 file1.csv; echo ---; head -20 file2.csv'"
-                            )
-                        else:
-                            _fanout_redirect = (
-                                f"⛔ CUMULATIVE FAN-OUT: you have called `{_cum_top}` "
-                                f"{_cum_count} times across this turn in separate responses. "
-                                "Use the compound tool that returns all values in ONE call."
-                            )
-                        messages.append({"role": "user", "content": _fanout_redirect})
-                        continue
+                # (B) cumulative fan-out check is deferred until AFTER the
+                # strategy gate (below). A call the strategy gate rejects is
+                # never executed, so counting it as fan-out here would let two
+                # guards fight: the gate asks the model to retry with a plan,
+                # and the retry would inflate the cumulative counter until the
+                # fan-out guard kills the turn — the call never runs. Only
+                # count calls that survive every guard and actually dispatch.
 
                 # ── Strategy gate (Claude-Code-style pre-action reasoning) ───
                 # If the response contains a tool from _PLAN_REQUIRED_TOOLS
@@ -1569,6 +1541,43 @@ class AgentRunner:
                             )
                         messages.append({"role": "user", "content": _gate_msg})
                         continue   # let the model retry with a real plan
+
+                # (B) cumulative fan-out check — runs only after the per-response
+                # guard AND the strategy gate have passed, so the counter reflects
+                # calls that will actually execute (not gate-rejected retries).
+                _turn_tool_counts.update(_tool_counts)
+                # Track unique argument fingerprints per tool so arg-diverse
+                # tools (read_file on different files) don't false-fire.
+                for tc in text_calls:
+                    args_key = json.dumps(tc.arguments, sort_keys=True)
+                    _turn_tool_args.setdefault(tc.name, set()).add(args_key)
+
+                _cum_top, _cum_count = _turn_tool_counts.most_common(1)[0]
+                if _cum_count >= _FANOUT_THRESHOLD and _cum_top == _top_tool and _top_count < _FANOUT_THRESHOLD:
+                    # For tools where diverse args are legitimate, only fire
+                    # if the argument SET is smaller than the call count (i.e.
+                    # same args repeated, not different files each time).
+                    _unique_args = len(_turn_tool_args.get(_cum_top, set()))
+                    if _cum_top in _MULTI_ARG_OK_TOOLS and _unique_args >= _cum_count:
+                        pass   # diverse args — not true fan-out, let it through
+                    else:
+                        # Cumulative threshold crossed and NOT already caught by (A)
+                        print(f"  \033[33m⚠ cumulative fan-out:\033[0m {_cum_count}× {_cum_top}")
+                        if _cum_top == "run_command":
+                            _fanout_redirect = (
+                                f"⛔ CUMULATIVE FAN-OUT: you have called `run_command` "
+                                f"{_cum_count} times across this turn. "
+                                "Consolidate into ONE call using a bash -c script or pipes:\n"
+                                "  bash -c 'head -20 file1.csv; echo ---; head -20 file2.csv'"
+                            )
+                        else:
+                            _fanout_redirect = (
+                                f"⛔ CUMULATIVE FAN-OUT: you have called `{_cum_top}` "
+                                f"{_cum_count} times across this turn in separate responses. "
+                                "Use the compound tool that returns all values in ONE call."
+                            )
+                        messages.append({"role": "user", "content": _fanout_redirect})
+                        continue
 
                 _once_per_response = set()
                 _ONCE_TOOLS = {"run_midas_viewer"}
