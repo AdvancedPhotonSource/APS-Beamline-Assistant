@@ -1325,6 +1325,11 @@ class AgentRunner:
             "read_file", "get_file_info", "run_command",
             "midas_auto_calibrate", "midas_integrate_2d_to_1d",
             "run_gsas_refinement",
+            # Read-only inspection tools: calling them on N distinct paths/files
+            # is normal exploration, not fan-out. Only repeated IDENTICAL args
+            # trip the guard (the arg-diversity check below enforces that).
+            "list_directory", "read_document", "inspect_dataset_file",
+            "diagnose_parameter_file", "validate_parameter_file",
         }
         # Track which _PLAN_REQUIRED_TOOLS have been gate-rejected this turn.
         # On a second rejection of the same tool, strengthen the message to

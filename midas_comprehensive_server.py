@@ -2699,6 +2699,79 @@ async def midas_integrate_2d_to_1d(
 # Phase identification tool moved to analysis_utilities_server.py as identify_phases_basic
 # Use GSAS-II server for comprehensive phase identification
 
+def _probe_wavelength_from_hdf5(h5_path):
+    """Best-effort scan of an HDF5 file for the instrument's recorded incident
+    energy or wavelength, so calibration can proceed when the energy is not in
+    the filename. Returns (wavelength_angstrom, source_str) or (None, None).
+
+    Reading it from the instrument's own file (rather than the human's analysis
+    output) keeps an APEXA-vs-expert benchmark fair. Conservative by design:
+    only physically plausible scalar values are accepted (wavelength 0.05–3.0 Å,
+    energy 1–500 keV, with eV→keV auto-scaling), and the source path is reported
+    so the value can be sanity-checked rather than silently trusted.
+    """
+    try:
+        import h5py
+        import numpy as _np
+        from apexa_units import kev_to_angstrom
+    except Exception:
+        return None, None
+
+    WL_KEYS = ("wavelength", "lambda")
+    EN_KEYS = ("energy", "monochromator", "mono_energy",
+               "incident_energy", "beam_energy", "kev")
+    found = {"wl": None, "en": None}
+
+    def _scalar(v):
+        try:
+            if isinstance(v, bytes):
+                v = v.decode("utf-8", "ignore")
+            if isinstance(v, str):
+                return float(v.strip().split()[0])
+            arr = _np.asarray(v).ravel()
+            return float(arr[0]) if arr.size else None
+        except Exception:
+            return None
+
+    def _consider(name, value):
+        low = name.lower()
+        val = _scalar(value)
+        if val is None or val <= 0:
+            return
+        if any(k in low for k in WL_KEYS):
+            if 0.05 <= val <= 3.0 and found["wl"] is None:
+                found["wl"] = (val, f"HDF5 '{name}'")
+        elif any(k in low for k in EN_KEYS):
+            e = val / 1000.0 if val > 1000 else val   # eV → keV
+            if 1.0 <= e <= 500.0 and found["en"] is None:
+                found["en"] = (kev_to_angstrom(e), f"HDF5 '{name}' ({e:.4f} keV)")
+
+    try:
+        with h5py.File(str(h5_path), "r") as f:
+            for ak, av in f.attrs.items():
+                _consider(f"@{ak}", av)
+
+            def visit(name, obj):
+                try:
+                    if isinstance(obj, h5py.Dataset) and 0 < obj.size <= 16:
+                        _consider(name, obj[()])
+                except Exception:
+                    pass
+                try:
+                    for ak, av in obj.attrs.items():
+                        _consider(f"{name}@{ak}", av)
+                except Exception:
+                    pass
+
+            f.visititems(visit)
+    except Exception as e:
+        print(f"[wavelength probe] HDF5 scan failed: {e}", file=sys.stderr)
+        return None, None
+
+    # Prefer a directly-stored wavelength over one derived from energy.
+    return found["wl"] or found["en"] or (None, None)
+
+
 @mcp.tool()
 async def midas_auto_calibrate(
     image_file: str,
@@ -2718,7 +2791,9 @@ async def midas_auto_calibrate(
     make_plots: int = 0,
     save_plots_hdf: str = "",
     image_transform: str = "",
-    data_loc: str = ""
+    data_loc: str = "",
+    energy_kev: float = 0.0,
+    wavelength_angstrom: float = 0.0,
 ) -> str:
     """🔧 PRIMARY TOOL FOR FF-HEDM DETECTOR CALIBRATION (MIDAS Official)
 
@@ -3071,20 +3146,52 @@ async def midas_auto_calibrate(
                     print(f"⚠ Could not create symlink: {e}. Using original filename.", file=sys.stderr)
                     # Continue with original filename
 
-        # Extract energy/wavelength from original filename if symlink lost it
-        # Uses same regex as MIDAS AutoCalibrateZarr.py (handles 61p332keV, 61.332keV, 30keV)
-        _energy_from_filename = None
+        # ── Resolve X-ray wavelength (Å) from the best available source ──────
+        # Priority: explicit arg > filename keV token > HDF5 instrument metadata.
+        # A param file carries its own Wavelength, so we only inject --wavelength
+        # when none was supplied. Every source is logged so the value can be
+        # sanity-checked — APEXA never silently guesses (MIDAS rightly refuses).
+        from apexa_units import kev_to_angstrom
         original_stem = Path(original_filename).stem
-        energy_match = re.search(
-            r'(?:^|[_\-])([\d]+(?:[p.][\d]+)?)keV(?:[_\-.]|$)',
-            original_stem, re.IGNORECASE
-        )
-        if energy_match:
-            energy_kev = float(energy_match.group(1).replace('p', '.'))
-            if energy_kev > 0:
-                from apexa_units import kev_to_angstrom
-                _energy_from_filename = kev_to_angstrom(energy_kev)
-                print(f"✓ Extracted energy from original filename: {energy_kev} keV → λ = {_energy_from_filename:.6f} Å", file=sys.stderr)
+        _resolved_wl = None
+        _wl_source = None
+
+        # 1. Explicit override from the caller (energy_kev or wavelength_angstrom).
+        if wavelength_angstrom and wavelength_angstrom > 0:
+            _resolved_wl = float(wavelength_angstrom)
+            _wl_source = f"wavelength_angstrom arg ({_resolved_wl:.6f} Å)"
+        elif energy_kev and energy_kev > 0:
+            _resolved_wl = kev_to_angstrom(float(energy_kev))
+            _wl_source = f"energy_kev arg ({float(energy_kev):.4f} keV)"
+
+        # 2. keV token in the original filename (e.g. 61p332keV, 71.676keV).
+        if _resolved_wl is None:
+            energy_match = re.search(
+                r'(?:^|[_\-])([\d]+(?:[p.][\d]+)?)keV(?:[_\-.]|$)',
+                original_stem, re.IGNORECASE
+            )
+            if energy_match:
+                _kev_fn = float(energy_match.group(1).replace('p', '.'))
+                if _kev_fn > 0:
+                    _resolved_wl = kev_to_angstrom(_kev_fn)
+                    _wl_source = f"filename keV token ({_kev_fn} keV)"
+
+        # 3. Instrument metadata inside the HDF5 file itself. Fair for an
+        #    APEXA-vs-expert benchmark — it reads the scan's own recorded energy,
+        #    not the expert's analysis output. Only when no param file supplies it.
+        if _resolved_wl is None and not param_path:
+            _wl_probe, _probe_src = _probe_wavelength_from_hdf5(image_path)
+            if _wl_probe:
+                _resolved_wl = _wl_probe
+                _wl_source = _probe_src
+
+        if _resolved_wl:
+            print(f"✓ Wavelength resolved from {_wl_source}: λ = {_resolved_wl:.6f} Å",
+                  file=sys.stderr)
+        else:
+            print("  ⚠ No wavelength from arg / filename / HDF5 metadata. MIDAS "
+                  "will need a param file or will error. Pass energy_kev=<value> "
+                  "to set it explicitly.", file=sys.stderr)
 
         # Extract Lsd guess from original filename if present (e.g. 650mm, 210mm)
         lsd_match = re.search(
@@ -3107,9 +3214,9 @@ async def midas_auto_calibrate(
         if param_path:
             cmd.extend(["-paramFN", str(param_path)])
 
-        # Pass wavelength extracted from original filename if no param file
-        if _energy_from_filename and not param_path:
-            cmd.extend(["--wavelength", f"{_energy_from_filename:.6f}"])
+        # Inject the resolved wavelength when no param file carries one.
+        if _resolved_wl and not param_path:
+            cmd.extend(["--wavelength", f"{_resolved_wl:.6f}"])
 
         # Pass Lsd from original filename if no user-provided guess
         if lsd_match and lsd_guess >= 1000000 and not param_path:
