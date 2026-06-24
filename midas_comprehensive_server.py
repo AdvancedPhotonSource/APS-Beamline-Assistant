@@ -4608,8 +4608,8 @@ if a_trial is None:
         if cif_files:
             with open(cif_files[0]) as _cf:
                 _cif = _cf.read()
-            _ma = _re.search(r'_cell_length_a\\s+([\d.]+)', _cif)
-            _mb = _re.search(r'_cell_length_b\\s+([\d.]+)', _cif)
+            _ma = _re.search(r'_cell_length_a\\s+([\\d.]+)', _cif)
+            _mb = _re.search(r'_cell_length_b\\s+([\\d.]+)', _cif)
             if _ma:
                 a_trial = float(_ma.group(1))
             if _mb and abs(float(_mb.group(1)) - a_trial) > 0.02:
