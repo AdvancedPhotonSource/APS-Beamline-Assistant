@@ -11,6 +11,7 @@ import asyncio
 import json
 import os
 import sys
+import shutil
 import re
 from typing import Optional, Dict, Any, List
 from contextlib import AsyncExitStack
@@ -253,8 +254,9 @@ def _print_help():
     _cmd("monitor stop | status | check", "Control monitoring")
 
     _sec("Sessions")
-    _cmd("session save [name]", "Save current session")
-    _cmd("session load <name>", "Load saved session")
+    _cmd("session save [name]", "Save current session (with conversation)")
+    _cmd("session load <name>", "Load & resume a saved session")
+    _cmd("session resume", "Resume last session (autosaved on exit)")
     _cmd("session list | summary", "Manage sessions")
 
     _sec("Configuration")
@@ -330,6 +332,86 @@ class ExperimentContext:
             "key_findings": [],
             "active_files": []
         }
+        # Conversation transcript stashed by load_session() for the caller to
+        # replay into the orchestrator. Empty until a session is loaded.
+        self.loaded_conversation: List[Dict] = []
+        # Compacted running summary stashed by load_session() (the digest of
+        # turns older than the recent window). Empty until a session is loaded.
+        self.loaded_summary: str = ""
+
+        # Append-only transcript model: exactly one "active" session is being
+        # written at a time. Starts as the rolling autosave slot; a named
+        # `session save` switches the active session to that name.
+        self.active_session: str = "_autosave"
+        # Pointer to the most-recently-active session so `session resume`
+        # (no name) can find it across restarts.
+        self._last_pointer = self.session_dir / ".last_session"
+
+    def _transcript_file(self, name: str) -> Path:
+        """Path to a session's append-only JSONL transcript."""
+        return self.session_dir / f"{name}.jsonl"
+
+    def _remember_active(self):
+        """Record the active session name so `session resume` can find it."""
+        try:
+            self._last_pointer.write_text(self.active_session)
+        except Exception:
+            pass  # pointer is a convenience, never fatal
+
+    def last_active(self) -> str:
+        """Most-recently-active session name (for `session resume`)."""
+        try:
+            name = self._last_pointer.read_text().strip()
+            return name or "_autosave"
+        except Exception:
+            return "_autosave"
+
+    def append_message(self, role: str, content: str):
+        """Append one message to the active session's append-only transcript.
+
+        This is the source of truth for the conversation. Each line is a
+        self-contained JSON record, flushed and fsync'd immediately, so a
+        crash (even kill -9) loses at most the single in-flight message and
+        never corrupts earlier turns — the modern JSONL transcript pattern.
+        """
+        try:
+            rec = {
+                "ts": datetime.now().isoformat(),
+                "role": role,
+                "content": content,
+            }
+            target = self._transcript_file(self.active_session)
+            with open(target, "a") as f:
+                f.write(json.dumps(rec) + "\n")
+                f.flush()
+                os.fsync(f.fileno())
+            self._remember_active()
+        except Exception as e:
+            print(f"  {C.DIM}(transcript append skipped: {e}){C.RESET}",
+                  file=sys.stderr)
+
+    def read_transcript(self, name: str) -> List[Dict]:
+        """Read a full append-only transcript back as [{role, content}, ...].
+
+        Tolerates a torn final line (from a crash mid-write) by skipping
+        any line that does not parse — earlier lines are always intact.
+        """
+        target = self._transcript_file(name)
+        if not target.exists():
+            return []
+        msgs: List[Dict] = []
+        with open(target) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue  # torn final line — ignore, keep the rest
+                if isinstance(rec, dict) and "role" in rec and "content" in rec:
+                    msgs.append({"role": rec["role"], "content": rec["content"]})
+        return msgs
 
     def update(self, key: str, value: Any):
         """Update experiment metadata"""
@@ -350,29 +432,94 @@ class ExperimentContext:
             "finding": finding
         })
 
-    def save_session(self, session_name: str = None):
-        """Save current session to disk"""
+    def save_session(self, session_name: str = None,
+                     conversation: List[Dict] = None,
+                     summary: str = None):
+        """Save current session to disk.
+
+        Writes the experiment metadata AND, when provided, the full
+        conversation transcript so the session can be genuinely resumed
+        (the model sees its prior turns), not just summarised.
+        """
         if not session_name:
             session_name = f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
-        session_file = self.session_dir / f"{session_name}.json"
-        with open(session_file, 'w') as f:
-            json.dump(self.metadata, f, indent=2)
+        # Build the metadata sidecar without mutating live metadata. The JSONL
+        # transcript (written per-message) is the source of truth for the
+        # conversation; conversation_history here is a convenience snapshot.
+        record = dict(self.metadata)
+        record["saved_at"] = datetime.now().isoformat()
+        if conversation is not None:
+            record["conversation_history"] = conversation
+        if summary is not None:
+            record["running_summary"] = summary
 
+        session_file = self.session_dir / f"{session_name}.json"
+        # Atomic write: tmp then replace, so an interrupted save never leaves a
+        # half-written (unparseable) sidecar.
+        tmp_file = session_file.with_suffix(".json.tmp")
+        with open(tmp_file, 'w') as f:
+            json.dump(record, f, indent=2)
+        os.replace(tmp_file, session_file)
+
+        # Named checkpoint: copy the active append-only transcript under the new
+        # name and switch the active session to it, so subsequent turns continue
+        # appending to <name>.jsonl. (No-op when saving the already-active slot,
+        # e.g. autosave.)
+        if session_name != self.active_session:
+            src = self._transcript_file(self.active_session)
+            dst = self._transcript_file(session_name)
+            try:
+                if src.exists() and src.resolve() != dst.resolve():
+                    shutil.copyfile(src, dst)
+            except Exception as e:
+                print(f"  {C.DIM}(transcript checkpoint skipped: {e}){C.RESET}",
+                      file=sys.stderr)
+            self.active_session = session_name
+        self._remember_active()
+
+        # Full transcript becomes the canonical restored conversation.
+        self.loaded_conversation = self.read_transcript(session_name) or \
+            (list(conversation) if conversation else [])
         return session_file
 
     def load_session(self, session_name: str):
-        """Load a previous session"""
-        session_file = self.session_dir / f"{session_name}.json"
-        if session_file.exists():
-            with open(session_file, 'r') as f:
-                self.metadata = json.load(f)
-            return True
-        return False
+        """Load a previous session and make it the active one.
+
+        Prefers the full append-only JSONL transcript; falls back to the
+        conversation snapshot embedded in the .json sidecar (older sessions
+        saved before JSONL existed). Stashes the restored conversation on
+        self.loaded_conversation for the caller to hand to the orchestrator.
+        Returns True if either artifact exists.
+        """
+        json_file = self.session_dir / f"{session_name}.json"
+        jsonl_file = self._transcript_file(session_name)
+        if not json_file.exists() and not jsonl_file.exists():
+            return False
+
+        snapshot_fallback: List[Dict] = []
+        self.loaded_summary = ""
+        if json_file.exists():
+            with open(json_file, 'r') as f:
+                data = json.load(f)
+            snapshot_fallback = data.pop("conversation_history", [])
+            self.loaded_summary = data.pop("running_summary", "")
+            self.metadata = data
+
+        # Prefer the complete transcript; fall back to the sidecar snapshot.
+        transcript = self.read_transcript(session_name)
+        self.loaded_conversation = transcript if transcript else snapshot_fallback
+
+        # Continue this session: subsequent turns append to its transcript.
+        self.active_session = session_name
+        self._remember_active()
+        return True
 
     def list_sessions(self) -> List[str]:
-        """List all available sessions"""
-        return [f.stem for f in self.session_dir.glob("*.json")]
+        """List all saved sessions (the _autosave slot is hidden)."""
+        names = {f.stem for f in self.session_dir.glob("*.json")}
+        names |= {f.stem for f in self.session_dir.glob("*.jsonl")}
+        return sorted(n for n in names if n != "_autosave")
 
     def get_summary(self) -> str:
         """Get a summary of current experiment"""
@@ -1434,6 +1581,27 @@ class APEXAClient:
         return await self.orchestrator.process(query, provider, use_history,
                                                on_tool_result=on_tool_result)
 
+    def _autosave_session(self):
+        """Persist the live conversation to the _autosave slot.
+
+        Refreshes the metadata sidecar for the *active* session (the full
+        conversation is already on disk via the per-message JSONL transcript).
+        Called after every turn and on every exit path so a session is never
+        silently lost — even if the user never runs 'session save'. Recover
+        with 'session resume'. Best-effort: a failed autosave must never crash
+        the CLI or mask the user's actual exit.
+        """
+        try:
+            if not self.orchestrator:
+                return
+            convo = self.orchestrator.export_history()
+            if not convo:
+                return
+            self.context.save_session(self.context.active_session,
+                                      conversation=convo,
+                                      summary=self.orchestrator.export_summary())
+        except Exception as e:
+            print(f"  {C.DIM}(autosave skipped: {e}){C.RESET}", file=sys.stderr)
 
     def show_available_models(self):
         print(f"\n  {C.BOLD}Available Argo Models{C.RESET}")
@@ -1509,6 +1677,7 @@ class APEXAClient:
                     history.append(user_input)
                 
                 if user_input.lower() == 'quit':
+                    self._autosave_session()
                     break
                 elif user_input.lower() == 'clear':
                     if self.orchestrator:
@@ -1611,19 +1780,36 @@ class APEXAClient:
 
                     if action == 'save':
                         session_name = session_cmd[1] if len(session_cmd) > 1 else None
-                        saved_file = self.context.save_session(session_name)
-                        print(f"  {C.GREEN}✓{C.RESET} Session saved: {C.CYAN}{saved_file}{C.RESET}")
+                        convo = self.orchestrator.export_history() if self.orchestrator else []
+                        summ = self.orchestrator.export_summary() if self.orchestrator else ""
+                        saved_file = self.context.save_session(
+                            session_name, conversation=convo, summary=summ)
+                        extra = f", +summary" if summ else ""
+                        print(f"  {C.GREEN}✓{C.RESET} Session saved: {C.CYAN}{saved_file}{C.RESET} "
+                              f"{C.DIM}({len(convo)} messages{extra}){C.RESET}")
 
-                    elif action == 'load':
-                        if len(session_cmd) < 2:
+                    elif action in ('load', 'resume'):
+                        # 'resume' with no name reloads the most-recent session.
+                        if action == 'resume' and len(session_cmd) < 2:
+                            session_name = self.context.last_active()
+                        elif len(session_cmd) < 2:
                             print("Usage: session load <session_name>")
                             continue
-                        session_name = session_cmd[1]
+                        else:
+                            session_name = session_cmd[1]
                         if self.context.load_session(session_name):
-                            print(f"  {C.GREEN}✓{C.RESET} Session loaded: {C.CYAN}{session_name}{C.RESET}")
+                            restored = self.context.loaded_conversation
+                            restored_summary = self.context.loaded_summary
+                            if self.orchestrator:
+                                self.orchestrator.import_history(restored)
+                                self.orchestrator.import_summary(restored_summary)
+                            extra = ", +summary" if restored_summary else ""
+                            print(f"  {C.GREEN}✓{C.RESET} Session loaded: {C.CYAN}{session_name}{C.RESET} "
+                                  f"{C.DIM}({len(restored)} messages restored{extra}){C.RESET}")
                             print(self.context.get_summary())
                         else:
-                            print(f"  {C.RED}✗{C.RESET} Session not found: {session_name}")
+                            where = "autosave" if session_name == "_autosave" else session_name
+                            print(f"  {C.RED}✗{C.RESET} Session not found: {where}")
 
                     elif action == 'list':
                         sessions = self.context.list_sessions()
@@ -1972,14 +2158,21 @@ class APEXAClient:
                         print(f"  {C.RED}✗{C.RESET} Core server not connected")
 
                 elif user_input:
+                    # Append-only transcript: record the prompt before running
+                    # so a crash mid-turn still leaves the question on disk.
+                    self.context.append_message("user", user_input)
                     response = await self.run_query(user_input)
                     print(f"\n{clean_markdown(response)}\n")
-                    
+                    self.context.append_message("assistant", response)
+                    self._autosave_session()
+
             except KeyboardInterrupt:
-                print(f"\n  {C.DIM}Exiting...{C.RESET}")
+                self._autosave_session()
+                print(f"\n  {C.DIM}Exiting... (resume with 'session resume'){C.RESET}")
                 break
             except EOFError:
-                print(f"\n  {C.DIM}Exiting...{C.RESET}")
+                self._autosave_session()
+                print(f"\n  {C.DIM}Exiting... (resume with 'session resume'){C.RESET}")
                 break
             except Exception as e:
                 print(f"  {C.RED}✗{C.RESET} {C.BOLD}Error:{C.RESET} {str(e)}")

@@ -43,6 +43,7 @@ dependencies = [
     "autogen-agentchat>=0.7.5",
     "autogen-ext>=0.7.5",
     "einops>=0.8.2",
+    "midas-suite[ff]>=0.3.16",
 ]
 
 [project.optional-dependencies]

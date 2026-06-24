@@ -183,6 +183,10 @@ unknown_integration/
 # Benchmark suite lives in the CS-APEXA-Bench repo, not here
 benchmark/
 
+# Internal release admin paperwork (Argonne Inventor Portal disclosures,
+# DOECode submission drafts, IPDG correspondence) — not for public repo
+release/
+
 # Tutorials-demo: defer new presentation generators/decks to a later release
 tutorials-demo/apexa_aps_presentation.py
 tutorials-demo/apexa_architecture_diagrams.py

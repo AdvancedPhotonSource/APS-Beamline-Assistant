@@ -1248,7 +1248,8 @@ class AgentRunner:
                   history: Optional[List[Dict]] = None,
                   max_iterations: int = 10,
                   log_entry: Optional[InteractionEntry] = None,
-                  on_tool_result: OnToolResultFn = None) -> str:
+                  on_tool_result: OnToolResultFn = None,
+                  history_summary: str = "") -> str:
 
         tools = self._filter_tools(agent.tool_names, all_tools)
 
@@ -1284,6 +1285,19 @@ class AgentRunner:
             system_content += f"\n\nYour available tools:\n" + "\n".join(tool_entries)
 
         messages = [{"role": "system", "content": system_content}]
+        # Compacted summary of older turns (from the orchestrator). Injected as
+        # a second system message so it is never dropped by _select_history and
+        # always frames the recent verbatim turns. Carries load-bearing facts
+        # (energy, paths, calibration params) from beyond the recent window.
+        if history_summary:
+            messages.append({
+                "role": "system",
+                "content": (
+                    "Summary of earlier conversation in this session "
+                    "(older turns, compacted — treat as established context):\n"
+                    + history_summary
+                ),
+            })
         if history:
             # Motor/viz agents need less history (repetitive commands confuse the model)
             hist_limit = 4 if agent.name in ("MotorAgent", "VisualizationAgent") else 8
@@ -1949,15 +1963,132 @@ class OrchestratorAgent:
         self.all_tools = all_tools
         self.context   = context
         self.conversation_history: List[Dict] = []
+        # Running compacted summary of turns older than the recent window.
+        # Built incrementally by _compact_history(); injected into model
+        # context by the runner so long sessions retain early facts without
+        # unbounded token cost.
+        self.running_summary: str = ""
         self.logger    = InteractionLogger()
         self._last_agent: Optional[APEXAAgent] = None
         self._last_turn_had_tool_error: bool = False
         self._execute  = execute_tool_fn
 
+    # Context-window management knobs (modern summarize-older + keep-recent).
+    _KEEP_RECENT: int = 8       # messages kept verbatim in model context
+    _COMPACT_TRIGGER: int = 16  # compact once history grows beyond this
+
     def clear_history(self):
         self.conversation_history = []
+        self.running_summary = ""
         self._last_agent = None
         self._last_turn_had_tool_error = False
+
+    def export_history(self) -> List[Dict]:
+        """Return the conversation history for session persistence.
+
+        Returns a shallow copy so the caller can serialize it without racing
+        against in-flight turns mutating the live list.
+        """
+        return list(self.conversation_history)
+
+    def import_history(self, history: List[Dict]):
+        """Restore conversation history from a saved/auto-saved session.
+
+        Keeps only the last 12 messages — the same working-context cap the
+        process loop enforces (see conversation_history truncation) so a
+        resumed session feeds the model the same amount of context a live
+        one would, regardless of how long the saved transcript is.
+        """
+        if not history:
+            return
+        cleaned = [
+            m for m in history
+            if isinstance(m, dict) and "role" in m and "content" in m
+        ]
+        # Keep the recent verbatim window; older turns are carried by the
+        # restored running_summary (see import_summary), matching how a live
+        # session would present them after compaction.
+        self.conversation_history = cleaned[-self._KEEP_RECENT:]
+
+    def export_summary(self) -> str:
+        """Return the running compacted summary for session persistence."""
+        return self.running_summary
+
+    def import_summary(self, summary: str):
+        """Restore the running compacted summary from a saved session."""
+        self.running_summary = summary or ""
+
+    async def _compact_history(self, provider: "ArgoProvider"):
+        """Summarize-older + keep-recent context management.
+
+        When the conversation grows beyond _COMPACT_TRIGGER, fold every message
+        older than the recent window into self.running_summary via one LLM call
+        and drop them from conversation_history. This replaces the old hard
+        12-message truncation, so a long beamline session keeps early
+        load-bearing facts (beam energy, file paths, calibration params,
+        decisions) instead of silently forgetting them. Best-effort: if the
+        summarization call fails, fall back to a hard trim so memory stays
+        bounded and the turn still completes.
+        """
+        if len(self.conversation_history) <= self._COMPACT_TRIGGER:
+            return
+        keep = self.conversation_history[-self._KEEP_RECENT:]
+        older = self.conversation_history[:-self._KEEP_RECENT]
+        if not older:
+            return
+        new_summary = await self._summarize_messages(older, provider)
+        if new_summary:
+            self.running_summary = new_summary
+            self.conversation_history = keep
+        else:
+            # Summarization unavailable — stay bounded rather than grow forever.
+            self.conversation_history = self.conversation_history[-self._COMPACT_TRIGGER:]
+
+    async def _summarize_messages(self, messages: List[Dict],
+                                  provider: "ArgoProvider") -> str:
+        """Fold `messages` (and any prior summary) into one concise summary.
+
+        The prompt is tuned for beamline work: it must preserve concrete
+        values, not prose — paths, numbers, units, calibrant/sample names,
+        tool successes/failures, and open tasks.
+        """
+        convo_text = "\n".join(
+            f"{m.get('role','?')}: {m.get('content','')}" for m in messages
+        )
+        sys_msg = {
+            "role": "system",
+            "content": (
+                "You compact a synchrotron beamline assistant's conversation "
+                "into a dense factual summary so the assistant can continue "
+                "without re-reading older turns. PRESERVE every concrete fact "
+                "needed to keep working: file and directory paths, numeric "
+                "parameters with units (beam energy keV, wavelength Å, detector "
+                "distance, beam center, lattice parameters, tilts), calibrant "
+                "and sample names, which tools were run and whether they "
+                "succeeded or failed (with the error), decisions made, and any "
+                "open/next tasks. Drop pleasantries and restating of the "
+                "obvious. Merge the PRIOR SUMMARY with the NEW MESSAGES into a "
+                "single updated summary. Output plain text, no markdown "
+                "headers, at most ~250 words."
+            ),
+        }
+        user_msg = {
+            "role": "user",
+            "content": (
+                (f"PRIOR SUMMARY:\n{self.running_summary}\n\n"
+                 if self.running_summary else "")
+                + f"NEW MESSAGES TO FOLD IN:\n{convo_text}\n\n"
+                "Produce the updated summary."
+            ),
+        }
+        try:
+            resp = await provider.chat([sys_msg, user_msg], temperature=0.2)
+            return self.runner._strip_tool_calls_from_text(
+                resp.content or ""
+            ).strip()
+        except Exception as e:
+            print(f"[compaction] summarization failed: {e}", file=sys.stderr)
+            return ""
 
     def _score_route(self, query: str) -> tuple:
         """Return (best_domain, scores_dict) — pure scoring, no fallback."""
@@ -2302,6 +2433,7 @@ class OrchestratorAgent:
             agent, query, provider, self.all_tools, history,
             log_entry=log_entry,
             on_tool_result=on_tool_result,
+            history_summary=self.running_summary if use_history else "",
         )
 
         # Track whether this turn had any tool errors — used by _route() on
@@ -2324,11 +2456,9 @@ class OrchestratorAgent:
                 {"role": "user",      "content": query},
                 {"role": "assistant", "content": result},
             ])
-            # Cap at 12 messages (6 exchanges); the runner does its own
-            # smart selection on top of this so the first user query and the
-            # most recent turns both survive.
-            if len(self.conversation_history) > 12:
-                self.conversation_history = self.conversation_history[-12:]
+            # Summarize-older + keep-recent: fold overflow into running_summary
+            # rather than dropping it (replaces the old hard 12-msg truncation).
+            await self._compact_history(provider)
 
         if self.context:
             self.context.add_analysis(agent.name, result)
