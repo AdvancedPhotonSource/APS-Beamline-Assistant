@@ -489,6 +489,14 @@ async def read_file(file_path: str, encoding: str = "utf-8", max_size: int = 102
         if not path.is_file():
             return format_result({"error": f"Path is not a file: {file_path}"})
 
+        # Transparently route document formats to read_document so the caller
+        # gets text even if it reached for the wrong tool (PDFs/Office files are
+        # binary and would otherwise fail the binary check below).
+        _DOC_EXTS = {".pdf", ".pptx", ".docx", ".xlsx", ".odt", ".odp",
+                     ".ods", ".rtf"}
+        if path.suffix.lower() in _DOC_EXTS:
+            return await read_document(str(path))
+
         file_size = path.stat().st_size
         if file_size > max_size:
             return format_result({"error": f"File too large ({file_size} bytes > {max_size} bytes limit)"})
@@ -497,7 +505,9 @@ async def read_file(file_path: str, encoding: str = "utf-8", max_size: int = 102
         with open(path, 'rb') as f:
             sample = f.read(1024)
             if b'\x00' in sample:
-                return format_result({"error": f"File appears to be binary: {file_path}"})
+                return format_result({
+                    "error": f"File appears to be binary: {file_path}. "
+                             "If this is a document, use read_document instead."})
 
         # Read text file
         with open(path, 'r', encoding=encoding) as f:
