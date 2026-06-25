@@ -2577,12 +2577,14 @@ async def midas_integrate_2d_to_1d(
                 _out = (str(Path(result_folder).expanduser().absolute())
                         if result_folder
                         else str(image_path.parent / "integration"))
-                # Force-pip: run the in-process pip engine even on CPU-only hosts
-                # (force_native=True bypasses the accelerator/pixel-budget gate).
-                # A single 2D→1D cake is affordable on CPU and this avoids the
-                # legacy C++ integrator.py + its separate detector-mapping step.
-                # Set APEXA_FORCE_LEGACY_MIDAS=1 to pin the C++ integrator.
-                _force_legacy_int = os.environ.get("APEXA_FORCE_LEGACY_MIDAS") == "1"
+                # Hybrid by design (NOT force-pip): native PyTorch only when a
+                # GPU/accelerator is present; on CPU hosts the native engine's
+                # pixel-budget gate refuses and we fall through to the legacy
+                # C++ integrator.py. This is deliberate — the C++ integrator is
+                # the fast CPU path at batch scale (e.g. 1900+ frame echem
+                # scans) AND matches the engine human pipelines use, keeping an
+                # APEXA-vs-expert benchmark apples-to-apples. (Calibration, which
+                # runs once, does force-pip; integration does not.)
                 result_dict = native_integrate_2d_to_1d(
                     image_file=str(image_path),
                     calibration_file=str(param_path),
@@ -2591,7 +2593,6 @@ async def midas_integrate_2d_to_1d(
                     out_name=out_name,
                     r_min=r_min, r_max=r_max, r_bin_size=r_bin_size,
                     eta_min=eta_min, eta_max=eta_max, eta_bin_size=eta_bin_size,
-                    force_native=not _force_legacy_int,
                 )
                 return format_result(result_dict)
             except MidasEngineUnavailable as e:
