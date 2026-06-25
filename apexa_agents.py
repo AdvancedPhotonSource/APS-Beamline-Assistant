@@ -1148,6 +1148,56 @@ class AgentRunner:
             calls.append(ToolCall(id=f"text_tc_{n}", name=name, arguments=args))
             n += 1
 
+        # ── Format D (last resort): decorated UI-style rendering ─────────────
+        # The model sometimes mimics APEXA's own tool-call UI instead of
+        # emitting a real call, e.g.:
+        #     │ 🛠️ │ list_directory │ │
+        #     ─── json ───
+        #     { "path": "..." }
+        #     ───────────
+        # Only run when nothing else matched: find a line that is JUST a tool
+        # name (after stripping box-drawing/emoji/punctuation) followed within a
+        # few lines by a JSON object.
+        if not calls:
+            _NON_TOOL_WORDS = {"json", "python", "bash", "arguments",
+                               "parameters", "tool", "tool_use", "tool_name",
+                               "status", "result", "note", "output"}
+            lines = text.splitlines()
+            for li, line in enumerate(lines):
+                bare = re.sub(r'[^A-Za-z0-9_]+', ' ', line).strip()
+                if not re.fullmatch(r'[a-z][a-z0-9_]{2,40}', bare):
+                    continue
+                if bare in _NON_TOOL_WORDS:
+                    continue
+                # Look ahead for a balanced {...} JSON object, skipping blank /
+                # fence lines (e.g. "─── json ───").
+                buf, depth, started = [], 0, False
+                for nxt in lines[li + 1:li + 12]:
+                    s = nxt.strip()
+                    if not started and (not s or set(s) <= set("─-—= json")):
+                        continue
+                    for ch in nxt:
+                        if ch == "{":
+                            depth += 1
+                            started = True
+                        if started:
+                            buf.append(ch)
+                        if ch == "}":
+                            depth -= 1
+                    if started and depth <= 0:
+                        break
+                    if not started:
+                        break   # first real line wasn't a JSON opener — give up
+                if started and depth <= 0 and buf:
+                    try:
+                        args = json.loads("".join(buf))
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(args, dict):
+                        calls.append(ToolCall(id=f"text_tc_{n}", name=bare,
+                                              arguments=args))
+                        n += 1
+
         return calls
 
     def _strip_tool_calls_from_text(self, text: str) -> str:
