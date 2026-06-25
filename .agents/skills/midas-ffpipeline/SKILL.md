@@ -4,22 +4,38 @@ description: Run the MIDAS v11 differentiable PyTorch FF-HEDM pipeline (drop-in 
 compatibility: Requires MIDAS v11 + the midas_ff_pipeline package (packages/midas_ff_pipeline). PyTorch with CUDA recommended; CPU/MPS supported.
 metadata:
   author: pawan-tripathi
-  version: "1.0"
+  version: "1.1"
   midas-version: "11.0"
   package: "midas_ff_pipeline"
 ---
 
-## When to use this vs. legacy `ff_MIDAS.py`
+> ## ⚠ Consolidation in progress: `midas-ff-pipeline` → `midas-pipeline`
+> MIDAS v11 is retiring the standalone `midas-ff-pipeline` package; all FF-HEDM
+> orchestration is moving to **`midas-pipeline run --scan-mode ff`** (see
+> `packages/MIDAS_FF_PIPELINE_DEPRECATION_PLAN.md`). `midas-pipeline` already
+> covers ~90% of the surface, with multi-detector/batch being ported.
+>
+> **Default to [[midas-ff-hedm]] (`run_ff_hedm_full_workflow`)** — it wraps
+> `midas-pipeline` and is the consolidated path. Use **this** skill's
+> `run_ff_pipeline` (which still wraps `midas-ff-pipeline run`) only for the
+> advanced controls not yet surfaced on `run_ff_hedm_full_workflow`: explicit
+> solver/loss selection, multi-GPU sharding, NF-seeded cross-checks, and the
+> `status`/`reprocess`/`inspect`/`simulate` companion subcommands. As those land
+> in `midas-pipeline`, prefer [[midas-ff-hedm]].
 
-| Use **midas-ffpipeline** when... | Use legacy `run_ff_hedm_full_workflow` when... |
+## When to use this vs. `run_ff_hedm_full_workflow`
+
+| Use **`run_ff_pipeline`** (this skill) when... | Use **`run_ff_hedm_full_workflow`** ([[midas-ff-hedm]]) when... |
 |---|---|
-| Resuming a partially-completed run (`--resume auto/from`) | Single-shot run with no checkpointing needed |
-| Sharding across multiple GPUs (`--shard-gpus`) | CPU-only or single-GPU C-binary path |
-| Trying alternative solvers (LM, Adam, Nelder-Mead, batched LM) | Standard L-BFGS C-binary refinement is fine |
-| Trying alternative losses (angular / internal_angle) | Pixel residual matches C-binary parity |
+| Sharding across multiple GPUs (`--shard-gpus`) | Standard FF reconstruction (the default) |
+| Trying alternative solvers (LM, Adam, Nelder-Mead, batched LM) | Standard L-BFGS / c-omp refinement is fine |
+| Trying alternative losses (angular / internal_angle) | Pixel residual is fine |
 | Mixing FF-HEDM with NF cross-checks (`--nf-result-dir`) | FF-only, no NF companion data |
+| Single-block re-refinement via `refine_grain_lattice` | Whole-pipeline run |
 
-> **The MCP tool is `run_ff_pipeline`.** It wraps `python -m midas_ff_pipeline.cli run`.
+> **The MCP tool is `run_ff_pipeline`.** It wraps `midas-ff-pipeline run` (the
+> package being consolidated into `midas-pipeline`). Both tools support
+> `--resume auto/from`; resume alone is not a reason to pick one over the other.
 
 ---
 

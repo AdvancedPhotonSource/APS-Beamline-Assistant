@@ -40,10 +40,10 @@ Quality metric: **Rwp** (weighted profile R-factor). Lower is better: <5% excell
 
 ```
 Raw 2D detector image (rings)
-  ↓  midas_auto_calibrate (AutoCalibrateZarr.py)
+  ↓  midas_auto_calibrate (native midas_calibrate; AutoCalibrateZarr.py fallback)
 refined_MIDAS_params.txt (Lsd, BC, wavelength, tilts)
-  ↓  midas_integrate_2d_to_1d (IntegratorZarrOMP)
-*.caked.hdf.zarr.zip
+  ↓  midas_integrate_2d_to_1d (native midas_integrate; IntegratorZarrOMP fallback)
+*.caked.hdf.zarr.zip (v11 default: <stem>.zarr.zip)
   ├── REtaMap[1] = 2θ array (degrees)
   ├── REtaMap[3] = pixel area (mask)
   ├── OmegaSumFrame/ = intensity per (ω, η) slice

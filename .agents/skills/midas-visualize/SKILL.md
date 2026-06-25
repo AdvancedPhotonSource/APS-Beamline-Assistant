@@ -4,7 +4,7 @@ description: Visualize MIDAS diffraction data, integrated lineouts, calibration 
 compatibility: Requires midas_env conda environment (PyQt5, pyqtgraph, dash, plotly, zarr==2.18.3). All scripts in ~/Git/MIDAS/gui/ and ~/Git/MIDAS/gui/viewers/.
 metadata:
   author: pawan-tripathi
-  version: "1.0"
+  version: "2.0"
   midas-version: "11.0"
   manual: MIDAS/manuals/GUIs_and_Visualization.md
 ---
@@ -17,15 +17,39 @@ When running through APEXA, use the `run_midas_viewer` MCP tool instead of const
 manual Python commands. The tool handles MIDAS path resolution and Python environment
 automatically.
 
-Available viewer names: `plot_calibrant_results`, `plot_lineout_results`,
-`plot_lineout_comparison`, `plot_integrator_peaks`, `plot_caked_peaks`, `live_viewer`,
-`interactiveFFplotting`, `ff_asym_qt`, `nf_qt`
+**All 17 viewer names** (`run_midas_viewer(viewer=...)`):
+
+| Viewer | Kind | Input |
+|---|---|---|
+| `ff_asym_qt` | Qt GUI | raw 2D image |
+| `nf_qt` | Qt GUI | NF `.mic` |
+| `plot_lineout_results` | Qt GUI | `*_lineout.xy` (dir) |
+| `plot_lineout_comparison` | CLI | lineout + `--paramFN` |
+| `plot_integrator_peaks` | CLI | `*.zarr.zip` |
+| `plot_caked_peaks` | Qt GUI | caked zarr / dir |
+| `viz_caking` | Dash web | caked `*.zarr.zip` |
+| `plot_calibrant_results` | Qt GUI | `*corr.csv` |
+| `plot_phase_id_results` | Qt GUI | phase-id dir |
+| `interactiveFFplotting` | Dash web | FF result dir + zarr |
+| `PlotFFNF` | Qt GUI | FF+NF dir |
+| `live_viewer` | Qt/CLI | `lineout.bin` |
+| `plotGrains3d` | Plotly HTML | FF/PF result dir (`Grains.csv`) |
+| `plotFFSpots3d` | Plotly HTML | result dir (`InputAll.csv`) |
+| `plotFFSpots3dGrains` | Plotly HTML | result dir (`SpotMatrix.csv`+`Grains.csv`) |
+| `pfIntensityViewer` | Dash web | PF param file |
+| `peak_sigma_statistics` | CLI | results dir (`LayerNr_*`) |
 
 Example:
 ```
 TOOL_CALL: run_midas_viewer
 ARGUMENTS: {"viewer": "plot_lineout_results", "data_file": "/path/to/lineout.xy", "param_file": "/path/to/params.txt"}
 ```
+
+The Plotly viewers (`plotGrains3d`, `plotFFSpots3d`, `plotFFSpots3dGrains`) run to
+completion, write standalone `.html` into the result folder, and the tool returns
+the generated file paths in `html_files`. The Dash viewers (`viz_caking`,
+`pfIntensityViewer`, `interactiveFFplotting`) launch detached and print a localhost
+URL. Qt GUIs launch detached.
 
 ---
 
@@ -38,9 +62,14 @@ ARGUMENTS: {"viewer": "plot_lineout_results", "data_file": "/path/to/lineout.xy"
 | `*_lineout.bin` (GPU streaming, live) | `live_viewer.py` | `gui/viewers/` |
 | `*_caked.hdf.zarr.zip` (2D caked output) | `plot_integrator_peaks.py` or `viz_caking.py` | `gui/viewers/` |
 | `*_caked_peaks.h5` (fitted peaks) | `plot_caked_peaks.py` | `gui/viewers/` |
-| `*_corr.csv` (calibration residuals) | `plot_calibrant_results.py` | `gui/viewers/` |
+| `*corr.csv` (calibration residuals) | `plot_calibrant_results.py` | `gui/viewers/` |
+| `Grains.csv` (FF/PF result dir) | `plotGrains3d.py` (3D grain map → HTML) | `gui/viewers/` |
+| `InputAll.csv` (FF spots) | `plotFFSpots3d.py` (→ HTML) | `gui/viewers/` |
+| `SpotMatrix.csv` + `Grains.csv` | `plotFFSpots3dGrains.py` (spots by grain → HTML) | `gui/viewers/` |
 | `Grains.csv` + `SpotMatrix.csv` + `.zarr` | `interactiveFFplotting.py` (Dash browser) | `gui/viewers/` |
+| `LayerNr_*` result tree | `peak_sigma_statistics.py` (peak-width stats) | `gui/viewers/` |
 | NF `.mic` / `.map` microstructure | `nf_qt.py` | `gui/` |
+| FF + NF results (overlay) | `PlotFFNF.py` | `gui/viewers/` |
 | PF-HEDM sinograms / intensity | `pfIntensityViewer.py` | `gui/viewers/` |
 
 ---
@@ -154,13 +183,17 @@ python ~/Git/MIDAS/gui/viewers/viz_caking.py \
 
 ## 4. Calibration QC — `plot_calibrant_results.py`
 
-Quick scatter plot of lattice parameter vs η from `_corr.csv` (output of `CalibrantPanelShiftsOMP`):
+Quick scatter plot of lattice parameter vs η from `*corr.csv`. In v11 the corr.csv
+is produced by the native `midas_calibrate` engine / `CalibrantIntegratorOMP` (the
+archived `CalibrantPanelShiftsOMP` is no longer used):
 
 ```bash
 python ~/Git/MIDAS/gui/viewers/plot_calibrant_results.py \
     CeO2_000001..tif.corr.csv \
     --paramFN refined_MIDAS_params_CeO2.txt
 ```
+
+Via APEXA: `run_midas_viewer(viewer="plot_calibrant_results", data_file="<...corr.csv>")`.
 
 ---
 
@@ -223,6 +256,47 @@ Then open `http://localhost:8050` in browser.
 5. **Spot details table**: sortable/filterable table of all spots for selected grain
 
 ---
+
+## 6b. 3D grain / spot maps (Plotly HTML) — FF & PF results
+
+These take an FF/PF **result folder** (`-resultFolder`), write standalone
+interactive `.html`, and exit. Via APEXA the tool returns the generated files in
+`html_files`. Best first look at a finished reconstruction — no GUI/Qt needed.
+
+```
+run_midas_viewer(viewer="plotGrains3d",        data_file="/path/to/result_dir")
+run_midas_viewer(viewer="plotFFSpots3d",       data_file="/path/to/result_dir")
+run_midas_viewer(viewer="plotFFSpots3dGrains", data_file="/path/to/result_dir")
+```
+
+| Viewer | Reads | Produces |
+|---|---|---|
+| `plotGrains3d` | `Grains.csv` | `grains3DConfidence.html`, `grains3DID.html` — 3D grain centroids sized by GrainSize, colored by confidence / grain ID |
+| `plotFFSpots3d` | `InputAll.csv` | `spots3D.html`, `spots3D_polar.html` — all FF spots colored by ring number |
+| `plotFFSpots3dGrains` | `SpotMatrix.csv` + `Grains.csv` | `spots3Dgrains.html`, `spots3DgrainsSelector.html` — spots colored by grain, per-grain visibility toggles |
+
+> Requires `plotly` in `midas_env` (present by default). For PF V-map voxel
+> orientation/strain maps, render `v_map.h5` directly or use `pfIntensityViewer`.
+
+## 6c. PF-HEDM sinogram / intensity — `pfIntensityViewer.py` (Dash)
+
+```
+run_midas_viewer(viewer="pfIntensityViewer",
+                 data_file="<PF params.txt>",
+                 param_file="<result dir>")     # optional -resultDir
+```
+Launches a Dash web app (default port 8051) for browsing PF sinograms and
+per-voxel intensity. Detached — open the printed localhost URL.
+
+## 6d. Peak-width statistics — `peak_sigma_statistics.py`
+
+```
+run_midas_viewer(viewer="peak_sigma_statistics",
+                 data_file="<results dir with LayerNr_*>",
+                 param_file="<params.txt>")      # optional --paramFN
+```
+Aggregates fitted peak sigma (width) across `LayerNr_*` folders — a quick strain/
+microstructure-broadening QC after FF reconstruction.
 
 ## 7. NF-HEDM Viewer — `nf_qt.py`
 

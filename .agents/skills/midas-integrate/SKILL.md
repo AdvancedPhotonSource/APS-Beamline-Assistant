@@ -4,23 +4,35 @@ description: Integrate 2D diffraction images to 1D patterns using MIDAS. Use whe
 compatibility: Requires MIDAS v11 (FF_HEDM/workflows/), midas_env conda environment (zarr==2.18.3, numpy, scipy), calibrated params file from midas_auto_calibrate
 metadata:
   author: pawan-tripathi
-  version: "3.0"
+  version: "3.1"
   midas-version: "11.0"
+  package: "midas_integrate"
   manual: MIDAS/manuals/FF_Radial_Integration.md
 ---
 
 ## Integration Workflows (MIDAS v11)
 
-Two workflows depending on hardware and use case:
+In v11, single-frame integration is the **native `midas_integrate` package**, run
+in-process by APEXA (detector-map → integrate → 1D profile). The
+`integrator.py` script is the subprocess fallback when the package isn't
+importable; `midas_batch_integrate` and the GPU streaming path still use the
+scripts because they orchestrate multi-frame / multi-panel / auto-mapping work the
+single-frame package CLI doesn't cover.
 
-| | **Workflow A — GPU Streaming** | **Workflow B — CPU Batch** |
-|---|---|---|
-| Script | `FF_HEDM/workflows/integrator_batch_process.py` | `FF_HEDM/workflows/integrator.py` |
-| Best for | Real-time / high-throughput / large datasets | Post-experiment, single files, no GPU |
-| Engine | `IntegratorFitPeaksGPUStream` (CUDA) | `IntegratorZarrOMP` (OpenMP) |
-| MCP tool | *(call script via `run_command`)* | `midas_integrate_2d_to_1d` / `midas_batch_integrate` |
+| | **Native (single frame)** | **Workflow A — GPU Streaming** | **Workflow B — CPU Batch** |
+|---|---|---|---|
+| Path | `midas_integrate` in-process | `FF_HEDM/workflows/integrator_batch_process.py` | `FF_HEDM/workflows/integrator.py` |
+| Best for | One frame, laptop/beamline quick-check | Real-time / high-throughput | Post-experiment, many files |
+| Engine | PyTorch CSR integrator | `IntegratorFitPeaksGPUStream` (CUDA) | `IntegratorZarrOMP` (OpenMP) |
+| MCP tool | `midas_integrate_2d_to_1d` | *(script via `run_command`)* | `midas_batch_integrate` |
 
-> **The old `Integrator` C binary is gone — never use it.**
+Underlying package CLIs (the v11 substrate; called automatically — listed for
+`run_command` use): `midas-detector-mapper` (build `Map.bin`/`nMap.bin`),
+`midas-integrate` (integrate one frame), `midas-integrate-export-csv` (lineouts +
+REtaMap → CSV). `midas_integrate_2d_to_1d` runs the equivalent in-process.
+
+> **The old `Integrator` C binary is gone — never use it.** Set
+> `APEXA_USE_NATIVE_MIDAS=0` to force the `integrator.py` subprocess path.
 
 ---
 

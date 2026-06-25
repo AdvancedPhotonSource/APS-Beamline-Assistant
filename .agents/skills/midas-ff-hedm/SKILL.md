@@ -267,7 +267,7 @@ Typical APEXA session for FF-HEDM:
 2. **Integrate** — `midas_integrate_2d_to_1d` → produces `*_lineout.xy`, `*_caked.hdf.zarr.zip`
 3. **Reconstruct** — `run_ff_hedm_full_workflow` → produces `IndexBest.bin`, `OrientPosFit.bin`
 4. **Compare** — `read_grains_summary` → compare to `GrainsSim.csv` ground truth
-5. **Visualize** — `run_midas_viewer(viewer="grain_map")` or plot OrientPosFit.bin
+5. **Visualize** — `run_midas_viewer(viewer="plotGrains3d", data_file="<result_dir>")` (3D grain map → HTML), or `plotFFSpots3dGrains` for spots-by-grain. See [[midas-visualize]].
 
 ---
 
