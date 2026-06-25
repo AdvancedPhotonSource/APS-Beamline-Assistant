@@ -1045,21 +1045,134 @@ class AgentRunner:
         names = set(tool_names)
         return [t for t in all_tools if t["function"]["name"] in names]
 
+    # Bare `TOOL_CALL: name` (any following args parsed separately — Format B).
+    _TOOL_CALL_NAME_RE = re.compile(r'TOOL_CALL:\s*([A-Za-z_]\w*)')
+    # Anthropic native tool block that leaks through Argo as plain text (Format C).
+    _TOOL_USE_XML_RE = re.compile(r'<tool_use>(.*?)</tool_use>', re.DOTALL)
+    # A `key: value` or `key = value` argument line (Format B body).
+    _KV_LINE_RE = re.compile(r'^[-*\s]*([A-Za-z_]\w*)\s*[:=]\s*(.+?)\s*$')
+
+    @staticmethod
+    def _coerce_arg_value(s: str):
+        """Coerce a bare string argument value to int/float/bool/null when it
+        clearly is one; otherwise return the de-quoted string. Keeps paths as
+        strings (they don't parse as numbers) but turns energy_kev: 61.332 into
+        a float, matching what ARGUMENTS:{json} would have produced."""
+        v = s.strip()
+        if len(v) >= 2 and v[0] in "\"'" and v[-1] == v[0]:
+            return v[1:-1]                       # de-quote, keep as string
+        low = v.lower()
+        if low in ("true", "false"):
+            return low == "true"
+        if low in ("null", "none"):
+            return None
+        try:
+            return int(v)
+        except ValueError:
+            pass
+        try:
+            return float(v)
+        except ValueError:
+            pass
+        return v
+
     def _parse_text_tool_calls(self, text: str) -> List[ToolCall]:
-        """Extract TOOL_CALL: / ARGUMENTS: pairs from model text output."""
-        calls = []
-        for i, match in enumerate(self._TOOL_CALL_RE.finditer(text)):
+        """Extract tool calls from model text output, tolerant of format drift.
+
+        Argo strips native tool_calls, so this text path is the only way tools
+        execute. Models (notably claudeopus47) drift between three surface forms;
+        we accept all of them:
+          A. TOOL_CALL: name  +  ARGUMENTS: {json}        (canonical)
+          B. TOOL_CALL: name  +  key: value lines         (no ARGUMENTS json)
+          C. <tool_use><tool_name>..</tool_name><parameters>..</parameters></tool_use>
+        """
+        calls: List[ToolCall] = []
+        n = 0
+        consumed_spans: List[tuple] = []   # (start,end) of Format-A matches
+
+        # ── Format A: TOOL_CALL: name + ARGUMENTS: {json} (primary) ──────────
+        for match in self._TOOL_CALL_RE.finditer(text):
             name = match.group(1).strip()
             try:
                 args = json.loads(match.group(2))
             except json.JSONDecodeError:
                 continue
-            calls.append(ToolCall(id=f"text_tc_{i}", name=name, arguments=args))
+            calls.append(ToolCall(id=f"text_tc_{n}", name=name, arguments=args))
+            n += 1
+            consumed_spans.append((match.start(), match.end()))
+
+        # ── Format B: TOOL_CALL: name followed by bare key:value lines ───────
+        for nm in self._TOOL_CALL_NAME_RE.finditer(text):
+            # Skip TOOL_CALL occurrences already handled by Format A.
+            if any(s <= nm.start() < e for s, e in consumed_spans):
+                continue
+            name = nm.group(1).strip()
+            args: Dict = {}
+            for line in text[nm.end():].splitlines():
+                ls = line.strip()
+                if not ls:
+                    if args:
+                        break          # blank line ends a populated arg block
+                    continue
+                if ls.startswith("<") or ls.upper().startswith("TOOL_CALL:"):
+                    break              # next call / XML / prose — stop
+                kv = self._KV_LINE_RE.match(ls)
+                if not kv:
+                    break              # first non key:value line ends the block
+                key = kv.group(1)
+                if key.lower() in ("tool_call", "arguments"):
+                    break
+                args[key] = self._coerce_arg_value(kv.group(2))
+            if args:
+                calls.append(ToolCall(id=f"text_tc_{n}", name=name, arguments=args))
+                n += 1
+
+        # ── Format C: <tool_use> XML block ──────────────────────────────────
+        for m in self._TOOL_USE_XML_RE.finditer(text):
+            body = m.group(1)
+            nm = re.search(r'<tool_name>\s*(.*?)\s*</tool_name>', body, re.DOTALL)
+            if not nm:
+                continue
+            name = nm.group(1).strip()
+            args = {}
+            pm = re.search(r'<parameters>(.*?)</parameters>', body, re.DOTALL)
+            if pm:
+                pbody = pm.group(1).strip()
+                try:
+                    parsed = json.loads(pbody)
+                    if isinstance(parsed, dict):
+                        args = parsed
+                except json.JSONDecodeError:
+                    for em in re.finditer(r'<(\w+)>(.*?)</\1>', pbody, re.DOTALL):
+                        args[em.group(1)] = self._coerce_arg_value(em.group(2).strip())
+            calls.append(ToolCall(id=f"text_tc_{n}", name=name, arguments=args))
+            n += 1
+
         return calls
 
     def _strip_tool_calls_from_text(self, text: str) -> str:
-        """Remove TOOL_CALL/ARGUMENTS blocks from text to get the prose part."""
-        clean = self._TOOL_CALL_RE.sub('', text).strip()
+        """Remove tool-call blocks (all 3 formats) to get the prose part."""
+        # Format A: TOOL_CALL: name + ARGUMENTS: {json}
+        clean = self._TOOL_CALL_RE.sub('', text)
+        # Format C: <tool_use>...</tool_use>
+        clean = self._TOOL_USE_XML_RE.sub('', clean)
+        # Format B: a bare `TOOL_CALL: name` and its trailing key:value lines.
+        out_lines: List[str] = []
+        skipping = False
+        for line in clean.splitlines():
+            ls = line.strip()
+            if ls.upper().startswith("TOOL_CALL:"):
+                skipping = True            # drop this line + following kv lines
+                continue
+            if skipping:
+                if not ls:
+                    skipping = False       # blank line ends the kv block
+                    continue
+                if self._KV_LINE_RE.match(ls):
+                    continue               # still inside the arg block — drop
+                skipping = False           # prose resumes — keep this line
+            out_lines.append(line)
+        clean = "\n".join(out_lines).strip()
         # Also remove common preamble patterns the model adds before tool calls
         clean = re.sub(r'(?:I\'ll|Let me|Let\'s)\s+.*?(?:\.|:)\s*$', '', clean, flags=re.MULTILINE).strip()
         return clean
