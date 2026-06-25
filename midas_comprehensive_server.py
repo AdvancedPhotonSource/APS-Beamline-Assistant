@@ -4302,6 +4302,11 @@ async def estimate_parameters_from_image(
 #   nf_qt                    positional: [.mic file]       — Qt GUI, detach
 #   PlotFFNF                 positional: directory
 #   plot_phase_id_results    positional: file
+#   plotGrains3d             flag: -resultFolder <dir>  (reads Grains.csv)
+#   plotFFSpots3d            flag: -resultFolder <dir>  (reads InputAll.csv)
+#   plotFFSpots3dGrains      flag: -resultFolder <dir>  (reads SpotMatrix.csv+Grains.csv)
+#   pfIntensityViewer        flag: -paramFile <txt> [-resultDir <dir>]  — Dash web app
+#   peak_sigma_statistics    positional: results_dir (LayerNr_* parent)
 _VIEWER_SCRIPTS = {
     "plot_calibrant_results":   "gui/viewers/plot_calibrant_results.py",
     "plot_lineout_results":     "gui/viewers/plot_lineout_results.py",
@@ -4315,6 +4320,14 @@ _VIEWER_SCRIPTS = {
     "nf_qt":                    "gui/nf_qt.py",
     "PlotFFNF":                 "gui/viewers/PlotFFNF.py",
     "plot_phase_id_results":    "gui/viewers/plot_phase_id_results.py",
+    # 3D grain/spot visualizers (Plotly → standalone .html, run to completion)
+    "plotGrains3d":             "gui/viewers/plotGrains3d.py",
+    "plotFFSpots3d":            "gui/viewers/plotFFSpots3d.py",
+    "plotFFSpots3dGrains":      "gui/viewers/plotFFSpots3dGrains.py",
+    # PF-HEDM sinogram / intensity viewer (Dash web app)
+    "pfIntensityViewer":        "gui/viewers/pfIntensityViewer.py",
+    # Peak sigma statistics (writes PNG/CSV, run to completion)
+    "peak_sigma_statistics":    "gui/viewers/peak_sigma_statistics.py",
 }
 
 # Viewers that are pure Qt GUIs: launched detached — do NOT wait for them.
@@ -4325,7 +4338,14 @@ _GUI_VIEWERS = {
 }
 
 # Viewers launched as web apps (Dash/Plotly): also detached, open browser.
-_WEB_VIEWERS = {"viz_caking"}
+_WEB_VIEWERS = {"viz_caking", "pfIntensityViewer"}
+
+# Plotly viewers that write standalone .html into the result folder and exit.
+# Run to completion (cwd = result folder) and report the generated .html files.
+_HTML_VIEWERS = {"plotGrains3d", "plotFFSpots3d", "plotFFSpots3dGrains"}
+
+# Viewers that take a result FOLDER via -resultFolder instead of a positional file.
+_RESULTFOLDER_VIEWERS = {"plotGrains3d", "plotFFSpots3d", "plotFFSpots3dGrains"}
 
 def _build_viewer_cmd(viewer: str, script_path: Path,
                       data_file: str, param_file: str,
@@ -4334,7 +4354,32 @@ def _build_viewer_cmd(viewer: str, script_path: Path,
     data_path = Path(data_file).expanduser().absolute()
     cmd: list = []
 
-    if viewer == "live_viewer":
+    if viewer in _RESULTFOLDER_VIEWERS:
+        # plotGrains3d / plotFFSpots3d / plotFFSpots3dGrains: -resultFolder <dir>.
+        # data_file is the FF/PF result folder containing Grains.csv / InputAll.csv
+        # / SpotMatrix.csv. If a file was passed, use its parent directory.
+        target = data_path if data_path.is_dir() else data_path.parent
+        cmd = [str(script_path), "-resultFolder", str(target)]
+
+    elif viewer == "pfIntensityViewer":
+        # PF sinogram/intensity Dash app: -paramFile <txt> [-resultDir <dir>].
+        # data_file is the parameter file; param_file (optional) is the result dir.
+        cmd = [str(script_path), "-paramFile", str(data_path)]
+        if param_file:
+            rd = Path(param_file).expanduser().absolute()
+            if rd.exists():
+                cmd.extend(["-resultDir", str(rd)])
+
+    elif viewer == "peak_sigma_statistics":
+        # positional: results_dir (parent of LayerNr_* folders); --paramFN optional
+        target = data_path if data_path.is_dir() else data_path.parent
+        cmd = [str(script_path), str(target)]
+        if param_file:
+            pf = Path(param_file).expanduser().absolute()
+            if pf.exists():
+                cmd.extend(["--paramFN", str(pf)])
+
+    elif viewer == "live_viewer":
         # live_viewer uses --lineout / --fit flags, not positional args
         cmd = [str(script_path), "--lineout", str(data_path)]
         if param_file:
@@ -4411,14 +4456,24 @@ async def run_midas_viewer(
     - nf_qt:                   NF-HEDM microstructure viewer (.mic file) [Qt GUI]
     - PlotFFNF:                FF+NF overlay viewer (directory) [Qt GUI]
     - plot_phase_id_results:   Phase identification results viewer [Qt GUI]
+    - plotGrains3d:            3D grain map from Grains.csv (result folder) → Plotly HTML
+    - plotFFSpots3d:           3D diffraction spots from InputAll.csv (result folder) → Plotly HTML
+    - plotFFSpots3dGrains:     3D spots colored by grain from SpotMatrix.csv (result folder) → Plotly HTML
+    - pfIntensityViewer:       PF-HEDM sinogram/intensity viewer (paramFile) [Dash web app]
+    - peak_sigma_statistics:   Peak-width (sigma) statistics over LayerNr_* (results dir)
 
     Args:
         viewer:     Viewer name (see list above)
-        data_file:  Path to the primary input file or directory
+        data_file:  Path to the primary input. For plotGrains3d/plotFFSpots3d/
+                    plotFFSpots3dGrains/peak_sigma_statistics this is the FF/PF
+                    RESULT FOLDER (containing Grains.csv/InputAll.csv/SpotMatrix.csv
+                    or LayerNr_* dirs). For pfIntensityViewer it is the parameter file.
         param_file: Secondary input — meaning depends on viewer:
                     - plot_lineout_comparison: path to params.txt (for ring overlay)
                                                OR second lineout .xy file
                     - live_viewer:             path to fit.bin (peak evolution panel)
+                    - pfIntensityViewer:       result directory (-resultDir)
+                    - peak_sigma_statistics:   path to params.txt (--paramFN)
                     - others: ignored
         extra_args: Extra CLI flags forwarded verbatim (e.g. "--nRBins 2000 --nPeaks 5")
 
@@ -4494,11 +4549,17 @@ async def run_midas_viewer(
 
         else:
             # Non-GUI: run to completion (plot_integrator_peaks, plot_lineout_comparison,
-            # live_viewer in non-interactive mode).
+            # live_viewer non-interactive, and the Plotly HTML 3D viewers).
+            # HTML viewers (plotGrains3d/...) write their .html into CWD, so run
+            # them inside the result folder and report the generated files.
+            is_html = viewer in _HTML_VIEWERS
+            run_cwd = str(data_path if data_path.is_dir() else data_path.parent) \
+                      if is_html else None
             result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=300, env=env
+                cmd, capture_output=True, text=True, timeout=300, env=env,
+                cwd=run_cwd,
             )
-            return format_result({
+            payload = {
                 "tool": "run_midas_viewer",
                 "status": "success" if result.returncode == 0 else "error",
                 "viewer": viewer,
@@ -4507,7 +4568,17 @@ async def run_midas_viewer(
                 "return_code": result.returncode,
                 "stdout": result.stdout[-1000:] if result.stdout else "",
                 "stderr": result.stderr[-500:] if result.stderr else "",
-            })
+            }
+            if is_html and result.returncode == 0 and run_cwd:
+                html_files = sorted(
+                    str(p) for p in Path(run_cwd).glob("*.html")
+                )
+                payload["html_files"] = html_files
+                payload["message"] = (
+                    f"Generated {len(html_files)} interactive Plotly HTML file(s) "
+                    f"in {run_cwd}. Open them in a browser."
+                )
+            return format_result(payload)
 
     except subprocess.TimeoutExpired:
         return format_result({
