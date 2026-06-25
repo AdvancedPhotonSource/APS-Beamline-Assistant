@@ -2577,6 +2577,12 @@ async def midas_integrate_2d_to_1d(
                 _out = (str(Path(result_folder).expanduser().absolute())
                         if result_folder
                         else str(image_path.parent / "integration"))
+                # Force-pip: run the in-process pip engine even on CPU-only hosts
+                # (force_native=True bypasses the accelerator/pixel-budget gate).
+                # A single 2D→1D cake is affordable on CPU and this avoids the
+                # legacy C++ integrator.py + its separate detector-mapping step.
+                # Set APEXA_FORCE_LEGACY_MIDAS=1 to pin the C++ integrator.
+                _force_legacy_int = os.environ.get("APEXA_FORCE_LEGACY_MIDAS") == "1"
                 result_dict = native_integrate_2d_to_1d(
                     image_file=str(image_path),
                     calibration_file=str(param_path),
@@ -2585,6 +2591,7 @@ async def midas_integrate_2d_to_1d(
                     out_name=out_name,
                     r_min=r_min, r_max=r_max, r_bin_size=r_bin_size,
                     eta_min=eta_min, eta_max=eta_max, eta_bin_size=eta_bin_size,
+                    force_native=not _force_legacy_int,
                 )
                 return format_result(result_dict)
             except MidasEngineUnavailable as e:
@@ -2770,6 +2777,126 @@ def _probe_wavelength_from_hdf5(h5_path):
 
     # Prefer a directly-stored wavelength over one derived from energy.
     return found["wl"] or found["en"] or (None, None)
+
+
+# ── pip midas-suite migration helpers ───────────────────────────────────────
+# Cubic calibrant standards → (SpaceGroup, lattice a in Å). Used to synthesize a
+# CalibrationParams .txt for the pip `midas-autocalibrate` console script when no
+# parameter file is supplied (the legacy AutoCalibrateZarr.py auto-detected these
+# itself; the pip CLI requires them in a params file).
+_CALIBRANT_DB = {
+    "CeO2": (225, 5.411651), "LaB6": (221, 4.156890), "Si": (227, 5.431020),
+    "Ni":   (225, 3.523870), "Al":   (225, 4.049500), "Au": (225, 4.078250),
+    "Cu":   (225, 3.615000), "W":    (229, 3.165000),
+}
+
+
+def _resolve_midas_cli(console_name: str, legacy_script=None):
+    """Prefer the pip `midas-suite` console script; fall back to a legacy
+    MIDAS_ROOT script ONLY when the console script is genuinely absent.
+    Returns (kind, path) where kind is "pip" | "legacy" | None."""
+    import shutil as _sh
+    exe = _sh.which(console_name)
+    if exe:
+        return ("pip", exe)
+    if legacy_script and Path(legacy_script).exists():
+        return ("legacy", str(legacy_script))
+    return (None, None)
+
+
+def _detect_calibrant_from_name(stem: str):
+    """Best-effort calibrant id from a filename stem (CeO2, LaB6, Si, …)."""
+    low = stem.lower()
+    for name in _CALIBRANT_DB:
+        if name.lower() in low:
+            return name
+    return "CeO2"   # overwhelmingly the default beamline calibrant
+
+
+def _detector_shape_and_px(image_path: Path):
+    """Return (ny, nz, px_microns) for a detector frame, best-effort.
+
+    Reads the array shape from HDF5 (largest 2D dataset) or a TIFF/GE header.
+    Pixel size: Varex 2880² → 150 µm, Pilatus/Eiger-ish → 172 µm, else 200 µm.
+    Conservative defaults so synthesis never hard-fails on a readable image."""
+    ny = nz = 2048
+    try:
+        suf = image_path.suffix.lower()
+        if suf in (".h5", ".hdf5", ".nxs"):
+            import h5py
+            with h5py.File(str(image_path), "r") as f:
+                best = [0, (2048, 2048)]
+                def _v(name, obj):
+                    try:
+                        if hasattr(obj, "shape") and len(obj.shape) >= 2:
+                            yx = obj.shape[-2:]
+                            if yx[0] * yx[1] > best[0]:
+                                best[0] = yx[0] * yx[1]
+                                best[1] = (int(yx[0]), int(yx[1]))
+                    except Exception:
+                        pass
+                f.visititems(_v)
+                ny, nz = best[1]
+        else:
+            try:
+                import fabio
+                arr = fabio.open(str(image_path)).data
+                ny, nz = int(arr.shape[0]), int(arr.shape[1])
+            except Exception:
+                pass
+    except Exception:
+        pass
+    if (ny, nz) == (2880, 2880):
+        px = 150.0
+    elif max(ny, nz) in (1475, 1679, 2167, 981, 1043):  # common Pilatus/Eiger
+        px = 172.0
+    else:
+        px = 200.0
+    return ny, nz, px
+
+
+def _synthesize_calibration_params(out_path: Path, *, calibrant: str,
+                                   wavelength: float, px_um: float,
+                                   ny: int, nz: int, lsd_um: float,
+                                   bc_y: float, bc_x: float,
+                                   eta_bin: float, n_iter: int, mult: float):
+    """Write a minimal MIDAS CalibrationParams .txt the pip `midas-autocalibrate`
+    CLI can consume. Returns (ok, error_str). Validates required fields are >0."""
+    try:
+        sg, a = _CALIBRANT_DB.get(calibrant, _CALIBRANT_DB["CeO2"])
+        wl = float(wavelength or 0.0)
+        if wl <= 0:
+            return False, "no wavelength available to synthesize params"
+        lsd = float(lsd_um) if lsd_um and lsd_um < 1_000_000 else 1_000_000.0
+        max_ring = 0.5 * (ny ** 2 + nz ** 2) ** 0.5
+        lines = [
+            f"SpaceGroup {sg}",
+            f"LatticeConstant {a:.6f} {a:.6f} {a:.6f} 90 90 90",
+            f"Wavelength {wl:.6f}",
+            f"Lsd {lsd:.1f}",
+            f"BC {bc_y:.2f} {bc_x:.2f}",
+            f"px {px_um:.2f}",
+            f"NrPixelsY {int(ny)}",
+            f"NrPixelsZ {int(nz)}",
+            f"MaxRingRad {max_ring:.1f}",
+            "MinRingRad 10",
+            f"EtaBinSize {eta_bin}",
+            f"nIterations {int(n_iter)}",
+            f"OutlierFactor {mult}",
+        ]
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text("\n".join(lines) + "\n")
+        # Optional validation if midas_calibrate is importable (never fatal).
+        try:
+            from midas_calibrate.params import CalibrationParams  # type: ignore
+            CalibrationParams.from_file(str(out_path)).validate()
+        except ImportError:
+            pass
+        except Exception as ve:
+            return False, f"synthesized params failed validation: {ve}"
+        return True, ""
+    except Exception as e:
+        return False, f"param synthesis error: {e}"
 
 
 @mcp.tool()
@@ -3315,28 +3442,93 @@ async def midas_auto_calibrate(
 
             work_dir = out_path
 
-        # ===== TRANSPARENCY: Show exact command being run =====
-        cmd_str = " ".join(str(x) for x in cmd)
-        print("="*70, file=sys.stderr)
-        print("🔧 MIDAS AUTO-CALIBRATION COMMAND:", file=sys.stderr)
-        print(f"   Working directory: {work_dir}", file=sys.stderr)
-        print(f"   Python: {cmd[0]}", file=sys.stderr)
-        print(f"   Script: {cmd[1]}", file=sys.stderr)
-        print(f"   Parameters:", file=sys.stderr)
-        for i in range(2, len(cmd), 2):
-            if i+1 < len(cmd) and cmd[i].startswith("-"):
-                print(f"      {cmd[i]} {cmd[i+1]}", file=sys.stderr)
-        print("="*70, file=sys.stderr)
+        # ── Engine selection: pip midas-autocalibrate (DEFAULT) → legacy C++ ──
+        # "Force pip everywhere": prefer the versioned pip console script over the
+        # hand-built C++ AutoCalibrateZarr.py (which drifts out of date). The pip
+        # CLI needs a CalibrationParams .txt, which we synthesize from the
+        # detected calibrant/wavelength/geometry when no param file was supplied.
+        # Falls back to legacy ONLY when the console script is absent or its
+        # setup/run fails — so this never breaks worse than the C++ path.
+        # Set APEXA_FORCE_LEGACY_MIDAS=1 to pin the C++ engine.
+        _force_legacy = os.environ.get("APEXA_FORCE_LEGACY_MIDAS") == "1"
+        _ac_kind, _ac_cli = (None, None) if _force_legacy else \
+            _resolve_midas_cli("midas-autocalibrate")
+        result = None
+        engine_used = None
 
-        # Run calibration with MIDAS environment
-        result = subprocess.run(
-            cmd,
-            cwd=str(work_dir),
-            capture_output=True,
-            text=True,
-            timeout=600,  # 10 minute timeout
-            env=get_midas_env()
-        )
+        if _ac_cli:
+            try:
+                _pip_params = param_path
+                if _pip_params is None:
+                    _calib = _detect_calibrant_from_name(original_stem)
+                    _ny, _nz, _px = _detector_shape_and_px(image_path)
+                    _bcy = bc_y_guess or (_nz / 2.0)
+                    _bcx = bc_x_guess or (_ny / 2.0)
+                    _lsd_um = (int(lsd_guess) if lsd_guess < 1_000_000
+                               else (lsd_from_filename if lsd_match else 1_000_000))
+                    _pip_params = work_dir / f"{image_path.stem}_autogen_calib_params.txt"
+                    _ok, _err = _synthesize_calibration_params(
+                        _pip_params, calibrant=_calib, wavelength=_resolved_wl,
+                        px_um=_px, ny=_ny, nz=_nz, lsd_um=_lsd_um,
+                        bc_y=_bcy, bc_x=_bcx, eta_bin=eta_bin_size,
+                        n_iter=n_iterations, mult=mult_factor)
+                    if not _ok:
+                        raise RuntimeError(_err)
+                    print(f"✓ Synthesized CalibrationParams for pip CLI: {_pip_params}"
+                          f" (calibrant={_calib}, λ={_resolved_wl})", file=sys.stderr)
+                _out_params = work_dir / "refined_MIDAS_params.txt"
+                _pip_cmd = [_ac_cli, str(_pip_params), "--image", str(image_path),
+                            "--n-iters", str(n_iterations),
+                            "--output", str(_out_params)]
+                if dark_file and Path(dark_file).expanduser().exists():
+                    _pip_cmd.extend(["--dark", str(Path(dark_file).expanduser().absolute())])
+                print("="*70, file=sys.stderr)
+                print("🔧 MIDAS CALIBRATION (pip midas-autocalibrate):", file=sys.stderr)
+                print(f"   Working directory: {work_dir}", file=sys.stderr)
+                print(f"   {' '.join(str(x) for x in _pip_cmd)}", file=sys.stderr)
+                print("="*70, file=sys.stderr)
+                # PyTorch calibration on CPU is slow — generous timeout (user
+                # accepted the CPU cost when choosing force-pip).
+                result = subprocess.run(_pip_cmd, cwd=str(work_dir),
+                                        capture_output=True, text=True,
+                                        timeout=3600, env=get_midas_env())
+                if result.returncode == 0:
+                    engine_used = "pip-console:midas-autocalibrate"
+                else:
+                    print(f"[engine] midas-autocalibrate exit {result.returncode}; "
+                          "falling back to legacy AutoCalibrateZarr.py", file=sys.stderr)
+                    for line in (result.stderr or "").strip().splitlines()[-12:]:
+                        print(f"  {line}", file=sys.stderr)
+                    result = None
+            except Exception as e:
+                print(f"[engine] pip console path error: {type(e).__name__}: {e};"
+                      " falling back to legacy", file=sys.stderr)
+                result = None
+
+        if result is None:
+            # ── Legacy C++ AutoCalibrateZarr.py (fallback) ────────────────────
+            cmd_str = " ".join(str(x) for x in cmd)
+            print("="*70, file=sys.stderr)
+            print("🔧 MIDAS AUTO-CALIBRATION COMMAND (legacy AutoCalibrateZarr.py):", file=sys.stderr)
+            print(f"   Working directory: {work_dir}", file=sys.stderr)
+            print(f"   Python: {cmd[0]}", file=sys.stderr)
+            print(f"   Script: {cmd[1]}", file=sys.stderr)
+            print(f"   Parameters:", file=sys.stderr)
+            for i in range(2, len(cmd), 2):
+                if i+1 < len(cmd) and cmd[i].startswith("-"):
+                    print(f"      {cmd[i]} {cmd[i+1]}", file=sys.stderr)
+            print("="*70, file=sys.stderr)
+            result = subprocess.run(
+                cmd,
+                cwd=str(work_dir),
+                capture_output=True,
+                text=True,
+                timeout=600,  # 10 minute timeout
+                env=get_midas_env()
+            )
+            engine_used = "legacy-cpp:AutoCalibrateZarr.py"
+
+        print(f"[engine] calibration engine: {engine_used}", file=sys.stderr)
 
         if result.returncode != 0:
             error_msg = f"Calibration failed with exit code {result.returncode}"
