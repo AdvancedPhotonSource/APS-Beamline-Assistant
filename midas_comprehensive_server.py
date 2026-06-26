@@ -3972,6 +3972,62 @@ async def midas_batch_integrate(
 
         _strip_empty_value_lines(param_path)
 
+        # ── Latest-first: midas-integrate-v2-batch when applicable ──────────
+        # The modern pip batch engine (subpixel binning, xye/csv/h5 output) is
+        # the default — BUT it cannot dark-subtract and ingests only 3-D stacks
+        # (zarr / hdf5-with-frames / tiff-glob). Per the latest-first +
+        # auto-fallback policy, use it ONLY when no dark/bright correction is
+        # requested and the input is a stack; any dark subtraction or MIDAS
+        # lineout/zarr (GSAS) need falls back to the legacy C++ integrator below.
+        import shutil as _sh
+        _v2b = _sh.which("midas-integrate-v2-batch")
+        _suffix = Path(data_file).suffix.lower()
+        _is_stack = _suffix in (".zip", ".zarr", ".h5", ".hdf5")
+        if _v2b and _is_stack and not dark_file and not bright_file:
+            try:
+                _out = Path(result_folder).resolve()
+                _out.mkdir(parents=True, exist_ok=True)
+                _cmd = [_v2b, str(Path(parameter_file).resolve())]
+                if _suffix in (".zip", ".zarr"):
+                    _cmd += ["--zarr", str(Path(data_file).resolve())]
+                else:
+                    _cmd += ["--hdf5", str(Path(data_file).resolve())]
+                    if data_location:
+                        _cmd += ["--hdf5-dataset",
+                                 data_location.strip("/").split("/")[-1] or "frames"]
+                _cmd += ["--out-dir", str(_out), "--mode", "subpixel",
+                         "--out-format", "xye"]
+                print("=" * 70, file=sys.stderr)
+                print("🔧 BATCH INTEGRATION (latest — midas-integrate-v2-batch, subpixel):",
+                      file=sys.stderr)
+                print("   " + " ".join(_cmd), file=sys.stderr)
+                print("   (PyTorch — slow on CPU for large stacks)", file=sys.stderr)
+                print("=" * 70, file=sys.stderr)
+                _pp = subprocess.run(_cmd, capture_output=True, text=True,
+                                     timeout=14400, env=get_midas_env())
+                if _pp.returncode == 0:
+                    _outs = sorted(str(p) for p in _out.glob("*.xye")) or \
+                        sorted(str(p) for p in _out.glob("*"))
+                    print("[engine] batch engine: pip-v2:midas-integrate-v2-batch",
+                          file=sys.stderr)
+                    return format_result({
+                        "tool": "midas_batch_integrate", "status": "success",
+                        "engine": "pip-v2:midas-integrate-v2-batch",
+                        "result_folder": str(_out), "n_outputs": len(_outs),
+                        "outputs": _outs[:20],
+                        "message": "Batch integrated via latest midas-integrate-v2-batch "
+                                   "(subpixel binning, xye output)."})
+                print(f"[engine] v2-batch exit {_pp.returncode}; falling back to legacy "
+                      "integrator.py", file=sys.stderr)
+                for _l in (_pp.stderr or "").strip().splitlines()[-10:]:
+                    print(f"  {_l}", file=sys.stderr)
+            except Exception as _e:
+                print(f"[engine] v2-batch error {type(_e).__name__}: {_e}; falling back "
+                      "to legacy integrator.py", file=sys.stderr)
+        elif _v2b and (dark_file or bright_file):
+            print("[engine] dark/bright correction requested → legacy integrator.py "
+                  "(midas-integrate-v2-batch cannot dark-subtract).", file=sys.stderr)
+
         # Find MIDAS integrator.py via MIDAS_ROOT (set from .env)
         if not MIDAS_ROOT:
             return format_result({"tool": "midas_batch_integrate", "status": "error",
