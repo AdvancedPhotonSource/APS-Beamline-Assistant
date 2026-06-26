@@ -780,14 +780,33 @@ async def websocket_endpoint(websocket: WebSocket):
                             context += "The user has loaded files in the image viewer. When they say 'this image' or 'the uploaded file', they mean:\n\n"
 
                         if image_cache:
-                            context += f"LOADED DIFFRACTION IMAGES:\n"
+                            context += f"LOADED DIFFRACTION IMAGES (already open in the viewer):\n"
                             for file_id in image_cache.keys():
                                 file_path = image_paths.get(file_id, "unknown")
-                                img_shape = image_cache[file_id].shape
+                                arr = image_cache[file_id]
+                                img_shape = arr.shape
+                                try:
+                                    finite = arr[np.isfinite(arr)]
+                                    imn, imx, imean = float(finite.min()), float(finite.max()), float(finite.mean())
+                                    stat_line = f"    Intensity: min {imn:.0f}, max {imx:.0f}, mean {imean:.1f}\n"
+                                except Exception:
+                                    stat_line = ""
                                 context += f"  • File: {file_id}\n"
                                 context += f"    Full path: {file_path}\n"
                                 context += f"    Size: {img_shape[1]}x{img_shape[0]} pixels\n"
+                                context += stat_line
                                 context += f"    USE THIS FILE PATH when running MIDAS tools\n\n"
+                            context += (
+                                "HOW TO ANSWER ABOUT A LOADED IMAGE:\n"
+                                "• If the user asks an INFORMATIONAL question ('what's this image?', "
+                                "'is it saturated?', 'what calibrant?'), ANSWER IN TEXT (1–3 sentences) "
+                                "using the size/intensity above; call inspect_dataset_file ONLY if you "
+                                "need frame count / omega / geometry. Do NOT launch a GUI viewer "
+                                "(run_midas_viewer) and do NOT call list_directory for this — the image "
+                                "is already shown in the viewer panel.\n"
+                                "• Launch run_midas_viewer ONLY when the user explicitly says open / view / "
+                                "show / overlay / plot.\n\n"
+                            )
 
                         if calibration_cache:
                             context += f"LOADED CALIBRATION FILES:\n"
