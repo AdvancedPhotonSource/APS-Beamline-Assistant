@@ -1,4 +1,4 @@
-export type RailView = 'files' | 'workflows' | 'motors' | 'viewers' | null
+export type RailView = 'history' | 'files' | 'workflows' | 'motors' | 'viewers' | null
 
 interface IconRailProps {
   activeView: RailView
@@ -23,6 +23,12 @@ export function IconRail({ activeView, onSelect }: IconRailProps) {
       paddingBottom: 10,
       gap: 2,
     }}>
+      <RailButton active={activeView === 'history'} onClick={() => toggle('history')} label="Chats">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6">
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+        </svg>
+      </RailButton>
+
       <RailButton active={activeView === 'files'} onClick={() => toggle('files')} label="Files">
         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6">
           <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />

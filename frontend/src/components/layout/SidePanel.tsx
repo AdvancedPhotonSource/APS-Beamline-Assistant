@@ -3,12 +3,14 @@ import { FileBrowser } from '@/components/files/FileBrowser'
 import { WorkflowPanel } from '@/components/workflows/WorkflowPanel'
 import { MotorDashboard } from '@/components/motors/MotorDashboard'
 import { VizLauncher } from '@/components/viz/VizLauncher'
+import { ChatHistory } from '@/components/chat/ChatHistory'
 
 interface SidePanelProps {
   view: RailView
 }
 
 const TITLES: Record<string, string> = {
+  history: 'Chat History',
   files: 'File Browser',
   workflows: 'Workflows',
   motors: 'Motor Control',
@@ -27,6 +29,7 @@ export function SidePanel({ view }: SidePanelProps) {
         </h2>
       </div>
       <div className="flex-1 overflow-hidden">
+        {view === 'history' && <ChatHistory />}
         {view === 'files' && <FileBrowser />}
         {view === 'workflows' && <WorkflowPanel />}
         {view === 'motors' && <MotorDashboard />}

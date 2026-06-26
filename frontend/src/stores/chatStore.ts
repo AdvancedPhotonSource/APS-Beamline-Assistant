@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { ChatMessage, ToolResult, VizArtifact } from '@/api/types'
+import type { ChatMessage, ToolResult, VizArtifact, ChatSession } from '@/api/types'
 import { wsManager } from '@/api/websocket'
 import { sendChatHttp } from '@/api/endpoints'
 import { parseToolResults, extractArtifacts, parseDirectToolResult } from '@/lib/parseToolResult'
@@ -12,17 +12,48 @@ interface ChatState {
   progress: { step: string; percent: number } | null
   _pendingToolResults: ToolResult[]
 
+  // Session history (ChatGPT/Claude-style), persisted to localStorage.
+  sessions: ChatSession[]
+  currentSessionId: string | null
+
   sendMessage: (content: string) => void
   addAssistantMessage: (content: string, toolResults: ToolResult[], artifacts: VizArtifact[]) => void
   updateProgress: (step: string, percent: number) => void
   clearHistory: () => void
   pushToPanel: (messageId: string) => void
+  newChat: () => void
+  switchSession: (id: string) => void
+  deleteSession: (id: string) => void
+  renameSession: (id: string, title: string) => void
+  _persist: () => void
   init: () => void
 }
 
 let nextId = 1
 function genId() {
   return `msg-${nextId++}-${Date.now()}`
+}
+
+// ── Session persistence (localStorage) ──────────────────────────────────────
+const LS_SESSIONS = 'apexa.chat.sessions'
+const LS_CURRENT = 'apexa.chat.current'
+
+function genSid() {
+  return `sess-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+}
+function loadSessions(): ChatSession[] {
+  try { return JSON.parse(localStorage.getItem(LS_SESSIONS) || '[]') } catch { return [] }
+}
+function saveSessions(sessions: ChatSession[]) {
+  try { localStorage.setItem(LS_SESSIONS, JSON.stringify(sessions)) } catch { /* quota */ }
+}
+function saveCurrentId(id: string | null) {
+  try { id ? localStorage.setItem(LS_CURRENT, id) : localStorage.removeItem(LS_CURRENT) } catch { /* */ }
+}
+function titleFrom(messages: ChatMessage[]): string {
+  const firstUser = messages.find((m) => m.role === 'user')
+  if (!firstUser) return 'New chat'
+  return firstUser.content.replace(/\s+/g, ' ').trim().slice(0, 48) || 'New chat'
 }
 
 function processResponse(text: string, msgId: string) {
@@ -39,8 +70,24 @@ export const useChatStore = create<ChatState>((set, get) => ({
   isLoading: false,
   progress: null,
   _pendingToolResults: [],
+  sessions: [],
+  currentSessionId: null,
 
   init: () => {
+    // Restore session history (or create the first session).
+    const loaded = loadSessions()
+    if (loaded.length > 0) {
+      let curId: string | null = null
+      try { curId = localStorage.getItem(LS_CURRENT) } catch { curId = null }
+      const cur = loaded.find((s) => s.id === curId) ?? loaded[0]
+      set({ sessions: loaded, currentSessionId: cur.id, messages: cur.messages })
+    } else {
+      const id = genSid()
+      const sess: ChatSession = { id, title: 'New chat', messages: [], createdAt: Date.now(), updatedAt: Date.now() }
+      saveSessions([sess]); saveCurrentId(id)
+      set({ sessions: [sess], currentSessionId: id, messages: [] })
+    }
+
     wsManager.onMessage((data) => {
       switch (data.type) {
         case 'tool_result': {
@@ -109,6 +156,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       timestamp: Date.now(),
     }
     set((s) => ({ messages: [...s.messages, userMsg], isLoading: true, progress: null, _pendingToolResults: [] }))
+    get()._persist()
 
     if (wsManager.connected) {
       wsManager.send({ type: 'chat', message: content })
@@ -135,13 +183,74 @@ export const useChatStore = create<ChatState>((set, get) => ({
       artifacts: artifacts.length > 0 ? artifacts : undefined,
     }
     set((s) => ({ messages: [...s.messages, msg], isLoading: false, progress: null }))
+    get()._persist()
   },
 
   updateProgress: (step, percent) => {
     set({ progress: { step, percent } })
   },
 
-  clearHistory: () => set({ messages: [], isLoading: false, progress: null, _pendingToolResults: [] }),
+  clearHistory: () => {
+    set({ messages: [], isLoading: false, progress: null, _pendingToolResults: [] })
+    get()._persist()
+  },
+
+  // Snapshot the live messages into the current session and persist to disk.
+  _persist: () => {
+    const { currentSessionId, messages, sessions } = get()
+    if (!currentSessionId) return
+    const updated = sessions.map((s) =>
+      s.id === currentSessionId
+        ? { ...s, messages, title: (!s.title || s.title === 'New chat') ? titleFrom(messages) : s.title, updatedAt: Date.now() }
+        : s
+    )
+    saveSessions(updated)
+    set({ sessions: updated })
+  },
+
+  newChat: () => {
+    get()._persist()
+    const id = genSid()
+    const sess: ChatSession = { id, title: 'New chat', messages: [], createdAt: Date.now(), updatedAt: Date.now() }
+    saveCurrentId(id)
+    set((s) => ({ sessions: [sess, ...s.sessions], currentSessionId: id, messages: [], isLoading: false, progress: null, _pendingToolResults: [] }))
+    saveSessions(get().sessions)
+    useVizStore.getState().clear()
+  },
+
+  switchSession: (id) => {
+    if (id === get().currentSessionId) return
+    get()._persist()
+    const sess = get().sessions.find((s) => s.id === id)
+    if (!sess) return
+    saveCurrentId(id)
+    set({ currentSessionId: id, messages: sess.messages, isLoading: false, progress: null, _pendingToolResults: [] })
+    useVizStore.getState().clear()
+  },
+
+  deleteSession: (id) => {
+    set((s) => {
+      const sessions = s.sessions.filter((x) => x.id !== id)
+      let currentSessionId = s.currentSessionId
+      let messages = s.messages
+      if (currentSessionId === id) {
+        const next = sessions[0]
+        currentSessionId = next?.id ?? null
+        messages = next?.messages ?? []
+        saveCurrentId(currentSessionId)
+      }
+      saveSessions(sessions)
+      return { sessions, currentSessionId, messages }
+    })
+  },
+
+  renameSession: (id, title) => {
+    set((s) => {
+      const sessions = s.sessions.map((x) => (x.id === id ? { ...x, title: title.trim() || x.title } : x))
+      saveSessions(sessions)
+      return { sessions }
+    })
+  },
 
   pushToPanel: (messageId: string) => {
     const msg = get().messages.find((m) => m.id === messageId)
