@@ -54,30 +54,108 @@ calibration_cache: Dict[str, Dict[str, Any]] = {}
 
 # ==================== Image Processing Functions ====================
 
+def _to_2d(arr) -> np.ndarray:
+    """Reduce any loaded array to a single 2D frame as float32.
+
+    Handles multi-frame stacks (N,Y,X)→frame 0 and RGB(A) (Y,X,3/4)→luminance.
+    """
+    a = np.asarray(arr)
+    if a.ndim == 3:
+        if a.shape[-1] in (3, 4):
+            a = a[..., :3].mean(axis=-1)          # RGB(A) → grayscale
+        else:
+            a = a[0]                               # multi-frame stack → first frame
+    elif a.ndim > 3:
+        a = a.reshape(-1, a.shape[-2], a.shape[-1])[0]
+    return np.asarray(a, dtype=np.float32)
+
+
+def _find_hdf5_image(h5obj):
+    """Find the largest 2D/3D numeric dataset in an HDF5 file (best-effort)."""
+    import h5py as _h5
+    best = None
+    best_score = 0
+    def visit(name, obj):
+        nonlocal best, best_score
+        if isinstance(obj, _h5.Dataset) and obj.ndim in (2, 3) and obj.dtype.kind in 'iuf':
+            # Prefer the common detector path ('data'), else the largest array.
+            score = int(np.prod(obj.shape)) * (10 if 'data' in name.lower() else 1)
+            if score > best_score:
+                best_score = score
+                best = obj
+    h5obj.visititems(visit)
+    return best
+
+
 def load_diffraction_image(file_path: str) -> np.ndarray:
-    """Load TIFF, GE, or standard image formats with proper intensity handling"""
+    """Load TIFF / GE / CBF / EDF / HDF5 / standard images as a single 2D float32
+    frame. Uses fabio for detector formats (reads real dimensions from the header —
+    no square assumption) and h5py for HDF5/NeXus, with graceful fallbacks."""
     path = Path(file_path)
+    suf = path.suffix.lower()
 
-    if path.suffix.lower() in ['.tif', '.tiff']:
-        img = tifffile.imread(str(path))
-        return np.array(img, dtype=np.float32)
+    # TIFF (incl. multi-page)
+    if suf in ('.tif', '.tiff'):
+        return _to_2d(tifffile.imread(str(path)))
 
-    elif path.suffix.lower() in ['.ge', '.ge2', '.ge3', '.ge4', '.ge5']:
-        # GE format: 8192 byte header, then 2-byte unsigned integers
-        with open(path, 'rb') as f:
-            f.seek(8192)
-            data = np.fromfile(f, dtype=np.uint16)
-            size = int(np.sqrt(len(data)))
-            img = data.reshape(size, size)
-            return np.array(img, dtype=np.float32)
-    else:
-        img = Image.open(path)
-        return np.array(img, dtype=np.float32)
+    # HDF5 / NeXus
+    if suf in ('.h5', '.hdf5', '.hdf', '.nxs'):
+        import h5py
+        with h5py.File(str(path), 'r') as f:
+            ds = _find_hdf5_image(f)
+            if ds is None:
+                raise ValueError(f"No 2D image dataset found in {path.name}")
+            return _to_2d(ds[0] if ds.ndim == 3 else ds[()])
+
+    # Detector binary formats — fabio knows the geometry from the header.
+    if suf in ('.ge', '.ge1', '.ge2', '.ge3', '.ge4', '.ge5', '.cbf', '.edf', '.mar3450'):
+        try:
+            import fabio
+            return _to_2d(fabio.open(str(path)).data)
+        except Exception as fabio_err:
+            # Manual GE fallback: 8192-byte header, uint16. Infer dims instead of
+            # assuming square (real GE panels are 2048², but cropped/odd files exist).
+            if suf.startswith('.ge'):
+                with open(path, 'rb') as fh:
+                    fh.seek(8192)
+                    data = np.fromfile(fh, dtype=np.uint16)
+                n = len(data)
+                side = int(round(n ** 0.5))
+                if side * side == n:
+                    return np.asarray(data.reshape(side, side), dtype=np.float32)
+                for dim in (2048, 4096, 1024, 512):
+                    if n % dim == 0:
+                        return np.asarray(data.reshape(n // dim, dim), dtype=np.float32)
+                raise ValueError(
+                    f"Cannot infer GE frame dimensions for {path.name} "
+                    f"({n} pixels, not square or a multiple of a known panel size)."
+                ) from fabio_err
+            raise
+
+    # Anything else → PIL
+    return _to_2d(np.array(Image.open(path)))
+
+
+def _safe_stats(img: np.ndarray) -> dict:
+    """NaN/Inf-safe image stats (strict JSON can't encode NaN/Inf)."""
+    finite = img[np.isfinite(img)]
+    if finite.size == 0:
+        finite = np.zeros(1, dtype=np.float32)
+    return {
+        "shape": list(img.shape),
+        "dtype": str(img.dtype),
+        "min": float(np.min(finite)),
+        "max": float(np.max(finite)),
+        "mean": float(np.mean(finite)),
+        "std": float(np.std(finite)),
+    }
 
 
 def apply_contrast(img: np.ndarray, vmin: float = None, vmax: float = None,
                    gamma: float = 1.0) -> np.ndarray:
     """Apply contrast adjustment with gamma correction"""
+    # Neutralize NaN/Inf so percentiles and the preview don't blow up.
+    img = np.nan_to_num(img, nan=0.0, posinf=0.0, neginf=0.0)
     if vmin is None:
         vmin = np.percentile(img, 1)
     if vmax is None:
@@ -942,14 +1020,7 @@ async def load_viewer_image_by_path(path: str = Form(...)):
             "success": True,
             "file_id": file_id,
             "filename": file_path.name,
-            "stats": {
-                "shape": list(img.shape),
-                "dtype": str(img.dtype),
-                "min": float(np.min(img)),
-                "max": float(np.max(img)),
-                "mean": float(np.mean(img)),
-                "std": float(np.std(img)),
-            },
+            "stats": _safe_stats(img),
             "preview": preview_b64,
         }
     except HTTPException:
