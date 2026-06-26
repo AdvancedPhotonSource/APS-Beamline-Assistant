@@ -25,33 +25,60 @@ export function deriveProvenance(a: VizArtifact): Provenance {
   const data = (a.data && typeof a.data === 'object') ? (a.data as Record<string, unknown>) : {}
   const tool = (typeof data.tool === 'string' && data.tool) || inferToolFromData(a.data)
 
-  // Pull a handful of scalar params (top-level + nested calibrated_parameters).
+  // Prefer REAL fields the backend tools already emit (command, engine, return
+  // code) over a synthesized command — many MIDAS tools return these verbatim.
+  const realCommand = typeof data.command === 'string' ? data.command : undefined
+  const engine = typeof data.engine === 'string' ? data.engine : undefined
+  const version = typeof data.version === 'string' ? data.version
+    : typeof data.midas_version === 'string' ? data.midas_version : undefined
+  if (realCommand || engine) {
+    const inputs = collectInputs(data)
+    return {
+      tool: engine || tool || a.title,
+      version,
+      inputs,
+      params: collectParams(data),
+      timestamp: Date.now(),
+      command: realCommand ?? synthCommand(tool, inputs),
+    }
+  }
+
+  const inputs = collectInputs(data)
+  return {
+    tool: tool === 'unknown' ? a.title : tool,
+    inputs,
+    params: collectParams(data),
+    timestamp: Date.now(),
+    command: synthCommand(tool, inputs),
+  }
+}
+
+/** A handful of scalar params (top-level + nested calibrated_parameters), unit-labelled. */
+function collectParams(data: Record<string, unknown>): Record<string, string | number> {
   const params: Record<string, string | number> = {}
   const collect = (obj: Record<string, unknown>) => {
     for (const [k, v] of Object.entries(obj)) {
       if (Object.keys(params).length >= 6) break
       if (typeof v === 'number') params[unitLabel(k)] = v
-      else if (typeof v === 'string' && v.length < 24 && /[A-Za-z]/.test(v) && k !== 'tool' && k !== 'status')
+      else if (typeof v === 'string' && v.length < 24 && /[A-Za-z]/.test(v) &&
+               !['tool', 'status', 'engine', 'command'].includes(k))
         params[k] = v
     }
   }
   const calib = data.calibrated_parameters
   if (calib && typeof calib === 'object') collect(calib as Record<string, unknown>)
   collect(data)
+  return params
+}
 
+/** Input file/dir paths the tool consumed. */
+function collectInputs(data: Record<string, unknown>): string[] {
   const inputs: string[] = []
   for (const key of ['image_file', 'param_file', 'data_file', 'file', 'path', 'result_folder']) {
     const v = data[key]
     if (typeof v === 'string') inputs.push(v)
   }
-
-  return {
-    tool: tool === 'unknown' ? a.title : tool,
-    inputs,
-    params,
-    timestamp: Date.now(),
-    command: synthCommand(tool, inputs),
-  }
+  return inputs
 }
 
 /** Provenance for a chat-side tool result (reuses the artifact derivation). */

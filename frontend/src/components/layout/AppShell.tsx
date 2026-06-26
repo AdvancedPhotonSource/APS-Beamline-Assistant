@@ -4,6 +4,8 @@ import { IconRail, type RailView } from './IconRail'
 import { SidePanel } from './SidePanel'
 import { ChatPanel } from '@/components/chat/ChatPanel'
 import { VizPanel } from '@/components/viz/VizPanel'
+import { FacilityStatus } from './FacilityStatus'
+import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { useThemeStore } from '@/stores/themeStore'
 
 function DragHandle({ onDrag }: { onDrag: (deltaX: number) => void }) {
@@ -109,6 +111,12 @@ export function AppShell() {
           <VizPanel />
         </div>
       </div>
+
+      {/* Always-visible facility status bar */}
+      <FacilityStatus />
+
+      {/* Human-in-the-loop confirmation modal (motor moves, long/irreversible jobs) */}
+      <ConfirmModal />
     </div>
   )
 }

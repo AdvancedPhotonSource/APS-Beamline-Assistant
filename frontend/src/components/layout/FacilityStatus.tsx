@@ -1,0 +1,99 @@
+import { useEffect, useState } from 'react'
+import { useChatStore } from '@/stores/chatStore'
+import { useVizStore } from '@/stores/vizStore'
+
+interface Status {
+  status: string
+  mcp_client_connected: boolean
+  connected_servers: string[]
+  active_connections: number
+  available_models?: string[]
+}
+
+/**
+ * Always-visible facility status bar — the "facility rail watches" zone, condensed
+ * into a persistent IDE-style strip. Shows live backend/session state so an operator
+ * always knows the system is connected and whether a job is running.
+ */
+export function FacilityStatus() {
+  const [status, setStatus] = useState<Status | null>(null)
+  const [reachable, setReachable] = useState(true)
+  const isLoading = useChatStore((s) => s.isLoading)
+  const progress = useChatStore((s) => s.progress)
+  const artifactCount = useVizStore((s) => s.artifacts.length)
+
+  useEffect(() => {
+    let alive = true
+    const poll = async () => {
+      try {
+        const r = await fetch('/api/status')
+        const j = (await r.json()) as Status
+        if (alive) {
+          setStatus(j)
+          setReachable(true)
+        }
+      } catch {
+        if (alive) setReachable(false)
+      }
+    }
+    poll()
+    const t = setInterval(poll, 5000)
+    return () => {
+      alive = false
+      clearInterval(t)
+    }
+  }, [])
+
+  const online = reachable && !!status?.mcp_client_connected
+  const dot = isLoading ? '#f59e0b' : online ? '#22c55e' : '#ef4444'
+  const jobLabel = isLoading
+    ? progress?.step
+      ? `running · ${progress.step}${progress.percent ? ` ${Math.round(progress.percent)}%` : ''}`
+      : 'running…'
+    : 'idle'
+
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 14,
+        height: 24,
+        padding: '0 12px',
+        borderTop: '1px solid var(--apexa-border)',
+        background: 'var(--apexa-surface-2)',
+        color: 'var(--apexa-text-muted)',
+        fontSize: 11,
+        flexShrink: 0,
+        fontFamily: 'var(--apexa-mono, ui-monospace, monospace)',
+        overflow: 'hidden',
+        whiteSpace: 'nowrap',
+      }}
+    >
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+        <span style={{ width: 8, height: 8, borderRadius: '50%', background: dot, boxShadow: `0 0 6px ${dot}` }} />
+        {isLoading ? 'busy' : online ? 'connected' : reachable ? 'no MCP' : 'offline'}
+      </span>
+
+      <Sep />
+      <span>job: {jobLabel}</span>
+
+      {status?.connected_servers && status.connected_servers.length > 0 && (
+        <>
+          <Sep />
+          <span>servers: {status.connected_servers.join(', ')}</span>
+        </>
+      )}
+
+      <Sep />
+      <span>artifacts: {artifactCount}</span>
+
+      <span style={{ flex: 1 }} />
+      <span>APEXA</span>
+    </div>
+  )
+}
+
+function Sep() {
+  return <span style={{ opacity: 0.4 }}>│</span>
+}

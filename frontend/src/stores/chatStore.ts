@@ -4,6 +4,7 @@ import { wsManager } from '@/api/websocket'
 import { sendChatHttp } from '@/api/endpoints'
 import { parseToolResults, extractArtifacts, parseDirectToolResult } from '@/lib/parseToolResult'
 import { useVizStore } from './vizStore'
+import { useConfirmStore, nextConfirmId } from './confirmStore'
 
 interface ChatState {
   messages: ChatMessage[]
@@ -72,6 +73,23 @@ export const useChatStore = create<ChatState>((set, get) => ({
           set({ _pendingToolResults: [] })
           break
         }
+        case 'confirm_required': {
+          // Backend (agent) asks a human to approve a consequential action.
+          // Show the modal; relay the decision back over the same socket.
+          const id = data.confirm_id ?? nextConfirmId()
+          useConfirmStore.getState().request({
+            id,
+            title: data.action ? `Approve: ${data.action}?` : 'Approve action?',
+            detail: data.detail,
+            danger: data.danger ?? true,
+            safety: data.safety,
+            confirmLabel: 'Approve & run',
+            onConfirm: () => wsManager.send({ type: 'confirm_response', confirm_id: id, approved: true }),
+            onCancel: () => wsManager.send({ type: 'confirm_response', confirm_id: id, approved: false }),
+          })
+          break
+        }
+
         case 'analysis_progress':
           get().updateProgress(data.step ?? '', data.progress ?? 0)
           break

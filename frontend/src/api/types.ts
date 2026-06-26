@@ -41,19 +41,27 @@ export interface VizArtifact {
 }
 
 export interface WsOutgoing {
-  type: 'chat' | 'change_model'
+  type: 'chat' | 'change_model' | 'confirm_response'
   message?: string
   model?: string
+  confirm_id?: string
+  approved?: boolean
 }
 
 export interface WsIncoming {
-  type: 'chat_response' | 'error' | 'analysis_progress' | 'model_changed' | 'tool_result'
+  type: 'chat_response' | 'error' | 'analysis_progress' | 'model_changed' | 'tool_result' | 'confirm_required'
   message?: string
   step?: string
   progress?: number
   model?: string
   tool?: string
   result?: string
+  // confirm_required (human-in-the-loop gate for consequential actions)
+  confirm_id?: string
+  action?: string          // e.g. "move_motor_absolute"
+  detail?: string          // human-readable description of what will happen
+  danger?: boolean         // true → irreversible/physical action, show prominently
+  safety?: string[]        // safety-check state lines to display before approval
 }
 
 export interface ServerStatus {

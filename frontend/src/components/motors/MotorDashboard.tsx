@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useChatStore } from '@/stores/chatStore'
+import { useConfirmStore, nextConfirmId } from '@/stores/confirmStore'
 
 interface MotorQuickAction {
   label: string
@@ -14,14 +15,50 @@ const QUICK_ACTIONS: MotorQuickAction[] = [
 
 export function MotorDashboard() {
   const sendMessage = useChatStore((s) => s.sendMessage)
+  const requestConfirm = useConfirmStore((s) => s.request)
   const [motorName, setMotorName] = useState('')
   const [targetPos, setTargetPos] = useState('')
 
+  // Consequential motor actions are gated behind an explicit human confirm.
+  // (The tool-layer safety in epics_motor_server still enforces limits server-side;
+  // this is the visible, in-control front line.)
+  const confirmMotor = (title: string, detail: string, run: () => void) => {
+    requestConfirm({
+      id: nextConfirmId(),
+      title,
+      detail,
+      danger: true,
+      safety: [
+        'Soft/hard limits enforced server-side (HLM/LLM, HLS/LLS)',
+        'Large-move guard: >50% travel needs explicit confirm',
+      ],
+      confirmLabel: 'Move motor',
+      onConfirm: run,
+    })
+  }
+
   const handleMove = () => {
     if (!motorName.trim() || !targetPos.trim()) return
-    sendMessage(`Move motor ${motorName} to position ${targetPos}.`)
-    setMotorName('')
-    setTargetPos('')
+    const name = motorName, pos = targetPos
+    confirmMotor(
+      'Move motor?',
+      `Move motor "${name}" to absolute position ${pos}.`,
+      () => {
+        sendMessage(`Move motor ${name} to position ${pos}.`)
+        setMotorName('')
+        setTargetPos('')
+      },
+    )
+  }
+
+  const handleJog = (dir: '-' | '+') => {
+    if (!motorName.trim()) return
+    const name = motorName
+    confirmMotor(
+      `Jog motor ${dir}?`,
+      `Jog motor "${name}" in the ${dir === '-' ? 'negative' : 'positive'} direction.`,
+      () => sendMessage(`Jog motor ${name} in the ${dir === '-' ? 'negative' : 'positive'} direction.`),
+    )
   }
 
   return (
@@ -83,7 +120,7 @@ export function MotorDashboard() {
           />
           <div className="grid grid-cols-2 gap-2">
             <button
-              onClick={() => motorName && sendMessage(`Jog motor ${motorName} in the negative direction.`)}
+              onClick={() => handleJog('-')}
               disabled={!motorName.trim()}
               className="py-2 bg-zinc-800 hover:bg-zinc-700 disabled:bg-zinc-800/50 disabled:text-zinc-600 text-zinc-300 rounded-lg transition-colors flex items-center justify-center gap-1"
             >
@@ -93,7 +130,7 @@ export function MotorDashboard() {
               Jog -
             </button>
             <button
-              onClick={() => motorName && sendMessage(`Jog motor ${motorName} in the positive direction.`)}
+              onClick={() => handleJog('+')}
               disabled={!motorName.trim()}
               className="py-2 bg-zinc-800 hover:bg-zinc-700 disabled:bg-zinc-800/50 disabled:text-zinc-600 text-zinc-300 rounded-lg transition-colors flex items-center justify-center gap-1"
             >
