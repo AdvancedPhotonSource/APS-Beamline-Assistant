@@ -6047,9 +6047,18 @@ def _resolve_param_file(path_str: str) -> tuple[bool, str]:
 
 
 def _find_midas_params_cli() -> str:
-    """Locate the midas-params CLI binary (installed alongside midas_env Python)."""
-    midas_python = find_midas_python()
-    cli_path = str(Path(midas_python).parent / "midas-params")
+    """Locate the midas-params console script.
+
+    midas-params ships with the pip `midas-suite` packages, which live in the
+    APEXA uv .venv — NOT the conda midas_env. Prefer shutil.which (finds
+    .venv/bin/midas-params, like midas-autocalibrate), then fall back to the
+    conda-adjacent path for older layouts. Without this, _run_midas_params fell
+    back to the conda python and raised ModuleNotFoundError: 'midas_params'."""
+    import shutil as _sh
+    exe = _sh.which("midas-params")
+    if exe:
+        return exe
+    cli_path = str(Path(find_midas_python()).parent / "midas-params")
     if Path(cli_path).exists():
         return cli_path
     return None
