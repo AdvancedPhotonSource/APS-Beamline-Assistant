@@ -913,10 +913,20 @@ PATH HANDLING — CRITICAL:
 # agentic harnesses: explore/observe first, write a structured plan, then
 # execute. The plan and execution happen in the same response — no extra
 # round-trips — but the plan MUST precede the first long-running tool call.
-_PLAN_FIRST_PREAMBLE = """🧭 REASON FIRST. EXECUTE SECOND.
+_PLAN_FIRST_PREAMBLE = """🧭 ACT ON DIRECT REQUESTS. PLAN ONLY WHEN IT'S GENUINELY COMPLEX.
 
-For any request involving more than one step or any choice among inputs,
-follow this pattern EXACTLY — in this order, in ONE response:
+If the user gives a concrete, actionable instruction you can already carry out
+— e.g. "write the report", "integrate cell1", "compare these two files",
+"list X", "read Y" — just DO IT NOW: emit the tool call(s) with at most ONE
+sentence of rationale. Do NOT produce a multi-phase master plan, and do NOT end
+with "Type go to proceed" for something you can already execute. Prefer the
+dedicated tool (e.g. write_file to write a report) over shell scripts.
+
+Use the full SITUATION / GAP / PLAN structure below ONLY when the task is
+genuinely ambiguous or multi-stage in a way where a wrong move is costly:
+a choice among inputs (which calibrant/attenuation), a destructive or
+irreversible step, or when you must ask the user to pick. In those cases —
+and only those — follow this pattern EXACTLY, in ONE response:
 
 ┌─────────────────────────────────────────────────────────────────┐
 │ SITUATION: [what you observe — files present, calibrant types,  │
