@@ -16,6 +16,26 @@ In v11, calibration is the **native-Python `midas_calibrate` package**, run
 in-process by APEXA. The legacy C binary `CalibrantPanelShiftsOMP` is **archived**;
 `CalibrantIntegratorOMP` is the active C/OpenMP superset used only as a fallback.
 
+### Calibration engines — three, not two (don't confuse them)
+
+There are **two Python generations sitting above one C/OpenMP binary** — *not*
+"Python vs C++". Both `midas_calibrate` packages are pure-Python PyTorch
+(`setuptools` backend, `torch>=2.1`, zero C/C++/CMake sources).
+
+| Engine | Language | Who calls it | Outputs |
+|---|---|---|---|
+| **`midas_calibrate` (v1)** | Python / PyTorch | **APEXA's `midas_auto_calibrate`** (native, in-process via `apexa_midas_native.native_calibrate`) | `refined_MIDAS_params_<material>.txt` only |
+| **`midas_calibrate_v2`** | Python / PyTorch | the package's own notebooks (one-shot `calibrate()`, Bayesian/Laplace UQ, multi-panel, residual maps) | `calibration.json` + `residual_corr.bin` (+ refined params) |
+| **`CalibrantIntegratorOMP`** | **C / OpenMP** | `AutoCalibrateZarr.py` and the `midas-autocalibrate` CLI (subprocess **fallback**) | `refined_MIDAS_params*.txt`, `*corr.csv`, `autocal.log` |
+
+- **APEXA uses v1** (`midas_calibrate`) for the native path, falling back to the
+  **C/OMP** binary via `AutoCalibrateZarr.py`. It does **not** invoke
+  `midas_calibrate_v2` today — so `calibration.json` / `residual_corr.bin` are
+  *not* produced by `midas_auto_calibrate`.
+- `v1` vs `v2` is an **API generation** difference (v2 adds UQ, multi-panel,
+  residual-correction maps), both differentiable PyTorch. The only C/C++ code in
+  the calibration path is the OMP binary.
+
 Two MCP tools:
 
 | | **`midas_auto_calibrate`** (preferred) | **`run_ff_calibration`** (lower-level) |
