@@ -2870,6 +2870,7 @@ def _synthesize_calibration_params(out_path: Path, *, calibrant: str,
             return False, "no wavelength available to synthesize params"
         lsd = float(lsd_um) if lsd_um and lsd_um < 1_000_000 else 1_000_000.0
         max_ring = 0.5 * (ny ** 2 + nz ** 2) ** 0.5
+        r_min = 10.0
         lines = [
             f"SpaceGroup {sg}",
             f"LatticeConstant {a:.6f} {a:.6f} {a:.6f} 90 90 90",
@@ -2880,7 +2881,15 @@ def _synthesize_calibration_params(out_path: Path, *, calibrant: str,
             f"NrPixelsY {int(ny)}",
             f"NrPixelsZ {int(nz)}",
             f"MaxRingRad {max_ring:.1f}",
-            "MinRingRad 10",
+            f"MinRingRad {r_min:.1f}",
+            # Integration-cake bounds — REQUIRED by midas_integrate.build_map
+            # (which midas-autocalibrate calls internally). Omitting RBinSize
+            # makes n_r_bins = (RMax-RMin)/RBinSize divide by zero.
+            f"RMin {r_min:.1f}",
+            f"RMax {max_ring:.1f}",
+            "RBinSize 1.0",
+            "EtaMin -180.0",
+            "EtaMax 180.0",
             f"EtaBinSize {eta_bin}",
             f"nIterations {int(n_iter)}",
             f"OutlierFactor {mult}",
