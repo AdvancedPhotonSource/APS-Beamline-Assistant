@@ -19,7 +19,9 @@ export async function uploadFile(file: File): Promise<{ file_id: string; filenam
   form.append('file', file)
   const res = await fetch(`${BASE}/api/upload`, { method: 'POST', body: form })
   if (!res.ok) throw new Error(`Upload failed: ${res.status}`)
-  return res.json()
+  // Backend returns `saved_path`; normalize to `path` for callers.
+  const j = await res.json()
+  return { file_id: j.file_id, filename: j.filename, path: j.saved_path ?? j.path }
 }
 
 export async function sendChatHttp(message: string): Promise<{ response: string }> {

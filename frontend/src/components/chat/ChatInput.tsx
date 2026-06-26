@@ -1,20 +1,72 @@
-import { useState, useRef, type KeyboardEvent } from 'react'
+import { useState, useRef, type KeyboardEvent, type ClipboardEvent, type DragEvent } from 'react'
 import { useChatStore } from '@/stores/chatStore'
+import { useImageStore } from '@/stores/imageStore'
+import { uploadFile } from '@/api/endpoints'
+
+interface Attachment {
+  name: string
+  path: string
+  isImage: boolean
+}
+
+const IMAGE_EXTS = ['.tif', '.tiff', '.ge', '.ge1', '.ge2', '.ge3', '.ge4', '.ge5',
+  '.h5', '.hdf5', '.hdf', '.nxs', '.zip', '.png', '.jpg', '.jpeg', '.cbf']
+
+function isImageName(name: string): boolean {
+  const lower = name.toLowerCase()
+  return IMAGE_EXTS.some((e) => lower.endsWith(e))
+}
 
 export function ChatInput() {
   const [text, setText] = useState('')
   const [focused, setFocused] = useState(false)
+  const [attachments, setAttachments] = useState<Attachment[]>([])
+  const [uploading, setUploading] = useState(false)
+  const [dragOver, setDragOver] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const { sendMessage, isLoading } = useChatStore()
+  const loadImage = useImageStore((s) => s.loadImage)
+
+  const handleFiles = async (files: FileList | File[]) => {
+    const list = Array.from(files)
+    if (list.length === 0) return
+    setUploading(true)
+    try {
+      for (const f of list) {
+        try {
+          const res = await uploadFile(f)
+          const att: Attachment = { name: res.filename, path: res.path, isImage: isImageName(res.filename) }
+          setAttachments((a) => [...a, att])
+          // Show images immediately in the viewer/canvas so the user sees what they attached.
+          if (att.isImage) loadImage(res.path).catch(() => {})
+        } catch (e) {
+          console.error('upload failed', e)
+        }
+      }
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  const removeAttachment = (path: string) =>
+    setAttachments((a) => a.filter((x) => x.path !== path))
 
   const handleSend = () => {
     const trimmed = text.trim()
-    if (!trimmed || isLoading) return
-    sendMessage(trimmed)
-    setText('')
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto'
+    if ((!trimmed && attachments.length === 0) || isLoading) return
+    // Compose the message with explicit attachment paths so the agent grounds on
+    // the real files (and the anti-hallucination path-resolution works).
+    let msg = trimmed
+    if (attachments.length > 0) {
+      const refs = attachments.map((a) => `- ${a.path}`).join('\n')
+      const head = trimmed || 'Use the attached file(s):'
+      msg = `${head}\n\nAttached file(s):\n${refs}`
     }
+    sendMessage(msg)
+    setText('')
+    setAttachments([])
+    if (textareaRef.current) textareaRef.current.style.height = 'auto'
   }
 
   const handleKeyDown = (e: KeyboardEvent) => {
@@ -32,25 +84,93 @@ export function ChatInput() {
     }
   }
 
+  const handlePaste = (e: ClipboardEvent) => {
+    const files = Array.from(e.clipboardData.files)
+    if (files.length > 0) {
+      e.preventDefault()
+      handleFiles(files)
+    }
+  }
+
+  const handleDrop = (e: DragEvent) => {
+    e.preventDefault()
+    setDragOver(false)
+    if (e.dataTransfer.files.length > 0) handleFiles(e.dataTransfer.files)
+  }
+
   return (
     <div className="px-5 pb-4 pt-3" style={{ background: 'var(--apexa-surface)' }}>
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        hidden
+        onChange={(e) => { if (e.target.files) handleFiles(e.target.files); e.target.value = '' }}
+      />
+
       <div
         className="relative rounded-2xl border transition-all duration-200"
+        onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={handleDrop}
         style={{
-          borderColor: focused ? '#3b82f6' : 'var(--apexa-border)',
-          background: 'var(--apexa-surface-2)',
+          borderColor: dragOver ? '#3b82f6' : focused ? '#3b82f6' : 'var(--apexa-border)',
+          background: dragOver ? 'rgba(59,130,246,0.06)' : 'var(--apexa-surface-2)',
           boxShadow: focused ? '0 0 0 3px rgba(59,130,246,0.1), 0 2px 8px rgba(0,0,0,0.1)' : '0 1px 3px rgba(0,0,0,0.05)',
         }}
       >
+        {/* Attachment chips */}
+        {(attachments.length > 0 || uploading) && (
+          <div className="flex flex-wrap gap-1.5 px-4 pt-3">
+            {attachments.map((a) => (
+              <span
+                key={a.path}
+                className="inline-flex items-center gap-1.5 px-2 py-1 rounded-lg text-[11px]"
+                style={{ background: 'var(--apexa-surface-3)', color: 'var(--apexa-text)', border: '1px solid var(--apexa-border)' }}
+                title={a.path}
+              >
+                <span>{a.isImage ? '🖼️' : '📄'}</span>
+                <span style={{ maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.name}</span>
+                <button
+                  onClick={() => removeAttachment(a.path)}
+                  className="opacity-60 hover:opacity-100"
+                  style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', padding: 0 }}
+                  title="Remove"
+                >✕</button>
+              </span>
+            ))}
+            {uploading && (
+              <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-lg text-[11px]"
+                style={{ color: 'var(--apexa-text-muted)' }}>
+                uploading…
+              </span>
+            )}
+          </div>
+        )}
+
         <div className="flex gap-2 items-end px-4 py-3">
+          {/* Attach button */}
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isLoading}
+            title="Attach image or data file"
+            className="shrink-0 w-8 h-8 rounded-lg flex items-center justify-center transition-all duration-150"
+            style={{ background: 'var(--apexa-surface-3)', color: 'var(--apexa-text-muted)', cursor: isLoading ? 'default' : 'pointer' }}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+            </svg>
+          </button>
+
           <textarea
             ref={textareaRef}
             value={text}
             onChange={(e) => { setText(e.target.value); handleInput() }}
             onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
             onFocus={() => setFocused(true)}
             onBlur={() => setFocused(false)}
-            placeholder="Ask APEXA to analyze data, calibrate, integrate..."
+            placeholder="Ask APEXA — or attach / drag / paste an image or data file…"
             rows={1}
             className="flex-1 bg-transparent text-sm resize-none outline-none max-h-[200px] leading-relaxed"
             style={{ color: 'var(--apexa-text)' }}
@@ -58,13 +178,13 @@ export function ChatInput() {
           />
           <button
             onClick={handleSend}
-            disabled={!text.trim() || isLoading}
+            disabled={(!text.trim() && attachments.length === 0) || isLoading}
             className="shrink-0 w-8 h-8 rounded-lg flex items-center justify-center transition-all duration-150"
             style={{
-              background: text.trim() ? 'linear-gradient(135deg, #3b82f6, #6366f1)' : 'var(--apexa-surface-3)',
-              color: text.trim() ? 'white' : 'var(--apexa-text-muted)',
-              opacity: !text.trim() || isLoading ? 0.4 : 1,
-              cursor: !text.trim() || isLoading ? 'default' : 'pointer',
+              background: (text.trim() || attachments.length > 0) ? 'linear-gradient(135deg, #3b82f6, #6366f1)' : 'var(--apexa-surface-3)',
+              color: (text.trim() || attachments.length > 0) ? 'white' : 'var(--apexa-text-muted)',
+              opacity: ((!text.trim() && attachments.length === 0) || isLoading) ? 0.4 : 1,
+              cursor: ((!text.trim() && attachments.length === 0) || isLoading) ? 'default' : 'pointer',
             }}
           >
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -80,7 +200,7 @@ export function ChatInput() {
           <span className="opacity-60">via Argo</span>
         </div>
         <div className="text-[10px]" style={{ color: 'var(--apexa-text-muted)' }}>
-          Enter to send, Shift+Enter for new line
+          Enter to send · Shift+Enter newline · 📎 / drag / paste to attach
         </div>
       </div>
     </div>
