@@ -2922,8 +2922,16 @@ async def midas_auto_calibrate(
     data_loc: str = "",
     energy_kev: float = 0.0,
     wavelength_angstrom: float = 0.0,
+    calibration_engine: str = "v1",
 ) -> str:
     """🔧 PRIMARY TOOL FOR FF-HEDM DETECTOR CALIBRATION (MIDAS Official)
+
+    calibration_engine: "v1" (default) = MIDAS autocalibrate (pip console
+    midas-autocalibrate, else legacy AutoCalibrateZarr.py) → refined MIDAS
+    param .txt. "v2" = midas-calibrate-v2 differentiable engine → writes
+    calibration.json with iso_R/harmonic distortion + in/post-residual strain
+    (µε). Use "v2" to benchmark against a colleague who calibrated with v2 (the
+    calibration.json format). v2 is PyTorch — slow on CPU-only hosts.
 
     ⚠️ WORKFLOW GUIDANCE - WHEN TO USE THIS TOOL:
     When user requests:
@@ -3330,6 +3338,110 @@ async def midas_auto_calibrate(
             dist_mm = float(lsd_match.group(1).replace('p', '.'))
             lsd_from_filename = int(dist_mm * 1000)  # mm → µm
             print(f"✓ Extracted Lsd from original filename: {dist_mm} mm → {lsd_from_filename} µm", file=sys.stderr)
+
+        # ── Engine v2: midas-calibrate-v2 (differentiable; writes calibration.json) ──
+        # Produces the SAME artifact a colleague gets from midas-calibrate-v2:
+        # calibration.json with iso_R/harmonic distortion + in/post-residual
+        # strain (µε) — enabling a true v2-vs-v2 calibration benchmark. PyTorch,
+        # so slow on CPU-only hosts; runs in the MIDAS python env via subprocess.
+        if str(calibration_engine).lower() == "v2":
+            if not _resolved_wl:
+                return format_result({
+                    "tool": "midas_auto_calibrate", "status": "error",
+                    "engine": "pip-v2:midas_calibrate_v2",
+                    "error": "v2 calibration needs a wavelength — pass energy_kev "
+                             "or wavelength_angstrom (or a filename with a keV token)."})
+            _v2_out = (Path(output_dir).expanduser().absolute()
+                       if output_dir else image_path.parent)
+            _v2_out.mkdir(parents=True, exist_ok=True)
+            _calib_v2 = _detect_calibrant_from_name(original_stem)
+            if _calib_v2 not in ("CeO2", "LaB6", "Si", "Al2O3"):
+                _calib_v2 = "CeO2"   # v2 CALIBRANTS set
+            _ny2, _nz2, _px2 = _detector_shape_and_px(image_path)
+            _lsd_um2 = (float(lsd_guess) if lsd_guess < 1_000_000
+                        else (float(lsd_from_filename) if lsd_match else 1_000_000.0))
+            _dark_abs = (str(Path(dark_file).expanduser().absolute())
+                         if dark_file and Path(dark_file).expanduser().exists() else "")
+            _vals = (
+                f"_IMG={str(image_path)!r}\n_DARK={_dark_abs!r}\n_WL={float(_resolved_wl)}\n"
+                f"_PX={float(_px2)}\n_CAL={_calib_v2!r}\n_OUT={str(_v2_out)!r}\n"
+                f"_LSD={float(_lsd_um2)}\n_NITER={int(n_iterations)}\n"
+            )
+            _body = r'''
+import json, numpy as np
+from pathlib import Path
+def _load(p):
+    p=str(p)
+    if not p: return None
+    if p.endswith((".h5",".hdf5",".hdf",".nxs")):
+        import h5py; best=[None]
+        with h5py.File(p,"r") as f:
+            def v(n,o):
+                try:
+                    if hasattr(o,"shape") and len(getattr(o,"shape",()))>=2:
+                        a=np.asarray(o[()])
+                        if a.ndim>2: a=a[0]
+                        if best[0] is None or a.size>best[0].size: best[0]=a
+                except Exception: pass
+            f.visititems(v)
+        return best[0]
+    import fabio; return np.asarray(fabio.open(p).data)
+img=_load(_IMG)
+if img is None: raise SystemExit("could not load image array")
+if img.ndim>2: img=img[0]
+dark=_load(_DARK) if _DARK else None
+from midas_calibrate_v2 import calibrate
+res=calibrate(np.asarray(img,dtype=float), wavelength=_WL, pxY=_PX, calibrant=_CAL,
+              output_dir=_OUT, initial_Lsd=_LSD, n_iter=_NITER, dark=dark,
+              device="cpu", verbose=True)
+out={"engine":"pip-v2:midas_calibrate_v2","Lsd_um":res.Lsd,"BC_y":res.BC_y,
+     "BC_z":res.BC_z,"tx":res.tx,"ty":res.ty,"tz":res.tz,"wavelength_A":res.wavelength_A,
+     "in_loop_strain_uE":res.in_loop_strain_uE,
+     "post_residual_strain_uE":res.post_residual_strain_uE,
+     "calibration_json":str(Path(_OUT)/"calibration.json"),
+     "residual_corr_bin_path":getattr(res,"residual_corr_bin_path",None)}
+print("APEXA_V2_RESULT="+json.dumps(out))
+'''
+            midas_python = find_midas_python()
+            print("=" * 70, file=sys.stderr)
+            print("🔧 MIDAS CALIBRATION (v2 differentiable — midas_calibrate_v2):",
+                  file=sys.stderr)
+            print(f"   image={image_path} calibrant={_calib_v2} λ={_resolved_wl} "
+                  f"px={_px2} Lsd0={_lsd_um2} out={_v2_out}", file=sys.stderr)
+            print("   (PyTorch on CPU is slow — this can take many minutes)",
+                  file=sys.stderr)
+            print("=" * 70, file=sys.stderr)
+            try:
+                _p = subprocess.run([midas_python, "-c", _vals + _body],
+                                    capture_output=True, text=True,
+                                    timeout=7200, env=get_midas_env())
+            except subprocess.TimeoutExpired:
+                return format_result({
+                    "tool": "midas_auto_calibrate", "status": "error",
+                    "engine": "pip-v2:midas_calibrate_v2",
+                    "error": "v2 calibration timed out (CPU PyTorch is slow). Use a "
+                             "GPU host, or calibration_engine='v1' for the fast path."})
+            _line = next((l for l in (_p.stdout or "").splitlines()
+                          if l.startswith("APEXA_V2_RESULT=")), None)
+            if _p.returncode == 0 and _line:
+                import json as _json
+                _res = _json.loads(_line[len("APEXA_V2_RESULT="):])
+                _res.update({
+                    "tool": "midas_auto_calibrate", "status": "success",
+                    "Lsd_mm": _res.get("Lsd_um", 0) / 1000.0,
+                    "message": (f"v2 calibration complete (calibrant {_calib_v2}). "
+                                f"Strain {_res.get('in_loop_strain_uE')}→"
+                                f"{_res.get('post_residual_strain_uE')} µε. "
+                                f"calibration.json written to {_v2_out}.")})
+                print("[engine] calibration engine: pip-v2:midas_calibrate_v2",
+                      file=sys.stderr)
+                return format_result(_res)
+            return format_result({
+                "tool": "midas_auto_calibrate", "status": "error",
+                "engine": "pip-v2:midas_calibrate_v2",
+                "error": "v2 calibration failed (see stderr).",
+                "stderr": (_p.stderr or "")[-2000:],
+                "stdout": (_p.stdout or "")[-500:]})
 
         # Build command with all parameters according to MIDAS manual
         # Use MIDAS Python (conda midas_env) instead of current Python (UV)
