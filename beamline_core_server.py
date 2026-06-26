@@ -76,6 +76,10 @@ ALLOWED_COMMANDS = {
     'cp', 'mv', 'mkdir', 'rmdir', 'touch', 'chmod', 'ln', 'readlink',
     'echo', 'date', 'hostname', 'uname', 'whoami', 'env', 'which',
     'file', 'stat', 'tree', 'du', 'df', 'free', 'ps', 'nproc', 'lscpu', 'uptime',
+    # Read-only text/binary inspection + comparison utilities (safe, no mutation)
+    'md5sum', 'sha1sum', 'sha256sum', 'cksum', 'cmp', 'comm', 'cut', 'paste',
+    'tr', 'tee', 'xargs', 'column', 'basename', 'dirname', 'realpath', 'seq',
+    'tac', 'nl', 'od', 'xxd', 'hexdump', 'jq',
     'tar', 'gzip', 'gunzip', 'zip', 'unzip',
     'curl', 'wget', 'ssh', 'scp', 'rsync',
     'python', 'python3', 'pip', 'pip3', 'uv', 'conda', 'git',
@@ -244,7 +248,31 @@ def _validate_segments(command: str) -> tuple:
     """
     import re as _re
     blocked = []
-    segments = _re.split(r'\|\||&&|[|;&]', command)
+    # Strip heredoc bodies (<<MARKER … MARKER) BEFORE splitting. Embedded report
+    # text / Python / markdown tables contain |, &, ;, and barewords (e.g. a
+    # table row "| 1. Peak | … |") that must NOT be parsed as shell pipeline
+    # segments — that was the "Command not allowed: 1" false block.
+    def _strip_heredocs(s: str) -> str:
+        lines = s.split('\n')
+        out, i = [], 0
+        while i < len(lines):
+            m = _re.search(r'<<-?\s*["\']?([A-Za-z_]\w*)["\']?', lines[i])
+            if m:
+                out.append(lines[i][:m.start()])      # keep text before <<
+                marker = m.group(1)
+                i += 1
+                while i < len(lines) and lines[i].strip() != marker:
+                    i += 1                              # skip heredoc body
+                i += 1                                  # skip closing marker
+                continue
+            out.append(lines[i])
+            i += 1
+        return '\n'.join(out)
+
+    command = _strip_heredocs(command)
+    # Split on shell operators AND newlines so each real command line is checked
+    # (catches e.g. a destructive command on its own line, not just the first).
+    segments = _re.split(r'\|\||&&|[|;&\n]', command)
     for seg in segments:
         seg = seg.strip()
         if not seg:
