@@ -3883,6 +3883,81 @@ print("APEXA_V2_RESULT="+json.dumps(out))
 # BATCH INTEGRATION (MULTI-PANEL DETECTOR SUPPORT)
 # =============================================================================
 
+# ── Python-default batch integration helpers (operando: dark + xye/fxye) ─────
+def _radius_px_to_two_theta_deg(r_px, lsd_um, px_um):
+    """Convert detector radius (px) to 2θ (deg): 2θ = atan(R·px / Lsd)."""
+    import math
+    return [math.degrees(math.atan((r * px_um) / lsd_um)) for r in r_px]
+
+
+def _write_xye(path, tth_deg, inten):
+    """TOPAS .xye: 2θ(deg)  I  σ(=√max(I,0)), space-separated."""
+    import math
+    with open(path, "w") as f:
+        for t, i in zip(tth_deg, inten):
+            f.write(f"{t:.6f} {i:.6f} {math.sqrt(i) if i > 0 else 0.0:.6f}\n")
+
+
+def _write_fxye(path, tth_deg, inten, title="APEXA integrated"):
+    """GSAS/Jana .fxye: 2θ in centidegrees, I, σ(=√max(I,0)). Minimal header."""
+    import math
+    with open(path, "w") as f:
+        f.write(f"{title}\n")
+        for t, i in zip(tth_deg, inten):
+            f.write(f"{t * 100.0:.2f} {i:.4f} {math.sqrt(i) if i > 0 else 0.0:.4f}\n")
+
+
+def _read_profile_csv(csv_path):
+    """Read a midas-integrate-v2 CSV (R_px, intensity) → (r_px[], inten[])."""
+    r_px, inten = [], []
+    with open(csv_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line[0] in "#Rr":      # skip blank/header
+                continue
+            parts = line.replace(",", " ").split()
+            if len(parts) >= 2:
+                try:
+                    r_px.append(float(parts[0])); inten.append(float(parts[1]))
+                except ValueError:
+                    continue
+    return r_px, inten
+
+
+def _batch_integrate_v2_python(frames, params_file, dark_file, out_dir,
+                               lsd_um, px_um, mode="subpixel", timeout=600):
+    """Python-default operando batch: per frame run `midas-integrate-v2 --dark`
+    (dark subtracted by the maintained CLI), then write per-frame .xye (TOPAS,
+    2θ°) + .fxye (GSAS, centidegrees, σ=√I). Raises on any failure so the caller
+    can fall back to the legacy C++ integrator. PyTorch — slow on CPU at scale.
+    """
+    import shutil as _sh
+    cli = _sh.which("midas-integrate-v2")
+    if not cli:
+        raise RuntimeError("midas-integrate-v2 not found (pip midas-suite)")
+    out_dir = Path(out_dir); out_dir.mkdir(parents=True, exist_ok=True)
+    outputs = []
+    for frame in frames:
+        stem = Path(frame).stem
+        csv_out = out_dir / f"{stem}.profile.csv"
+        cmd = [cli, str(params_file), "--image", str(frame),
+               "--mode", mode, "--out", str(csv_out)]
+        if dark_file:
+            cmd += ["--dark", str(dark_file)]
+        p = subprocess.run(cmd, capture_output=True, text=True,
+                           timeout=timeout, env=get_midas_env())
+        if p.returncode != 0 or not csv_out.exists():
+            raise RuntimeError(f"midas-integrate-v2 failed on {stem}: "
+                               f"{(p.stderr or '')[-300:]}")
+        r_px, inten = _read_profile_csv(csv_out)
+        tth = _radius_px_to_two_theta_deg(r_px, lsd_um, px_um)
+        xye, fxye = out_dir / f"{stem}.xye", out_dir / f"{stem}.fxye"
+        _write_xye(xye, tth, inten)
+        _write_fxye(fxye, tth, inten, title=stem)
+        outputs += [str(xye), str(fxye)]
+    return outputs
+
+
 @mcp.tool()
 async def midas_batch_integrate(
     data_file: str,
@@ -3993,6 +4068,68 @@ async def midas_batch_integrate(
                                            f"Use refined_MIDAS_params*.txt from midas_auto_calibrate."})
 
         _strip_empty_value_lines(param_path)
+
+        # ── Python default (operando): per-frame dark-subtract + v2 integrate ──
+        # Preferred when a dark is given (v2-batch can't dark-subtract). Resolves
+        # the frame list from data_file + range (excluding dark/background files),
+        # runs `midas-integrate-v2 --dark` per frame, and writes .xye + .fxye.
+        # On ANY uncertainty/error it falls through to the deprecated C++
+        # integrator below (which also handles mixed dirs). Slow on CPU at scale.
+        import shutil as _sh2
+        _force_legacy = os.environ.get("APEXA_FORCE_LEGACY_MIDAS") == "1"
+        if not _force_legacy and dark_file and _sh2.which("midas-integrate-v2"):
+            try:
+                _df = Path(data_file)
+                if _df.is_dir():
+                    _cands = sorted(
+                        p for pat in ("*.h5", "*.hdf5", "*.tif", "*.tiff")
+                        for p in _df.glob(pat)
+                        if "dark" not in p.name.lower()
+                        and "background" not in p.name.lower())
+
+                    def _fnum(p):
+                        nums = re.findall(r"\d+", p.name)
+                        return int(nums[-1]) if nums else -1
+                    _frames = [str(p) for p in _cands
+                               if start_frame <= _fnum(p) <= end_frame]
+                else:
+                    _frames = [str(_df)]
+                if not _frames:
+                    raise RuntimeError("no data frames resolved (dir layout?)")
+                _lsd_um = _px_um = None
+                for _ln in Path(param_path).read_text().splitlines():
+                    _t = _ln.split()
+                    if len(_t) >= 2 and _t[0] == "Lsd":
+                        _lsd_um = float(_t[1])
+                    elif len(_t) >= 2 and _t[0] in ("px", "PixelSize", "pxY"):
+                        _px_um = float(_t[1])
+                if not _lsd_um or not _px_um:
+                    raise RuntimeError("Lsd/px not in params (needed for 2θ)")
+                _out = Path(result_folder).resolve()
+                print("=" * 70, file=sys.stderr)
+                print("🔧 BATCH (python default: midas-integrate-v2 --dark per frame "
+                      "→ xye/fxye):", file=sys.stderr)
+                print(f"   {len(_frames)} frames · dark={Path(dark_file).name} · out={_out}",
+                      file=sys.stderr)
+                if len(_frames) > 200:
+                    print(f"   ⚠ {len(_frames)} frames on CPU PyTorch is slow — set "
+                          "APEXA_FORCE_LEGACY_MIDAS=1 for the fast C++ path.", file=sys.stderr)
+                print("=" * 70, file=sys.stderr)
+                _outs = _batch_integrate_v2_python(
+                    _frames, str(param_path), str(Path(dark_file).expanduser()),
+                    _out, _lsd_um, _px_um)
+                print("[engine] batch engine: pip-v2:midas-integrate-v2 (python, per-frame dark)",
+                      file=sys.stderr)
+                return format_result({
+                    "tool": "midas_batch_integrate", "status": "success",
+                    "engine": "pip-v2:midas-integrate-v2-python",
+                    "result_folder": str(_out), "n_frames": len(_frames),
+                    "n_outputs": len(_outs), "outputs": _outs[:20],
+                    "message": f"Batch integrated {len(_frames)} frames via python v2 "
+                               "(per-frame dark subtraction); wrote .xye + .fxye."})
+            except Exception as _e:
+                print(f"[engine] python batch path unavailable ({type(_e).__name__}: {_e}) "
+                      "— falling back to legacy C++ integrator.", file=sys.stderr)
 
         # ── Latest-first: midas-integrate-v2-batch when applicable ──────────
         # The modern pip batch engine (subpixel binning, xye/csv/h5 output) is
