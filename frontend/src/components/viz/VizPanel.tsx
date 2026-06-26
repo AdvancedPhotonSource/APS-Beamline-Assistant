@@ -4,6 +4,7 @@ import { Dashboard } from './Dashboard'
 import { ArtifactBody } from './ArtifactBody'
 import { ProvenanceBar } from './ProvenanceBar'
 import { ViewerControls } from '@/components/viewer/ViewerControls'
+import { ImageActions } from '@/components/viewer/ImageActions'
 import { deriveProvenance } from '@/lib/provenance'
 import type { VizArtifact } from '@/api/types'
 
@@ -97,13 +98,16 @@ export function VizPanel() {
             {active.type === 'diffraction' && (
               <div
                 style={{
-                  width: 210,
+                  width: 270,
                   flexShrink: 0,
                   borderLeft: '1px solid var(--apexa-border)',
                   background: 'var(--apexa-surface-2)',
                   overflowY: 'auto',
                 }}
               >
+                {/* Grounded asks + MIDAS-viewer launcher for the active image */}
+                <ImageActions />
+                {/* Contrast / colormap / radial profile */}
                 <ViewerControls />
               </div>
             )}

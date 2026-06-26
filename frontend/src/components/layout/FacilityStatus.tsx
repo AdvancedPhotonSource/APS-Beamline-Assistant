@@ -25,6 +25,8 @@ export function FacilityStatus() {
   useEffect(() => {
     let alive = true
     const poll = async () => {
+      // Don't poll a backgrounded tab — avoids flooding /api/status in the logs.
+      if (typeof document !== 'undefined' && document.hidden) return
       try {
         const r = await fetch('/api/status')
         const j = (await r.json()) as Status
@@ -37,7 +39,7 @@ export function FacilityStatus() {
       }
     }
     poll()
-    const t = setInterval(poll, 5000)
+    const t = setInterval(poll, 15000) // 15s — status changes slowly
     return () => {
       alive = false
       clearInterval(t)
