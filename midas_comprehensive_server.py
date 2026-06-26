@@ -232,6 +232,24 @@ def get_midas_env() -> dict:
 
     return env
 
+
+_DEPRECATION_WARNED: set = set()
+
+def _warn_deprecated_cpp(what: str) -> None:
+    """Flag use of the hand-built C++ MIDAS tree (MIDAS_ROOT scripts/binaries).
+
+    The pip `midas-suite` Python packages are now the maintained default; the
+    C++ tree is a deprecated fallback that will be removed. Warned once per
+    distinct `what` per process to avoid log spam. Grep `_warn_deprecated_cpp`
+    to find every remaining C++ execution site.
+    """
+    if what in _DEPRECATION_WARNED:
+        return
+    _DEPRECATION_WARNED.add(what)
+    print(f"  ⚠ DEPRECATED C++ MIDAS engine ({what}) — will be removed; "
+          f"pip midas-suite is the default.", file=sys.stderr)
+
+
 def find_midas_installation() -> Path:
     """Find MIDAS installation by checking common locations.
 
@@ -420,6 +438,7 @@ def run_midas_executable(executable: str, param_file: str, cwd: str = None,
         # Use MIDAS environment with proper library paths
         if env is None:
             env = get_midas_env()
+        _warn_deprecated_cpp(f"C++ binary {executable}")
         cmd = [str(exe_path), str(param_file)]
         print(f"  $ {' '.join(cmd)}", file=sys.stderr)
         result = subprocess.run(
@@ -485,6 +504,7 @@ def run_python_script(script_name: str, args: list, cwd: str = None,
     try:
         # Use MIDAS Python (conda midas_env) instead of "python"
         midas_python = find_midas_python()
+        _warn_deprecated_cpp(f"MIDAS_ROOT script {script_name}")
         cmd = [midas_python, str(script_path)] + args
         print(f"  $ {' '.join(cmd)}", file=sys.stderr)
         result = subprocess.run(
@@ -2611,6 +2631,7 @@ async def midas_integrate_2d_to_1d(
         if not integrator_script.exists():
             return format_result({"tool": "midas_integrate_2d_to_1d", "status": "error",
                                   "error": f"integrator.py not found at {integrator_script}"})
+        _warn_deprecated_cpp("integration: integrator.py")
 
         out_dir = Path(result_folder).expanduser().absolute() if result_folder \
                   else image_path.parent / "integration"
@@ -3645,6 +3666,7 @@ print("APEXA_V2_RESULT="+json.dumps(out))
                 env=get_midas_env()
             )
             engine_used = "legacy-cpp:AutoCalibrateZarr.py"
+            _warn_deprecated_cpp("calibration: AutoCalibrateZarr.py")
 
         print(f"[engine] calibration engine: {engine_used}", file=sys.stderr)
 
@@ -4036,6 +4058,7 @@ async def midas_batch_integrate(
         if not midas_integrator.exists():
             return format_result({"tool": "midas_batch_integrate", "status": "error",
                                   "error": f"integrator.py not found at {midas_integrator}"})
+        _warn_deprecated_cpp("batch integration: integrator.py")
 
         # Create result folder
         result_path = Path(result_folder).resolve()
@@ -5560,6 +5583,7 @@ async def run_gsas_refinement(
 
         # === Dispatch =========================================================
         if not robust:
+            _warn_deprecated_cpp("GSAS refinement: gsas_ii_refine.py")
             res = _invoke(legacy_script, python_for_legacy, out_path, "legacy")
             return format_result({
                 "tool": "run_gsas_refinement",
