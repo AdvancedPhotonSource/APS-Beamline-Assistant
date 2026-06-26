@@ -17,12 +17,27 @@ export interface ToolResult {
 
 export type ArtifactType = 'plotly' | 'image' | 'table' | 'text' | 'diffraction'
 
+/**
+ * Provenance travels with every scientific artifact so a result is never just
+ * a number/plot — it carries what produced it. This is the trust + reproducibility
+ * layer that distinguishes a facility tool from a chatbot.
+ */
+export interface Provenance {
+  inputs?: string[]                              // input files / data sources
+  params?: Record<string, string | number>      // key parameters used
+  tool?: string                                  // tool / engine that produced it
+  version?: string                               // tool/package version
+  timestamp?: number                             // epoch ms
+  command?: string                               // exact CLI / notebook cell (reproducibility)
+}
+
 export interface VizArtifact {
   id: string
   type: ArtifactType
   title: string
   data: unknown
   sourceMessageId: string
+  provenance?: Provenance
 }
 
 export interface WsOutgoing {

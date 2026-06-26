@@ -353,8 +353,13 @@ def caked_to_plotly(
     if log_intensity:
         intensity = np.log10(np.maximum(intensity, 1e-10))
 
+    # Detector gaps / dead pixels are NaN (and log10 can yield ±inf). Strict JSON
+    # cannot encode NaN/Inf, and Plotly renders null as a gap — exactly what we
+    # want for missing pixels — so map every non-finite value to None.
+    z = np.where(np.isfinite(intensity), intensity, None)
+
     traces = [{
-        "z": intensity.tolist(),
+        "z": z.tolist(),
         "x": d['eta_axis'].tolist(),
         "y": d['tth_axis'].tolist(),
         "type": "heatmap",

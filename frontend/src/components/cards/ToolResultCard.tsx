@@ -6,12 +6,10 @@ import { WorkflowCard } from './WorkflowCard'
 import { IntegrationCard } from './IntegrationCard'
 import { ErrorCard } from './ErrorCard'
 import { GenericCard } from './GenericCard'
+import { ToolCardChrome } from './ToolCardChrome'
 
-export function ToolResultCard({ result }: { result: ToolResult }) {
-  if (result.status === 'error' || result.status === 'failed') {
-    return <ErrorCard result={result} />
-  }
-
+/** Bare card with no chrome — used inside the Canvas (already an artifact). */
+export function cardFor(result: ToolResult) {
   switch (result.tool) {
     case 'midas_auto_calibrate':
     case 'run_ff_calibration':
@@ -36,4 +34,14 @@ export function ToolResultCard({ result }: { result: ToolResult }) {
     default:
       return <GenericCard result={result} />
   }
+}
+
+export function ToolResultCard({ result }: { result: ToolResult }) {
+  // Errors render bare (no "open in Canvas" — nothing to inspect/reproduce).
+  if (result.status === 'error' || result.status === 'failed') {
+    return <ErrorCard result={result} />
+  }
+
+  // Every successful tool result gets shared chrome: provenance + open-in-Canvas.
+  return <ToolCardChrome result={result}>{cardFor(result)}</ToolCardChrome>
 }
