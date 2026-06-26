@@ -116,11 +116,18 @@ If the image filename contains these patterns, no param file needed for material
 ### Output files (written to image directory)
 
 - `refined_MIDAS_params_<material>.txt` — **primary output**, use for integration and FF-HEDM
-- `autocal.log` — iteration history
+- `autocal.log` — iteration history (subprocess/`AutoCalibrateZarr.py` path)
 - `<stem>.lineout.xy` — 2θ vs intensity for visual check
-- **(native `midas_calibrate` v2 path only)** `calibration.json` — refined geometry
-  summary, and `residual_corr.bin` — per-pixel residual correction map (consumed by
-  `midas-integrate` for distortion-aware integration)
+- `*corr.csv` — per-ring residuals (`AutoCalibrateZarr.py`/`CalibrantIntegratorOMP`
+  path; view with `plot_calibrant_results`)
+
+> **`midas_auto_calibrate` writes the refined `.txt` only** — both its native engine
+> (v1 `midas_calibrate`, `result.params.write()`) and the `AutoCalibrateZarr.py`
+> fallback produce `refined_MIDAS_params_<material>.txt` as the canonical output.
+> The `calibration.json` + `residual_corr.bin` artifacts belong to the *separate*
+> `midas_calibrate_v2` one-shot `calibrate(output_dir=…)` API used in the package
+> notebooks — APEXA does **not** invoke that path today, so do not expect those
+> files from `midas_auto_calibrate`.
 
 ### Convergence guide
 

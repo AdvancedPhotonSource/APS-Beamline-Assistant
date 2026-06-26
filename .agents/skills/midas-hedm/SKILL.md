@@ -154,7 +154,7 @@ GapIntensity     -1        APS detector convention
 
 | Step | Key output files |
 |---|---|
-| Calibration | `refined_MIDAS_params_CeO2.txt` (+ `calibration.json`, `residual_corr.bin`) |
+| Calibration | `refined_MIDAS_params_CeO2.txt` (+ `autocal.log`, `*corr.csv`) |
 | Integration | `*_lineout.xy`, `<stem>.zarr.zip` |
 | FF-HEDM | `IndexBest.bin`, `OrientPosFit.bin`, `InputAll.csv`; `Grains.csv` (c-omp refiner) |
 | NF-HEDM | `Grains.mic`, `GrainsLayer*.csv`, consolidated HDF5 |
