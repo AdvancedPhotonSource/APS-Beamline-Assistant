@@ -1047,10 +1047,53 @@ class AgentRunner:
 
     # Bare `TOOL_CALL: name` (any following args parsed separately — Format B).
     _TOOL_CALL_NAME_RE = re.compile(r'TOOL_CALL:\s*([A-Za-z_]\w*)')
+    # `ARGUMENTS:` marker (Format A) — the JSON after it is extracted with a
+    # brace-balanced scan, not a regex, so nested objects/large commands work.
+    _ARGUMENTS_RE = re.compile(r'\s*\n?\s*ARGUMENTS:\s*', re.IGNORECASE)
     # Anthropic native tool block that leaks through Argo as plain text (Format C).
     _TOOL_USE_XML_RE = re.compile(r'<tool_use>(.*?)</tool_use>', re.DOTALL)
     # A `key: value` or `key = value` argument line (Format B body).
     _KV_LINE_RE = re.compile(r'^[-*\s]*([A-Za-z_]\w*)\s*[:=]\s*(.+?)\s*$')
+    # Tool-call ATTEMPT markers — used by the anti-confabulation guard to detect
+    # that the model tried to call a tool even though nothing parsed/executed.
+    _TOOL_ATTEMPT_RE = re.compile(
+        r'(TOOL_CALL\s*:|ARGUMENTS\s*:|<tool_call|<tool_use|<invoke\b'
+        r'|<built-in function|<function\b|🛠️)', re.IGNORECASE)
+
+    @staticmethod
+    def _extract_balanced_json(s: str, start: int):
+        """From the first '{' at/after `start`, return the brace-balanced JSON
+        object substring, respecting double-quoted strings and escapes (so
+        nested {} inside a "command" string — e.g. a Python heredoc — don't
+        break extraction). Returns None if no balanced object is found.
+
+        This replaces the old non-greedy `\\{.*?\\}` regex, which truncated at
+        the first '}' and silently dropped large/nested tool calls — causing the
+        model to then confabulate results for a call that never executed.
+        """
+        i = s.find('{', start)
+        if i < 0:
+            return None
+        depth, in_str, esc = 0, False, False
+        for j in range(i, len(s)):
+            ch = s[j]
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == '\\':
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+            else:
+                if ch == '"':
+                    in_str = True
+                elif ch == '{':
+                    depth += 1
+                elif ch == '}':
+                    depth -= 1
+                    if depth == 0:
+                        return s[i:j + 1]
+        return None
 
     @staticmethod
     def _coerce_arg_value(s: str):
@@ -1091,15 +1134,25 @@ class AgentRunner:
         consumed_spans: List[tuple] = []   # (start,end) of Format-A matches
 
         # ── Format A: TOOL_CALL: name + ARGUMENTS: {json} (primary) ──────────
-        for match in self._TOOL_CALL_RE.finditer(text):
-            name = match.group(1).strip()
+        # Brace-balanced extraction (not regex) so large/nested-JSON commands
+        # parse instead of being silently truncated-and-dropped.
+        for nm in self._TOOL_CALL_NAME_RE.finditer(text):
+            name = nm.group(1).strip()
+            am = self._ARGUMENTS_RE.match(text, nm.end())
+            if not am:
+                continue   # no ARGUMENTS: here — let Format B try this one
+            json_str = self._extract_balanced_json(text, am.end())
+            if json_str is None:
+                continue
             try:
-                args = json.loads(match.group(2))
+                args = json.loads(json_str)
             except json.JSONDecodeError:
+                continue
+            if not isinstance(args, dict):
                 continue
             calls.append(ToolCall(id=f"text_tc_{n}", name=name, arguments=args))
             n += 1
-            consumed_spans.append((match.start(), match.end()))
+            consumed_spans.append((nm.start(), nm.end()))
 
         # ── Format B: TOOL_CALL: name followed by bare key:value lines ───────
         for nm in self._TOOL_CALL_NAME_RE.finditer(text):
@@ -1511,6 +1564,7 @@ class AgentRunner:
             re.I,
         )
         _query_is_approval = bool(_approval_re.search(query)) and len(query.split()) <= 10
+        _confab_strikes = 0   # anti-confabulation guard: failed tool-call attempts
 
         for _ in range(max_iterations):
             response = await provider.chat(messages, agent.temperature)
@@ -1954,6 +2008,36 @@ class AgentRunner:
                 if forced_break:
                     break
                 continue
+
+            # ── Anti-confabulation guard ─────────────────────────────────────
+            # No tool calls PARSED, but the text contains tool-call syntax → the
+            # model TRIED to act and it silently failed (unparseable format,
+            # broken JSON, native XML). Do NOT let it finalize with fabricated
+            # results (e.g. "report generated at <path>" when nothing ran). Force
+            # a correctly-formatted retry; after repeated failures, return an
+            # honest "nothing executed" instead of the confabulation.
+            if text and self._TOOL_ATTEMPT_RE.search(text):
+                if _confab_strikes < 2:
+                    _confab_strikes += 1
+                    print(f"  \033[33m⚠ tool call did not execute — forcing retry "
+                          f"(attempt {_confab_strikes})\033[0m")
+                    messages.append({"role": "assistant", "content": text})
+                    messages.append({"role": "user", "content": (
+                        "⛔ Your previous message contained a tool call that DID NOT "
+                        "execute — it was not in a parseable format, so NO command ran "
+                        "and NO files were created. Do NOT report any results, paths, "
+                        "file sizes, or outputs as if it succeeded — that would be "
+                        "fabrication. Re-issue the call in EXACTLY this format, with "
+                        "ARGUMENTS as a single valid JSON object:\n\n"
+                        "TOOL_CALL: <tool_name>\n"
+                        "ARGUMENTS: {\"key\": \"value\"}\n"
+                    )})
+                    continue
+                return ("⚠️ I tried to call a tool but it did not execute (the "
+                        "tool-call format was not recognized), so nothing ran and no "
+                        "files were written. I'm not reporting results I don't have. "
+                        "Please retry — and if you're on an Opus/Sonnet model, switch "
+                        "to gpt55 or gpt54, which emit the tool-call format reliably.")
 
             # ── No tool calls at all — check for hallucination, then return ──
             if text and self._looks_like_hallucinated_result(text):
