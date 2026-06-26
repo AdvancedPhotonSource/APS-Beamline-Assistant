@@ -2931,7 +2931,7 @@ async def midas_auto_calibrate(
     data_loc: str = "",
     energy_kev: float = 0.0,
     wavelength_angstrom: float = 0.0,
-    calibration_engine: str = "v1",
+    calibration_engine: str = "v2",
 ) -> str:
     """🔧 PRIMARY TOOL FOR FF-HEDM DETECTOR CALIBRATION (MIDAS Official)
 
@@ -3353,13 +3353,10 @@ async def midas_auto_calibrate(
         # calibration.json with iso_R/harmonic distortion + in/post-residual
         # strain (µε) — enabling a true v2-vs-v2 calibration benchmark. PyTorch,
         # so slow on CPU-only hosts; runs in the MIDAS python env via subprocess.
-        if str(calibration_engine).lower() == "v2":
-            if not _resolved_wl:
-                return format_result({
-                    "tool": "midas_auto_calibrate", "status": "error",
-                    "engine": "pip-v2:midas_calibrate_v2",
-                    "error": "v2 calibration needs a wavelength — pass energy_kev "
-                             "or wavelength_angstrom (or a filename with a keV token)."})
+        if str(calibration_engine).lower() == "v2" and not _resolved_wl:
+            print("[engine] v2 calibration needs a wavelength but none resolved; "
+                  "falling back to v1 engine.", file=sys.stderr)
+        if str(calibration_engine).lower() == "v2" and _resolved_wl:
             _v2_out = (Path(output_dir).expanduser().absolute()
                        if output_dir else image_path.parent)
             _v2_out.mkdir(parents=True, exist_ok=True)
@@ -3425,14 +3422,13 @@ print("APEXA_V2_RESULT="+json.dumps(out))
                                     capture_output=True, text=True,
                                     timeout=7200, env=get_midas_env())
             except subprocess.TimeoutExpired:
-                return format_result({
-                    "tool": "midas_auto_calibrate", "status": "error",
-                    "engine": "pip-v2:midas_calibrate_v2",
-                    "error": "v2 calibration timed out (CPU PyTorch is slow). Use a "
-                             "GPU host, or calibration_engine='v1' for the fast path."})
-            _line = next((l for l in (_p.stdout or "").splitlines()
+                print("[engine] v2 calibration timed out (CPU PyTorch is slow) — "
+                      "falling back to v1 engine.", file=sys.stderr)
+                _p = None
+            _line = (next((l for l in (_p.stdout or "").splitlines()
                           if l.startswith("APEXA_V2_RESULT=")), None)
-            if _p.returncode == 0 and _line:
+                     if _p is not None else None)
+            if _p is not None and _p.returncode == 0 and _line:
                 import json as _json
                 _res = _json.loads(_line[len("APEXA_V2_RESULT="):])
                 _res.update({
@@ -3445,12 +3441,12 @@ print("APEXA_V2_RESULT="+json.dumps(out))
                 print("[engine] calibration engine: pip-v2:midas_calibrate_v2",
                       file=sys.stderr)
                 return format_result(_res)
-            return format_result({
-                "tool": "midas_auto_calibrate", "status": "error",
-                "engine": "pip-v2:midas_calibrate_v2",
-                "error": "v2 calibration failed (see stderr).",
-                "stderr": (_p.stderr or "")[-2000:],
-                "stdout": (_p.stdout or "")[-500:]})
+            # v2 failed/unavailable → fall through to the v1 engine below.
+            if _p is not None:
+                print("[engine] v2 calibration failed — falling back to v1 engine.",
+                      file=sys.stderr)
+                for _l in (_p.stderr or "").strip().splitlines()[-8:]:
+                    print(f"  {_l}", file=sys.stderr)
 
         # Build command with all parameters according to MIDAS manual
         # Use MIDAS Python (conda midas_env) instead of current Python (UV)
