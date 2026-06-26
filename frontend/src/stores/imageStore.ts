@@ -147,7 +147,8 @@ export const useImageStore = create<ImageState>((set, get) => ({
             data: [
               {
                 x: result.radii,
-                y: result.intensities,
+                // backend returns `intensity` (singular); tolerate either.
+                y: result.intensity ?? result.intensities,
                 type: 'scatter',
                 mode: 'lines',
                 name: 'Radial Intensity',

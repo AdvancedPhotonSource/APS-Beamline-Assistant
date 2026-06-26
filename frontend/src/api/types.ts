@@ -15,6 +15,14 @@ export interface ToolResult {
   data: Record<string, unknown>
 }
 
+export interface ChatSession {
+  id: string
+  title: string
+  messages: ChatMessage[]
+  createdAt: number
+  updatedAt: number
+}
+
 export type ArtifactType = 'plotly' | 'image' | 'table' | 'text' | 'diffraction'
 
 /**

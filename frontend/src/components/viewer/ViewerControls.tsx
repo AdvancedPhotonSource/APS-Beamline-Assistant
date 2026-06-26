@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useImageStore } from '@/stores/imageStore'
 import { fetchColormaps } from '@/api/endpoints'
 
@@ -7,12 +7,21 @@ const DEFAULT_COLORMAPS = ['viridis', 'plasma', 'inferno', 'magma', 'gray', 'hot
 export function ViewerControls() {
   const { activeImageId, loadedImages, settings, updateSettings, applySettings, computeRadialProfile, isLoading } = useImageStore()
   const [colormaps, setColormaps] = useState<string[]>(DEFAULT_COLORMAPS)
+  const applyTimer = useRef<number | null>(null)
 
   const activeImage = activeImageId ? loadedImages.get(activeImageId) : null
 
   useEffect(() => {
     fetchColormaps().then((r) => setColormaps(r.colormaps)).catch(() => {})
   }, [])
+
+  // Live update: change a slider/colormap → push to the backend (debounced) so the
+  // image updates immediately instead of needing an explicit Apply click.
+  const live = (partial: Parameters<typeof updateSettings>[0]) => {
+    updateSettings(partial)
+    if (applyTimer.current) clearTimeout(applyTimer.current)
+    applyTimer.current = window.setTimeout(() => { applySettings() }, 180)
+  }
 
   if (!activeImage) {
     return (
@@ -39,7 +48,7 @@ export function ViewerControls() {
           max={stats.max}
           step={(stats.max - stats.min) / 1000}
           value={settings.vmin}
-          onChange={(e) => updateSettings({ vmin: parseFloat(e.target.value) })}
+          onChange={(e) => live({ vmin: parseFloat(e.target.value) })}
           className="w-full h-1 bg-zinc-700 rounded-full appearance-none cursor-pointer accent-blue-500"
         />
 
@@ -53,7 +62,7 @@ export function ViewerControls() {
           max={stats.max}
           step={(stats.max - stats.min) / 1000}
           value={settings.vmax}
-          onChange={(e) => updateSettings({ vmax: parseFloat(e.target.value) })}
+          onChange={(e) => live({ vmax: parseFloat(e.target.value) })}
           className="w-full h-1 bg-zinc-700 rounded-full appearance-none cursor-pointer accent-blue-500"
         />
 
@@ -67,7 +76,7 @@ export function ViewerControls() {
           max={5.0}
           step={0.05}
           value={settings.gamma}
-          onChange={(e) => updateSettings({ gamma: parseFloat(e.target.value) })}
+          onChange={(e) => live({ gamma: parseFloat(e.target.value) })}
           className="w-full h-1 bg-zinc-700 rounded-full appearance-none cursor-pointer accent-blue-500"
         />
       </div>
@@ -76,7 +85,7 @@ export function ViewerControls() {
         <div className="text-zinc-400 font-medium mb-2 uppercase tracking-wider">Colormap</div>
         <select
           value={settings.colormap}
-          onChange={(e) => updateSettings({ colormap: e.target.value })}
+          onChange={(e) => live({ colormap: e.target.value })}
           className="w-full bg-zinc-800 text-zinc-300 rounded-md px-2 py-1.5 border border-zinc-700 focus:outline-none focus:border-blue-500"
         >
           {colormaps.map((cm) => (

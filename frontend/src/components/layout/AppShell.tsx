@@ -100,7 +100,7 @@ export function AppShell() {
   const mode = useThemeStore((s) => s.mode)
   const [sideW, setSideW] = useState(260)
   const [chatW, setChatW] = useState(400)
-  const [chatCollapsed, setChatCollapsed] = useState(false)
+  const [vizCollapsed, setVizCollapsed] = useState(false)
   const [sideCollapsed, setSideCollapsed] = useState(false)
 
   useEffect(() => {
@@ -108,12 +108,16 @@ export function AppShell() {
   }, [mode])
 
   const handleSideDrag = useCallback((dx: number) => {
-    setSideW(w => Math.max(180, Math.min(500, w + dx)))
+    setSideW(w => Math.max(180, Math.min(700, w + dx)))
   }, [])
 
+  // Let the chat panel grow until the Canvas is squeezed to nothing — so the
+  // slider reaches the true right extreme. Max accounts for rail + side panel.
   const handleChatDrag = useCallback((dx: number) => {
-    setChatW(w => Math.max(280, Math.min(800, w + dx)))
-  }, [])
+    const sideTotal = sideCollapsed ? 22 : sideW + 6
+    const maxChat = Math.max(320, window.innerWidth - 56 - sideTotal - 6)
+    setChatW(w => Math.max(280, Math.min(maxChat, w + dx)))
+  }, [sideW, sideCollapsed])
 
   return (
     <div style={{ height: '100vh', width: '100%', display: 'flex', flexDirection: 'column', background: 'var(--apexa-panel-bg)', color: 'var(--apexa-text)' }}>
@@ -135,22 +139,29 @@ export function AppShell() {
           <CollapsedTab label="Panel" onClick={() => setSideCollapsed(false)} />
         )}
 
-        {/* Chat Panel */}
-        {!chatCollapsed ? (
+        {/* Chat Panel — flex-fills when the Canvas is collapsed (chat full-screen) */}
+        {vizCollapsed ? (
+          <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
+            <ChatPanel />
+          </div>
+        ) : (
           <>
             <div style={{ width: chatW, flexShrink: 0, overflow: 'hidden' }}>
               <ChatPanel />
             </div>
-            <DragHandle onDrag={handleChatDrag} onToggle={() => setChatCollapsed(true)} />
+            {/* double-click this divider → collapse the Canvas → chat goes full-screen */}
+            <DragHandle onDrag={handleChatDrag} onToggle={() => setVizCollapsed(true)} />
           </>
-        ) : (
-          <CollapsedTab label="Chat" onClick={() => setChatCollapsed(false)} />
         )}
 
-        {/* Viz Panel (Canvas) — takes all remaining space */}
-        <div style={{ flex: 1, minWidth: 200, overflow: 'hidden' }}>
-          <VizPanel />
-        </div>
+        {/* Viz Panel (Canvas) — takes all remaining space, or collapses to a tab */}
+        {vizCollapsed ? (
+          <CollapsedTab label="Canvas" onClick={() => setVizCollapsed(false)} />
+        ) : (
+          <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
+            <VizPanel />
+          </div>
+        )}
       </div>
 
       {/* Always-visible facility status bar */}
