@@ -1415,7 +1415,7 @@ class APEXAClient:
 
         # Determine environment based on model (dev models require dev endpoint)
         self.anl_username = os.getenv("ANL_USERNAME")
-        self.selected_model = os.getenv("ARGO_MODEL", "gpt54")
+        self.selected_model = os.getenv("ARGO_MODEL", "gpt55")
 
         # All current models on PROD (March 2026 Argo update)
         # Future beta models: add to DEV_ONLY_MODELS in apexa_agents.py
