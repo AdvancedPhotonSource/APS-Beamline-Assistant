@@ -1,4 +1,4 @@
-import Plot from '@/lib/plotly'
+import Plot from './LazyPlot'
 import { useThemeStore } from '@/stores/themeStore'
 
 interface PlotlyChartProps {

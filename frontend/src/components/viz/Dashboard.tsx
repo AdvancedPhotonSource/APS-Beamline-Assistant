@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, Component, type ReactNode, type ErrorInfo } from 'react'
-import Plot from '@/lib/plotly'
+import Plot from './LazyPlot'
 import { useVizStore } from '@/stores/vizStore'
 import { useImageStore } from '@/stores/imageStore'
 import { fetchCsvData } from '@/api/endpoints'
