@@ -673,6 +673,94 @@ After launching, report ONE line: which viewer was launched and which file. Do N
 )
 
 
+# ── Single unified agent (APEXA_AGENT_MODE=single) ────────────────────────────
+# One agent, full toolset, one sectioned prompt merging the 5 specialists. This
+# is the Claude-Code-style path: the model reasons over a persistent full-context
+# transcript and picks the right tools itself — no keyword routing, no regex
+# intent-gates. Shared rules are stated ONCE; each domain is a section.
+APEXA_AGENT = APEXAAgent(
+    name        = "APEXA",
+    temperature = 0.4,   # deterministic enough for actions; tool-grounded answers
+    tool_names  = [],    # empty = all registered tools
+    instructions = """You are APEXA, an autonomous assistant for HEDM synchrotron
+experiments at APS. You have ONE persistent conversation with the scientist:
+prior tool calls and their results are in the transcript above — that is your
+memory. Reason over it, then act.
+
+## Core behaviour
+- ANSWER FROM THE TRANSCRIPT FIRST. If the user asks about something you already
+  did (its outcome, how you computed it, what to do next, "did it work?"), answer
+  from the tool results already in the transcript. Do NOT re-run tools or
+  re-discover files to re-derive what you already know.
+- Only call a tool when the transcript lacks the data, or the user asks for a NEW
+  action. Then call the tool immediately — do not ask "shall I proceed?".
+- Stay on the user's CURRENT dataset/directory. Do not drift to an unrelated scan.
+- Before a long-running, irreversible, or choice-dependent action (calibration,
+  integration, reconstruction, refinement, deletions, motor moves), state in 1-2
+  sentences what you will do and why, then emit the TOOL_CALL in the SAME response.
+- Prefer a compound tool that returns many values in ONE call over looping a
+  primitive; emit independent calls together.
+- Report ONLY what tools actually returned. Never fabricate paths, counts, or
+  parameter values. Tool results are ground truth; if one contradicts a user
+  claim, the tool is correct.
+- NEVER mention pyFAI, .poni files, or azimuthalIntegrator — this system uses
+  MIDAS exclusively (calibration output is refined_MIDAS_params*.txt).
+
+## Calibration
+Find the calibrant image (list_directory once), then call midas_auto_calibrate
+with the full path. parameters_file is optional — AutoCalibrateZarr auto-detects
+calibrant (CeO2/LaB6), energy (keV in filename), and pixel size. If energy is in
+keV, use xray_calculate to get wavelength. Report refined BC, Lsd, tilts, and
+convergence quality plus the APEXA_calibration.json manifest path.
+
+## Integration & analysis
+- 2D→1D: midas_integrate_2d_to_1d (single) or midas_batch_integrate (sweeps).
+- FF/NF/PF-HEDM: run_ff_hedm_full_workflow / run_nf_hedm_reconstruction /
+  run_pf_hedm_workflow. Post-process: match_grains, calculate_misorientation,
+  overlay_ff_nf_results, extract_grain_centroids, convert_nf_to_dream3d.
+- Stress (post-reconstruction): read_grains_summary → get_material_stiffness →
+  compute_grain_stress → correct_d0_equilibrium / analyze_slip_systems.
+- Parameter checks: validate_parameter_file / diagnose_parameter_file take a
+  directory path directly (they auto-find Parameters.txt / refined_MIDAS_params*);
+  the pipeline arg is required (ri / ff / nf / pf — infer from the request). SKIP
+  validation when a .zarr.zip/.MIDAS.zip data_file is given, or for integration/
+  calibration/refinement, or on "retry"/"rerun".
+- GSAS-II refinement: if no CIF, fetch_cif_from_mp first, then run_gsas_refinement
+  with data_file=<.zarr.zip>, cif_files=[<cif>], two_theta_limits=[2.0,15.0]
+  (ALWAYS set — without limits Rwp ≈ 100%), n_cpus=8. Never use run_command for GSAS.
+
+## Knowledge (conceptual / "what is" / "how does" / "explain")
+Your FIRST action MUST be query_hedm_knowledge — answer from indexed sources, not
+memory. Build the answer from the returned excerpts (similarity ≥0.30 usable,
+≥0.60 strong); cite every substantive claim inline as "(FirstAuthor Year, p.PAGE)"
+and end with a "References:" section. If results_count==0 or all <0.30, open with
+"No matching sources in the knowledge base — answering from general background:"
+and never fabricate citations. Also: get_material_properties, get_typical_hedm_parameters,
+xray_calculate (never compute X-ray math by hand), fetch_cif_from_mp.
+
+## Visualization
+Use run_midas_viewer for ALL plotting (never run_command). Find the file
+(list_directory once on the most specific path), pick the SINGLE best viewer, call
+run_midas_viewer EXACTLY ONCE. Viewer choice: *_corr.csv → plot_calibrant_results;
+integration *.zarr.zip / caked → plot_caked_peaks (preferred, prefer zarr over a
+2-col *_lineout.xy); 4-col extract_lineouts *_lineout.xy → plot_lineout_results;
+calibrant-vs-sample → plot_lineout_comparison; live *_lineout.bin → live_viewer;
+raw .tif/.ge/.h5 → ff_asym_qt; Grains.csv+.zarr → interactiveFFplotting; NF .mic/.map
+→ nf_qt. Prefer most-processed (caked > lineout > raw). Do NOT read the data file;
+report one line (viewer + file). For a simple "what's this image?" question, answer
+in text (inspect_dataset_file or its filename/stats) — do NOT launch a GUI viewer.
+
+## Motor control
+Default IOC prefix "20idMotSim" (auto — don't specify). Users may name motors by PV
+(m1, m2) or description ("Sample X") — pass either; tools auto-resolve via DESC (use
+list_motors if unsure). Always call the tool, never just describe: move →
+move_motor_absolute/relative (checks limits internally — do NOT get_motor_status
+first); position → get_motor_position; stop → stop_motor; small step → tweak_motor;
+rejected for limits → get_motor_limits. Multiple motors → call for EACH. Report
+target, final RBV, units.""",
+)
+
+
 # ── Tool-use system preamble ─────────────────────────────────────────────────
 
 _TOOL_PREAMBLE = """⚠️ CRITICAL: YOU HAVE TOOLS — USE THEM.
@@ -1475,7 +1563,9 @@ class AgentRunner:
                   max_iterations: int = 10,
                   log_entry: Optional[InteractionEntry] = None,
                   on_tool_result: OnToolResultFn = None,
-                  history_summary: str = "") -> str:
+                  history_summary: str = "",
+                  transcript: Optional[List[Dict]] = None,
+                  single_mode: bool = False) -> str:
 
         tools = self._filter_tools(agent.tool_names, all_tools)
 
@@ -1524,12 +1614,33 @@ class AgentRunner:
                     + history_summary
                 ),
             })
-        if history:
-            # Motor/viz agents need less history (repetitive commands confuse the model)
-            hist_limit = 4 if agent.name in ("MotorAgent", "VisualizationAgent") else 8
-            selected = self._select_history(history, hist_limit)
-            messages.extend(selected)
-        messages.append({"role": "user", "content": query})
+        # ── Single-loop mode: persistent full-fidelity transcript ────────────
+        # The orchestrator owns `transcript` (its conversation_history) and has
+        # ALREADY appended the current {user: query}. It holds prior turns with
+        # their tool-call + tool-result messages verbatim — the curated context.
+        # Do NOT trim with _select_history (that re-drops tool results, the very
+        # data we need to "remember"). Old turns are folded into history_summary
+        # by the orchestrator's compaction, injected as the summary system msg.
+        if single_mode and transcript is not None:
+            messages.extend(transcript)
+        else:
+            if history:
+                # Motor/viz agents need less history (repetitive commands confuse the model)
+                hist_limit = 4 if agent.name in ("MotorAgent", "VisualizationAgent") else 8
+                selected = self._select_history(history, hist_limit)
+                messages.extend(selected)
+            messages.append({"role": "user", "content": query})
+
+        # In single mode we persist a CLEAN reconstruction of this turn's tool
+        # exchanges (+ final answer) into `transcript`, excluding the in-flight
+        # guard/coaching nags that only matter for the current turn.
+        _persist_buffer: List[Dict] = []
+        def _persist(final_text: str) -> str:
+            if single_mode and transcript is not None:
+                transcript.extend(_persist_buffer)
+                if final_text and final_text.strip():
+                    transcript.append({"role": "assistant", "content": final_text})
+            return final_text
 
         last_tool_name = None          # track repeated tool calls (consecutive)
         _last_tool_args = None         # track repeated tool arguments
@@ -1584,7 +1695,7 @@ class AgentRunner:
                 # Cross-iteration fan-out check for native tool_calls.
                 _turn_tool_counts.update(tc.name for tc in response.tool_calls)
                 _worst_tool, _worst_count = _turn_tool_counts.most_common(1)[0]
-                if _worst_count >= _FANOUT_THRESHOLD:
+                if _worst_count >= _FANOUT_THRESHOLD and not single_mode:
                     print(f"  \033[33m⚠ cumulative fan-out:\033[0m {_worst_count}× {_worst_tool}")
                     messages.append(self._assistant_message(response, provider.model))
                     messages.append({
@@ -1622,6 +1733,11 @@ class AgentRunner:
                     messages.append(
                         self._tool_result_message(tc, result, provider.model)
                     )
+                    if single_mode:
+                        _persist_buffer.append({"role": "assistant",
+                            "content": f"TOOL_CALL: {tc.name}\nARGUMENTS: {json.dumps(tc.arguments)}"})
+                        _persist_buffer.append({"role": "user",
+                            "content": f"[Tool Result for {tc.name}]\n{result}"})
                 continue
 
             # ── Mode 2: Text-based TOOL_CALL: parsing ──
@@ -1650,7 +1766,8 @@ class AgentRunner:
                 }
                 _per_resp_unique = len(_per_resp_args.get(_top_tool, set()))
                 _per_resp_fanout = (
-                    _top_count >= 3
+                    not single_mode      # single loop trusts the model to self-regulate
+                    and _top_count >= 3
                     and not (_top_tool in _MULTI_ARG_OK_TOOLS and _per_resp_unique >= _top_count)
                 )
                 if _per_resp_fanout:
@@ -1714,7 +1831,10 @@ class AgentRunner:
                 # that is hard to undo or requires a choice among inputs.
                 # The check is tool-agnostic — _PLAN_REQUIRED_TOOLS is the
                 # only configuration knob, no per-tool rules.
-                _plan_needed = [tc for tc in text_calls
+                # Single mode replaces this injected gate with a system-prompt
+                # instruction ("state in 1-2 sentences what you'll do before
+                # long-running/irreversible actions") — the model self-regulates.
+                _plan_needed = [] if single_mode else [tc for tc in text_calls
                                 if tc.name in _PLAN_REQUIRED_TOOLS]
                 if _plan_needed:
                     prose_words = len(prose.split()) if prose else 0
@@ -1785,7 +1905,7 @@ class AgentRunner:
                     _turn_tool_args.setdefault(tc.name, set()).add(args_key)
 
                 _cum_top, _cum_count = _turn_tool_counts.most_common(1)[0]
-                if _cum_count >= _FANOUT_THRESHOLD and _cum_top == _top_tool and _top_count < _FANOUT_THRESHOLD:
+                if (not single_mode) and _cum_count >= _FANOUT_THRESHOLD and _cum_top == _top_tool and _top_count < _FANOUT_THRESHOLD:
                     # For tools where diverse args are legitimate, only fire
                     # if the argument SET is smaller than the call count (i.e.
                     # same args repeated, not different files each time).
@@ -2015,6 +2135,13 @@ class AgentRunner:
                         "role": "user",
                         "content": f"[Tool Result for {tc.name}]\n{result}\n\n{followup}",
                     })
+                    if single_mode:
+                        # Persist the CLEAN exchange (no followup nag) so future
+                        # turns recall what ran and its result, not the coaching.
+                        _persist_buffer.append({"role": "assistant",
+                            "content": f"TOOL_CALL: {tc.name}\nARGUMENTS: {json.dumps(tc.arguments)}"})
+                        _persist_buffer.append({"role": "user",
+                            "content": f"[Tool Result for {tc.name}]\n{result}"})
                 if forced_break:
                     break
                 continue
@@ -2043,14 +2170,14 @@ class AgentRunner:
                         "ARGUMENTS: {\"key\": \"value\"}\n"
                     )})
                     continue
-                return ("⚠️ I tried to call a tool but it did not execute (the "
+                return _persist("⚠️ I tried to call a tool but it did not execute (the "
                         "tool-call format was not recognized), so nothing ran and no "
                         "files were written. I'm not reporting results I don't have. "
                         "Please retry — and if you're on an Opus/Sonnet model, switch "
                         "to gpt55 or gpt54, which emit the tool-call format reliably.")
 
             # ── No tool calls at all — check for hallucination, then return ──
-            if text and self._looks_like_hallucinated_result(text):
+            if text and not single_mode and self._looks_like_hallucinated_result(text):
                 messages.append({"role": "assistant", "content": text})
                 messages.append({
                     "role": "user",
@@ -2071,7 +2198,7 @@ class AgentRunner:
             # Count-hallucination guard: check if the model stated a file/frame
             # count that contradicts what list_directory actually returned.
             # This catches "360 TIFF images" when the tool said "920 files".
-            if text:
+            if text and not single_mode:
                 count_rejection = self._check_count_hallucination(text, messages)
                 if count_rejection:
                     print(f"  \033[33m⚠ count hallucination detected — rejecting\033[0m")
@@ -2079,7 +2206,7 @@ class AgentRunner:
                     messages.append({"role": "user", "content": count_rejection})
                     continue
 
-            return text or "Analysis complete."
+            return _persist(text or "Analysis complete.")
 
         # ── Forced finalize at iteration cap ─────────────────────────────────
         # Loop exhausted without the model producing a tool-call-free final
@@ -2114,15 +2241,15 @@ class AgentRunner:
             # sometimes ignores the no-tools instruction on the first try).
             final_text = self._strip_tool_calls_from_text(final_text).strip()
             if final_text:
-                return final_text
+                return _persist(final_text)
         except Exception as e:
             print(f"  \033[31m✗ finalize call failed: {e}\033[0m")
 
         # True last resort: surface the last assistant text we have
         last = messages[-1]
         if isinstance(last.get("content"), str):
-            return last["content"]
-        return "Analysis reached maximum steps. Check tool outputs above."
+            return _persist(last["content"])
+        return _persist("Analysis reached maximum steps. Check tool outputs above.")
 
 
 # ── Orchestrator ─────────────────────────────────────────────────────────────
@@ -2243,6 +2370,16 @@ class OrchestratorAgent:
         self._last_agent: Optional[APEXAAgent] = None
         self._last_turn_had_tool_error: bool = False
         self._execute  = execute_tool_fn
+        # The dataset/directory the user is currently working in, inferred from
+        # the most recent tool args. Anchors recap/recommend answers to THIS
+        # dataset so APEXA does not drift to an unrelated tree (e.g. answering a
+        # question about ai_tune with stale artifacts from another scan).
+        self._active_dir: str = ""
+        # Agent execution mode (rollout flag). "legacy" = keyword-routed
+        # specialists + regex intent-gates (current default). "single" = one
+        # persistent reasoning loop with full-fidelity context (Claude-Code
+        # style). Flip the default once the single loop is soaked on-beamline.
+        self._mode: str = os.environ.get("APEXA_AGENT_MODE", "legacy").strip().lower()
 
     # Context-window management knobs (modern summarize-older + keep-recent).
     _KEEP_RECENT: int = 8       # messages kept verbatim in model context
@@ -2533,13 +2670,21 @@ class OrchestratorAgent:
     # this, queries like "how did you calculate that?" hit the Analysis
     # agent's keyword set on "calculate" and the entire tool chain re-fires.
     # "Explain what you just did" — recap prior computation.
+    # NOTE: these use .search (not anchored) so natural phrasings with leading
+    # filler ("so what's the outcome?", "first focus on ai_tune, what's the
+    # outcome?") still route to recap instead of falling through to a specialist
+    # that re-discovers files and drifts to the wrong dataset. "what's"/"whats"
+    # contractions are handled via what'?s?.
     _EXPLAIN_PRIOR_PATTERNS = [
-        re.compile(r"^\s*(what\s+(was|is|did\s+you\s+get|are\s+the)\s+(the\s+)?(outcome|result|answer|finding|number|value|conclusion|summary))", re.I),
-        re.compile(r"^\s*(how\s+did\s+you|why\s+did\s+you|how\s+was\s+(it|that)\s+(calc|comput|deriv|obtain))", re.I),
-        re.compile(r"^\s*(explain\s+(that|how|why|what\s+you\s+(did|just)))", re.I),
-        re.compile(r"^\s*(walk\s+me\s+through|talk\s+me\s+through)", re.I),
-        re.compile(r"^\s*(summari[sz]e|recap|tl;?dr)\s+(that|this|the\s+(result|output|answer|previous))", re.I),
-        re.compile(r"^\s*(show\s+me\s+(the\s+)?(answer|result|outcome|summary)\s*(again)?)\s*\??\s*$", re.I),
+        re.compile(r"\bwhat(?:'?s|\s+is|\s+are|\s+was|\s+were)\s+(the\s+|its\s+|your\s+)?(outcome|result|answer|finding|status|conclusion|verdict)\b", re.I),
+        re.compile(r"\bwhat\s+(was|were|did\s+you\s+(get|find|do)|are\s+the|happened)\b", re.I),
+        re.compile(r"\b(how|why)\s+did\s+you\b", re.I),
+        re.compile(r"\bhow\s+was\s+(it|that)\s+(calc|comput|deriv|obtain)", re.I),
+        re.compile(r"\bexplain\s+(that|how|why|what\s+you\s+(did|just))", re.I),
+        re.compile(r"\b(walk|talk)\s+me\s+through\b", re.I),
+        re.compile(r"\b(summari[sz]e|recap|tl;?dr)\s+(that|this|the\s+(result|output|answer|previous|run))", re.I),
+        re.compile(r"\bshow\s+me\s+(the\s+)?(answer|result|outcome|summary)\b", re.I),
+        re.compile(r"\b(did|does)\s+(it|that|the\s+\w+)\s+(work|succeed|converge|complete|finish|pass|fail)\b", re.I),
     ]
 
     # "What should I do next?" — recommend next step from context.
@@ -2589,6 +2734,9 @@ class OrchestratorAgent:
                 "4. End with: 'Type go to proceed' — do NOT ask 'Would you like me to?'\n\n"
                 "If context is insufficient to make a specific recommendation, ask "
                 "ONE clarifying question only."
+                + (f"\n\nCURRENT WORKING DATASET: {self._active_dir} — answer about "
+                   "THIS dataset unless the user explicitly names another. Do NOT "
+                   "switch to an unrelated scan/directory." if self._active_dir else "")
             ),
         }
         messages = [sys_msg] + history + [{"role": "user", "content": query}]
@@ -2625,7 +2773,14 @@ class OrchestratorAgent:
                 "If the user asks how a value was calculated, describe the tool(s) "
                 "you used and the inputs from the prior turn. If they ask for the "
                 "outcome, restate the result concisely. Use markdown: **bold** key "
-                "values; bullets for lists; ≤8 lines unless detail is requested."
+                "values; bullets for lists; ≤8 lines unless detail is requested.\n\n"
+                "The conversation may include `<<TOOL OUTCOMES ...>>` blocks — these "
+                "are the authoritative record of what ran and its result (status, "
+                "geometry, dataset, manifest path). Base your answer on them; do NOT "
+                "claim 'no outputs' if an outcome block reports success/timeout."
+                + (f"\n\nCURRENT WORKING DATASET: {self._active_dir} — answer about "
+                   "THIS dataset unless the user explicitly names another."
+                   if self._active_dir else "")
             ),
         }
         messages = [sys_msg] + history + [{"role": "user", "content": query}]
@@ -2657,9 +2812,123 @@ class OrchestratorAgent:
             return []
         return list(self.conversation_history[-6:])
 
+    # Salient fields lifted from a tool's JSON result into the recall digest.
+    _DIGEST_RESULT_KEYS = ("status", "engine", "calibrant", "output_dir",
+                           "calibrated_parameters_file", "outcome_manifest",
+                           "result_folder", "output_file", "zarr_file", "error")
+    _DIGEST_ARG_KEYS = ("image_file", "data_file", "parameters_file",
+                        "result_folder", "directory", "path", "cif_file",
+                        "dark_file")
+
+    def _tool_outcome_digest(self, outcomes: List) -> str:
+        """Compact, model-facing record of WHAT TOOLS RAN this turn and their
+        key outcomes. Stored alongside the assistant turn so later
+        "what's the outcome?" / "what next?" questions are answered from memory
+        instead of re-running discovery (which drifts to the wrong dataset).
+        Full results live in the per-run manifests on disk; this is the index."""
+        if not outcomes:
+            return ""
+        lines = []
+        for name, args, result in outcomes[-8:]:
+            arg = ""
+            if isinstance(args, dict):
+                for k in self._DIGEST_ARG_KEYS:
+                    if args.get(k):
+                        arg = f" {k}={args[k]}"
+                        break
+            detail = ""
+            try:
+                r = json.loads(result) if isinstance(result, str) else result
+                if isinstance(r, dict):
+                    detail = " ".join(f"{k}={r[k]}" for k in self._DIGEST_RESULT_KEYS
+                                      if r.get(k))
+            except (json.JSONDecodeError, TypeError):
+                pass
+            if not detail:
+                detail = (result or "")[:180].replace("\n", " ")
+            lines.append(f"- {name}{arg} → {detail}")
+        return ("TOOL OUTCOMES this turn (authoritative; use these for recall, "
+                "do NOT re-discover):\n" + "\n".join(lines))
+
+    def _update_active_dir(self, outcomes: List) -> None:
+        """Track the dataset/dir the user is working in from this turn's tool
+        args, so recap/recommend stay anchored to it."""
+        import os as _os
+        for name, args, _result in outcomes:
+            if not isinstance(args, dict):
+                continue
+            for k in ("directory", "image_file", "data_file", "result_folder",
+                      "parameters_file", "path"):
+                v = args.get(k)
+                if v and isinstance(v, str):
+                    self._active_dir = v if _os.path.isdir(v) else _os.path.dirname(v)
+                    return
+
+    async def _process_single_loop(self, query: str, provider: ArgoProvider,
+                                   use_history: bool = True,
+                                   on_tool_result: OnToolResultFn = None) -> str:
+        """Modern single-loop path (APEXA_AGENT_MODE=single).
+
+        One reasoning loop over a PERSISTENT, full-fidelity transcript: prior
+        turns' tool calls AND results are carried verbatim across turns, so the
+        model answers "what's the outcome?" / "what next?" from its own memory
+        instead of re-discovering files (which drifts to the wrong dataset).
+        No keyword routing, no regex intent-gates, no fast-path — ONE unified
+        agent (APEXA_AGENT) with the full toolset decides answer-vs-act itself.
+        """
+        # Capture full tool outcomes for the active-dir anchor + UI streaming.
+        _turn_outcomes: List = []
+        async def _capture(name, args, result):
+            _turn_outcomes.append((name, args, result))
+            if on_tool_result:
+                await on_tool_result(name, args, result)
+
+        agent = APEXA_AGENT
+        self._last_agent = agent
+        log_entry = self.logger.start(query, model=provider.model)
+        log_entry.set_agent(agent.name)
+
+        # The transcript IS conversation_history. Append the user turn, then let
+        # the runner append this turn's clean tool exchanges + final answer in
+        # place (single_mode=True). No separate {user}/{assistant} bookkeeping.
+        if use_history:
+            self.conversation_history.append({"role": "user", "content": query})
+            transcript = self.conversation_history
+        else:
+            transcript = [{"role": "user", "content": query}]
+
+        result = await self.runner.run(
+            agent, query, provider, self.all_tools,
+            history=None, log_entry=log_entry, on_tool_result=_capture,
+            history_summary=self.running_summary if use_history else "",
+            transcript=transcript, single_mode=True,
+        )
+
+        n_calls = len(log_entry.tool_calls)
+        looped = n_calls > 3 and len(set(tc.name for tc in log_entry.tool_calls)) == 1
+        log_entry.finish(result, iterations=n_calls, looped=looped)
+        self.logger.save(log_entry)
+        self._last_turn_had_tool_error = any(
+            not tc.success for tc in log_entry.tool_calls) if log_entry.tool_calls else False
+
+        if use_history:
+            self._update_active_dir(_turn_outcomes)
+            # Full tool results now live in the transcript, so no <<digest>> is
+            # needed. Compaction folds old turns into running_summary.
+            await self._compact_history(provider)
+        if self.context:
+            self.context.add_analysis(agent.name, result)
+        return result
+
     async def process(self, query: str, provider: ArgoProvider,
                       use_history: bool = True,
                       on_tool_result: OnToolResultFn = None) -> str:
+        # Modern single-loop mode (flag) — persistent full-context reasoning.
+        if self._mode == "single":
+            return await self._process_single_loop(
+                query, provider, use_history=use_history,
+                on_tool_result=on_tool_result,
+            )
         # Recommendation short-circuit: "how should I proceed?", "what next?",
         # "yes, proceed", etc. Gives a concrete next-step recommendation from
         # context WITHOUT tool calls. Separate from explain-prior because the
@@ -2700,10 +2969,19 @@ class OrchestratorAgent:
         log_entry = self.logger.start(query, model=provider.model)
         log_entry.set_agent(agent.name)
 
+        # Capture FULL tool outcomes this turn (the log keeps only a 200-char
+        # preview). These build the recall digest stored in history so future
+        # recap turns answer from memory instead of re-discovering files.
+        _turn_outcomes: List = []
+        async def _capture_outcome(name, args, result):
+            _turn_outcomes.append((name, args, result))
+            if on_tool_result:
+                await on_tool_result(name, args, result)
+
         result = await self.runner.run(
             agent, query, provider, self.all_tools, history,
             log_entry=log_entry,
-            on_tool_result=on_tool_result,
+            on_tool_result=_capture_outcome,
             history_summary=self.running_summary if use_history else "",
         )
 
@@ -2723,9 +3001,16 @@ class OrchestratorAgent:
         self.logger.save(log_entry)
 
         if use_history:
+            # Anchor future recap/recommend turns to the dataset just worked on.
+            self._update_active_dir(_turn_outcomes)
+            # Enrich the assistant turn with a compact tool-outcome digest so the
+            # structured results (status, geometry, dataset, manifest path)
+            # survive into later turns — the core "remember context" fix.
+            digest = self._tool_outcome_digest(_turn_outcomes)
+            assistant_content = f"{result}\n\n<<{digest}>>" if digest else result
             self.conversation_history.extend([
                 {"role": "user",      "content": query},
-                {"role": "assistant", "content": result},
+                {"role": "assistant", "content": assistant_content},
             ])
             # Summarize-older + keep-recent: fold overflow into running_summary
             # rather than dropping it (replaces the old hard 12-msg truncation).
