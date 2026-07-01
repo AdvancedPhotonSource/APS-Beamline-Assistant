@@ -708,10 +708,15 @@ memory. Reason over it, then act.
 
 ## Calibration
 Find the calibrant image (list_directory once), then call midas_auto_calibrate
-with the full path. parameters_file is optional — AutoCalibrateZarr auto-detects
-calibrant (CeO2/LaB6), energy (keV in filename), and pixel size. If energy is in
-keV, use xray_calculate to get wavelength. Report refined BC, Lsd, tilts, and
-convergence quality plus the APEXA_calibration.json manifest path.
+with the ORIGINAL image path and output_dir=<per-run subfolder>. The tool
+symlinks the image into output_dir and auto-resolves the dark itself — do NOT
+create subfolders and copy/move images by hand with run_command (that leaves the
+calibrant path empty and calibration fails "image not found"). parameters_file
+is optional — AutoCalibrateZarr auto-detects calibrant (CeO2/LaB6), energy (keV
+in filename), and pixel size. If energy is in keV, use xray_calculate to get
+wavelength. Report refined BC, Lsd, tilts, convergence quality, and the
+APEXA_calibration.json manifest path. (Attenuated calibrants: att0 may saturate;
+if a mid-att like att3 fits no rings, try a lower att such as att1/att2.)
 
 ## Integration & analysis
 - 2D→1D: midas_integrate_2d_to_1d (single) or midas_batch_integrate (sweeps).
@@ -2375,11 +2380,12 @@ class OrchestratorAgent:
         # dataset so APEXA does not drift to an unrelated tree (e.g. answering a
         # question about ai_tune with stale artifacts from another scan).
         self._active_dir: str = ""
-        # Agent execution mode (rollout flag). "legacy" = keyword-routed
-        # specialists + regex intent-gates (current default). "single" = one
-        # persistent reasoning loop with full-fidelity context (Claude-Code
-        # style). Flip the default once the single loop is soaked on-beamline.
-        self._mode: str = os.environ.get("APEXA_AGENT_MODE", "legacy").strip().lower()
+        # Agent execution mode. "single" (DEFAULT) = one persistent reasoning
+        # loop with full-fidelity context (Claude-Code style): remembers tool
+        # results across turns, no keyword routing, no regex intent-gates, no
+        # count/fan-out heuristics (which false-fire on capable models). Set
+        # APEXA_AGENT_MODE=legacy to fall back to the keyword-routed specialists.
+        self._mode: str = os.environ.get("APEXA_AGENT_MODE", "single").strip().lower()
 
     # Context-window management knobs (modern summarize-older + keep-recent).
     _KEEP_RECENT: int = 8       # messages kept verbatim in model context

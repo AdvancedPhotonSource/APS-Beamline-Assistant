@@ -3232,12 +3232,22 @@ async def midas_auto_calibrate(
         if not image_path.exists():
             print(f"⚠ Image file not found at: {image_path}", file=sys.stderr)
 
-            # Search ONLY in the directory the user specified, not all CWD subdirs.
-            # This prevents picking wrong files from test2/ when user meant test1/.
+            # Search the specified directory AND up the dataset tree. The agent
+            # often points calibration at a per-run subfolder
+            # (.../calibration/lab6_att3/IMG.h5) without copying the raw frame
+            # there, while the frame lives at the dataset root (.../ai_tune/).
+            # Walk up a few parents so the exact-basename match finds it, instead
+            # of falling back to CWD and picking nothing.
             specified_dir = image_path.parent
-            search_dirs = [specified_dir]
-            # Only expand to CWD if specified_dir doesn't exist (user gave bare filename)
-            if not specified_dir.exists() or specified_dir == Path.cwd():
+            search_dirs = []
+            _d = specified_dir
+            for _ in range(5):   # subfolder + up to 4 parents
+                if _d.exists() and _d not in search_dirs:
+                    search_dirs.append(_d)
+                if _d.parent == _d:
+                    break
+                _d = _d.parent
+            if not search_dirs:   # bare filename / nothing on disk → last resort
                 search_dirs = [Path.cwd()]
 
             print(f"  Searching in: {', '.join(str(d) for d in search_dirs)}", file=sys.stderr)
