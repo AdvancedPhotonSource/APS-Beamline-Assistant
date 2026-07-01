@@ -3476,15 +3476,11 @@ async def midas_auto_calibrate(
                       "report 'no fitted points'); pass dark_file explicitly if so.",
                       file=sys.stderr)
 
-        # ── Never write into the raw-data directory ──────────────────────────
-        # If the caller didn't give output_dir, calibration artifacts (zarr,
-        # refined params, autocal.log, calibration.json) would land next to the
-        # raw frames and pollute the beamline's raw data. Default to an isolated
-        # per-calibrant subfolder instead. The caller can still override.
-        if not output_dir:
-            output_dir = str(image_path.parent / "APEXA_calibration" / image_path.stem)
-            print(f"✓ No output_dir given — isolating calibration outputs in a "
-                  f"subfolder (not the raw-data dir): {output_dir}", file=sys.stderr)
+        # Output location is GENERIC: if the caller gives output_dir, use it;
+        # otherwise fall back to the MIDAS-natural default (the image's dir, as
+        # AutoCalibrateZarr does). APEXA does NOT invent a subfolder scheme here
+        # — when the location matters and isn't specified, the AGENT asks the
+        # user for it before calling this tool (see APEXA_AGENT prompt).
 
         # ── Engine v2: midas-calibrate-v2 (differentiable; writes calibration.json) ──
         # Produces the SAME artifact a colleague gets from midas-calibrate-v2:

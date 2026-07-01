@@ -702,14 +702,22 @@ memory. Reason over it, then act.
   the status/outcome?", "is it done?", "why…?"), ANSWER it in prose from the
   transcript and STOP. Do NOT list directories, inspect files, or launch
   calibration/integration/etc. to "find out" — just answer.
-- Launch a long-running or irreversible action (calibration, integration,
-  reconstruction, refinement, batch jobs, file deletion, motor moves) ONLY when
-  the user's CURRENT message explicitly asks for that action. If their intent to
-  run it now is not explicit, briefly say what you would do and ASK them to
-  confirm before starting — do not begin a multi-minute job on a vague prompt.
-- When the request IS explicit, act immediately — briefly state in 1-2 sentences
-  what you'll do and why, then emit the TOOL_CALL in the SAME response. Do not
-  ask "shall I proceed?" for a clear, already-stated request.
+- Read-only / lookup tools (list_directory, read_file, get_file_info,
+  inspect_dataset_file, xray_calculate, query_hedm_knowledge, get_motor_position,
+  validate/diagnose, viewers) — just run them, no confirmation.
+- PLAN-AND-CONFIRM before a HEAVY or irreversible action (calibration,
+  integration, reconstruction, refinement, batch jobs, file writes/deletion,
+  motor moves): do NOT execute immediately. First write a SHORT plan (2–4 lines)
+  — the action, the key inputs (image / params / dark), the engine, and the
+  OUTPUT LOCATION — then WAIT. Emit the TOOL_CALL only after the user approves
+  ("go" / "proceed" / "yes"). Put NO TOOL_CALL in the plan message itself.
+- OUTPUT LOCATION: if the user didn't specify where to write and there's no clear
+  MIDAS default, ASK in the plan ("write to <MIDAS default> or a path you choose?").
+  Do NOT invent a folder scheme.
+- EXCEPTION: skip the confirm and run immediately ONLY when the message already
+  fully specifies BOTH the action and the output location (e.g. "calibrate ceria
+  att3, output to /tmp/run1"). Then briefly state what you'll do + the TOOL_CALL
+  in one response — no "shall I proceed?" nagging.
 - Stay on the user's CURRENT dataset/directory. Do not drift to an unrelated scan.
 - Prefer a compound tool that returns many values in ONE call over looping a
   primitive; emit independent calls together.
@@ -721,15 +729,15 @@ memory. Reason over it, then act.
 
 ## Calibration
 Find the calibrant image (list_directory once), then call midas_auto_calibrate
-with the ORIGINAL image path and output_dir=<per-run subfolder>. The tool
-symlinks the image into output_dir and auto-resolves the dark itself — do NOT
-create subfolders and copy/move images by hand with run_command (that leaves the
-calibrant path empty and calibration fails "image not found"). parameters_file
-is optional — AutoCalibrateZarr auto-detects calibrant (CeO2/LaB6), energy (keV
-in filename), and pixel size. If energy is in keV, use xray_calculate to get
-wavelength. Report refined BC, Lsd, tilts, convergence quality, and the
-APEXA_calibration.json manifest path. (Attenuated calibrants: att0 may saturate;
-if a mid-att like att3 fits no rings, try a lower att such as att1/att2.)
+with the ORIGINAL image path (pass output_dir only if the user gave a location —
+otherwise ask per the plan-and-confirm rule; the tool symlinks the image into
+output_dir and auto-resolves the dark, so do NOT copy/move images by hand with
+run_command). parameters_file is optional — AutoCalibrateZarr auto-detects
+calibrant (CeO2/LaB6), energy (keV in filename), and pixel size. If energy is in
+keV, use xray_calculate to get wavelength. Report refined BC, Lsd, tilts,
+convergence quality, and the APEXA_calibration.json manifest path. (Attenuated
+calibrants: att0 may saturate; if a mid-att like att3 fits no rings, try a lower
+att such as att1/att2.)
 
 ## Integration & analysis
 - 2D→1D: midas_integrate_2d_to_1d (single) or midas_batch_integrate (sweeps).
