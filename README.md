@@ -96,13 +96,55 @@ APEXA> run FF-HEDM workflow on /data/experiment
 
 ---
 
+## In-Session Commands & Runtime Switches
+
+Type these at the `APEXA>` prompt (CLI):
+
+| Command | What it does |
+|---|---|
+| `model <name>` | Switch the LLM mid-session (e.g. `model gpt55`). `models` lists all. |
+| `models` | Show available models with context/output sizes and notes |
+| `session save [name]` | Save the conversation (named snapshot, or unnamed) |
+| `session load <name>` | Restore a saved session |
+| `session resume` | Reload the most-recent session (auto-saved after every turn) |
+| `session list` \| `session summary` | List sessions / show current session info |
+| `timing` | Toggle per-response API timing display |
+| `ls [path]` | Quick directory listing |
+| `help` | Show all commands |
+| `quit` | Exit (session is auto-saved; resume with `session resume`) |
+
+**Which model?** `gpt55` (default) or `gpt54` for tool-heavy execution (calibration/
+integration — reliable tool-call format). `claudeopus48` for planning/reasoning/writing
+(may drift on tool calls, so prefer GPT for running MIDAS tools). See `models` for the
+full list (GPT-5 family, Claude Opus 4.6–4.8 / Sonnet 4.5–4.6 / Haiku 4.5, Gemini 3.x).
+
+### Environment switches (set before launch, or in `.env`)
+
+| Variable | Default | Effect |
+|---|---|---|
+| `APEXA_AGENT_MODE` | `single` | `single` = one persistent reasoning loop, full context across turns (Claude-Code style). `legacy` = keyword-routed specialists + guards. |
+| `ARGO_MODEL` | `gpt55` | Default model at startup (overridable in-session with `model`). |
+| `APEXA_FORCE_LEGACY_MIDAS` | *(unset)* | `1` = use the fast legacy C++ calibration/integration engine directly (skip the pip attempt). |
+| `APEXA_CALIB_TIMEOUT` | `1800` | Calibration subprocess timeout in seconds. |
+| `APEXA_SHOW_TIMING` | *(unset)* | `1` = show API response times (same as the `timing` command). |
+| `MIDAS_PATH` | *(auto)* | Path to the MIDAS install (auto-detected if unset). |
+| `MIDAS_PYTHON` | *(auto)* | Override the conda Python used for legacy MIDAS scripts. |
+
+**Calibration engine:** legacy (v1, search-based) is the default and the robust path.
+The differentiable v2 engine is opt-in (`midas_auto_calibrate(..., calibration_engine="v2")`)
+— it needs a close initial beam-center guess and can fail on off-center detectors.
+
+---
+
 ## Configuration
 
 **User Settings** (`.env`):
 ```bash
 ANL_USERNAME=your_username
-ARGO_MODEL=gpt4o              # or gpt54, claudesonnet45, gemini25pro
-MIDAS_PATH=~/Git/MIDAS        # Optional - auto-detected
+ARGO_MODEL=gpt55             # default; or gpt54, claudeopus48, gemini35flash
+APEXA_AGENT_MODE=single      # single (default) | legacy
+MIDAS_PATH=~/Git/MIDAS       # Optional - auto-detected
+# APEXA_FORCE_LEGACY_MIDAS=1 # Optional - fast legacy calibration/integration
 ```
 
 **Server Configuration** (`servers.config`):
