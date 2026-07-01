@@ -2930,6 +2930,36 @@ def _synthesize_calibration_params(out_path: Path, *, calibrant: str,
         return False, f"param synthesis error: {e}"
 
 
+def _write_calibration_outcome(out_dir, payload: dict):
+    """Drop a uniform machine-readable per-run outcome manifest
+    (``APEXA_calibration.json``) into the calibration output directory.
+
+    Architectural purpose: APEXA was *stateless about results* — it ran a
+    calibration but, when later asked "what's the outcome?", had to re-discover
+    scattered MIDAS artifacts (refined_MIDAS_params*.txt, autocal.log, *.zarr.zip)
+    and often found nothing (e.g. after a timeout). A single authoritative
+    manifest per run fixes that: the tool returns it immediately, it persists on
+    disk, and every benchmark run becomes trivially comparable across
+    attenuation / calibrant / engine. Terminal states (success, error, timeout)
+    all write one. Never raises — manifest writing must not break calibration.
+    Returns the manifest path, or None.
+    """
+    try:
+        from datetime import datetime, timezone
+        d = Path(out_dir)
+        d.mkdir(parents=True, exist_ok=True)
+        rec = dict(payload)
+        rec.setdefault("manifest", "APEXA_calibration.json")
+        rec.setdefault("written_at", datetime.now(timezone.utc).isoformat())
+        p = d / "APEXA_calibration.json"
+        p.write_text(json.dumps(rec, indent=2, default=str))
+        print(f"  ↳ outcome manifest: {p}", file=sys.stderr)
+        return str(p)
+    except Exception as _e:
+        print(f"  ⚠ could not write outcome manifest: {_e}", file=sys.stderr)
+        return None
+
+
 @mcp.tool()
 async def midas_auto_calibrate(
     image_file: str,
@@ -3429,23 +3459,44 @@ out={"engine":"pip-v2:midas_calibrate_v2","Lsd_um":res.Lsd,"BC_y":res.BC_y,
      "residual_corr_bin_path":getattr(res,"residual_corr_bin_path",None)}
 print("APEXA_V2_RESULT="+json.dumps(out))
 '''
-            midas_python = find_midas_python()
-            print("=" * 70, file=sys.stderr)
-            print("🔧 MIDAS CALIBRATION (v2 differentiable — midas_calibrate_v2):",
-                  file=sys.stderr)
-            print(f"   image={image_path} calibrant={_calib_v2} λ={_resolved_wl} "
-                  f"px={_px2} Lsd0={_lsd_um2} out={_v2_out}", file=sys.stderr)
-            print("   (PyTorch on CPU is slow — this can take many minutes)",
-                  file=sys.stderr)
-            print("=" * 70, file=sys.stderr)
+            # v2 (midas_calibrate_v2) ships in the pip midas-suite installed in
+            # THIS interpreter's env (the APEXA .venv) — NOT in the conda MIDAS
+            # env that find_midas_python() returns (that one only carries the
+            # C++ deps: zarr/diplib/numba/...). Running v2 under conda →
+            # ModuleNotFoundError every time. Use sys.executable (the .venv).
+            midas_python = sys.executable
+            # Probe importability first so a missing/old pip package yields one
+            # clean line instead of dumping a traceback on every calibration.
             try:
-                _p = subprocess.run([midas_python, "-c", _vals + _body],
-                                    capture_output=True, text=True,
-                                    timeout=7200, env=get_midas_env())
-            except subprocess.TimeoutExpired:
-                print("[engine] v2 calibration timed out (CPU PyTorch is slow) — "
-                      "falling back to v1 engine.", file=sys.stderr)
+                _probe = subprocess.run(
+                    [midas_python, "-c", "import midas_calibrate_v2"],
+                    capture_output=True, text=True, timeout=60)
+                _v2_ok = _probe.returncode == 0
+            except Exception:
+                _v2_ok = False
+            if not _v2_ok:
+                print("[engine] v2 engine (midas_calibrate_v2) not importable in "
+                      f"{midas_python} — using v1 engine.", file=sys.stderr)
                 _p = None
+            else:
+                print("=" * 70, file=sys.stderr)
+                print("🔧 MIDAS CALIBRATION (v2 differentiable — midas_calibrate_v2):",
+                      file=sys.stderr)
+                print(f"   image={image_path} calibrant={_calib_v2} λ={_resolved_wl} "
+                      f"px={_px2} Lsd0={_lsd_um2} out={_v2_out}", file=sys.stderr)
+                print("   (PyTorch on CPU is slow — this can take many minutes)",
+                      file=sys.stderr)
+                print("=" * 70, file=sys.stderr)
+                try:
+                    # Clean env (no C++ DYLD/LD injection — that triggers an
+                    # h5py/libhdf5 symbol mismatch for the pip torch stack).
+                    _p = subprocess.run([midas_python, "-c", _vals + _body],
+                                        capture_output=True, text=True,
+                                        timeout=7200, env=dict(os.environ))
+                except subprocess.TimeoutExpired:
+                    print("[engine] v2 calibration timed out (CPU PyTorch is slow) — "
+                          "falling back to v1 engine.", file=sys.stderr)
+                    _p = None
             _line = (next((l for l in (_p.stdout or "").splitlines()
                           if l.startswith("APEXA_V2_RESULT=")), None)
                      if _p is not None else None)
@@ -3590,7 +3641,17 @@ print("APEXA_V2_RESULT="+json.dumps(out))
         # setup/run fails — so this never breaks worse than the C++ path.
         # Set APEXA_FORCE_LEGACY_MIDAS=1 to pin the C++ engine.
         _force_legacy = os.environ.get("APEXA_FORCE_LEGACY_MIDAS") == "1"
-        _ac_kind, _ac_cli = (None, None) if _force_legacy else \
+        # The pip console midas-autocalibrate (v1) cannot load HDF5 frames — it
+        # passes the path through as a STRING, so its dark subtraction crashes
+        # ("ufunc 'subtract' did not contain a loop ... dtype('<U20')"). Only the
+        # legacy AutoCalibrateZarr path converts HDF5 (-ConvertFile 1). So for
+        # .h5/.hdf5 images skip pip-console v1 and use legacy directly. (v2 above
+        # DOES read HDF5 via h5py and is tried first, so it remains the default.)
+        _img_is_hdf5 = image_path.suffix.lower() in (".h5", ".hdf5", ".hdf", ".nxs")
+        if _img_is_hdf5 and not _force_legacy:
+            print("[engine] image is HDF5 — pip-console v1 cannot convert it; "
+                  "using legacy AutoCalibrateZarr (-ConvertFile 1).", file=sys.stderr)
+        _ac_kind, _ac_cli = (None, None) if (_force_legacy or _img_is_hdf5) else \
             _resolve_midas_cli("midas-autocalibrate")
         result = None
         engine_used = None
@@ -3662,7 +3723,11 @@ print("APEXA_V2_RESULT="+json.dumps(out))
                 cwd=str(work_dir),
                 capture_output=True,
                 text=True,
-                timeout=600,  # 10 minute timeout
+                # 30 min: AutoCalibrateZarr converts the HDF5 (-ConvertFile 1)
+                # AND runs N iterations — a 348 MB Varex frame at 40 iters on a
+                # CPU beamline routinely exceeds 10 min. The old 600 s ceiling is
+                # exactly why the deployed run "produced no outputs": it timed out.
+                timeout=int(os.environ.get("APEXA_CALIB_TIMEOUT", "1800")),
                 env=get_midas_env()
             )
             engine_used = "legacy-cpp:AutoCalibrateZarr.py"
@@ -3684,13 +3749,18 @@ print("APEXA_V2_RESULT="+json.dumps(out))
                 for line in result.stdout.strip().splitlines()[-5:]:
                     print(f"  {line}", file=sys.stderr)
 
-            return format_result({
+            _err_out = {
                 "tool": "midas_auto_calibrate",
                 "status": "error",
+                "engine": engine_used,
+                "image_file": str(image_path),
+                "output_dir": str(work_dir),
                 "error": error_msg,
-                "stderr": result.stderr,
-                "stdout": result.stdout
-            })
+                "stderr": (result.stderr or "")[-2000:],
+                "stdout": (result.stdout or "")[-1000:],
+            }
+            _err_out["outcome_manifest"] = _write_calibration_outcome(work_dir, _err_out)
+            return format_result(_err_out)
 
         # v10 names the output refined_MIDAS_params_<material>.txt (e.g. _CeO2.txt)
         # so glob for any matching file rather than hardcoding the name.
@@ -3766,7 +3836,10 @@ print("APEXA_V2_RESULT="+json.dumps(out))
                         calibrated_params['px'] = float(parts[1])
 
         # Parse convergence metrics from autocal.log
-        autocal_log = image_path.parent / "autocal.log"
+        # Outputs land in work_dir (the per-run output dir when output_dir was
+        # given), NOT next to the original image. Prefer work_dir, fall back.
+        autocal_log = (work_dir / "autocal.log") if (work_dir / "autocal.log").exists() \
+                      else image_path.parent / "autocal.log"
         convergence_metrics = {
             "num_iterations": None,
             "final_mean_strain": None,
@@ -3816,11 +3889,14 @@ print("APEXA_V2_RESULT="+json.dumps(out))
                     except:
                         pass
 
-        # Look for generated zarr file
+        # Look for generated zarr file (in work_dir first, then image dir)
         zarr_file = None
-        for f in image_path.parent.glob("*.zarr.zip"):
-            if f.stat().st_mtime > (image_path.stat().st_mtime - 60):  # Created recently
-                zarr_file = str(f)
+        for _zdir in (work_dir, image_path.parent):
+            for f in _zdir.glob("*.zarr.zip"):
+                if f.stat().st_mtime > (image_path.stat().st_mtime - 60):  # recent
+                    zarr_file = str(f)
+                    break
+            if zarr_file:
                 break
 
         # Build success message
@@ -3854,24 +3930,46 @@ print("APEXA_V2_RESULT="+json.dumps(out))
         if save_plots_hdf:
             message += f"  • {Path(save_plots_hdf).name} - Diagnostic plots and arrays\n"
 
-        return format_result({
+        _outcome = {
             "tool": "midas_auto_calibrate",
             "status": "success",
+            "engine": engine_used,
+            "calibrant": _detect_calibrant_from_name(original_stem),
             "image_file": str(image_path),
+            "dark_file": str(dark_file) if dark_file else None,
             "input_parameters_file": str(param_path),
             "calibrated_parameters_file": str(refined_params_file) if refined_params_file.exists() else None,
             "calibrated_parameters": calibrated_params,
             "convergence_metrics": convergence_metrics,
             "zarr_file": zarr_file,
+            "output_dir": str(work_dir),
             "message": message
-        })
+        }
+        # Architectural fix: drop a uniform per-run outcome manifest so a later
+        # "what's the outcome?" is answered from this record (and benchmark runs
+        # are comparable), instead of re-discovering scattered MIDAS artifacts.
+        _outcome["outcome_manifest"] = _write_calibration_outcome(work_dir, _outcome)
+        message += f"\n  • APEXA_calibration.json - machine-readable outcome record\n"
+        _outcome["message"] = message
+        return format_result(_outcome)
 
     except subprocess.TimeoutExpired:
-        return format_result({
-            "tool": "midas_auto_calibrate",
-            "status": "error",
-            "error": "Calibration timed out (>10 minutes)"
-        })
+        # Record the timeout as a real outcome so the agent reports it (and does
+        # not silently "find nothing"). work_dir is set before any subprocess.
+        _to = {
+            "tool": "midas_auto_calibrate", "status": "timeout",
+            "engine": locals().get("engine_used"),
+            "image_file": str(image_path),
+            "output_dir": str(locals().get("work_dir", image_path.parent)),
+            "error": (f"Calibration timed out (limit "
+                      f"{os.environ.get('APEXA_CALIB_TIMEOUT', '1800')}s). The CPU "
+                      "PyTorch/AutoCalibrateZarr path is slow on large HDF5 frames. "
+                      "Retry with fewer --n-iterations, set APEXA_CALIB_TIMEOUT "
+                      "higher, or APEXA_FORCE_LEGACY_MIDAS=1 for the fast C++ path."),
+        }
+        _to["outcome_manifest"] = _write_calibration_outcome(
+            locals().get("work_dir", image_path.parent), _to)
+        return format_result(_to)
     except Exception as e:
         return format_result({
             "tool": "midas_auto_calibrate",
