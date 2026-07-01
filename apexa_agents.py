@@ -743,9 +743,14 @@ if a mid-att like att3 fits no rings, try a lower att such as att1/att2.)
   the pipeline arg is required (ri / ff / nf / pf — infer from the request). SKIP
   validation when a .zarr.zip/.MIDAS.zip data_file is given, or for integration/
   calibration/refinement, or on "retry"/"rerun".
-- GSAS-II refinement: if no CIF, fetch_cif_from_mp first, then run_gsas_refinement
-  with data_file=<.zarr.zip>, cif_files=[<cif>], two_theta_limits=[2.0,15.0]
-  (ALWAYS set — without limits Rwp ≈ 100%), n_cpus=8. Never use run_command for GSAS.
+- The standard pipeline ENDS at the integrated lineout/zarr + QC ("refinement-
+  ready"). Do NOT auto-advance into GSAS-II refinement after integration — stop
+  and report the integration result. Run refinement ONLY when the user explicitly
+  asks for it in their message.
+- GSAS-II refinement (only when explicitly requested): if no CIF, fetch_cif_from_mp
+  first, then run_gsas_refinement with data_file=<.zarr.zip>, cif_files=[<cif>],
+  two_theta_limits=[2.0,15.0] (ALWAYS set — without limits Rwp ≈ 100%), n_cpus=8.
+  Never use run_command for GSAS.
 
 ## Knowledge (conceptual / "what is" / "how does" / "explain")
 Your FIRST action MUST be query_hedm_knowledge — answer from indexed sources, not
