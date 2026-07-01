@@ -2930,6 +2930,54 @@ def _synthesize_calibration_params(out_path: Path, *, calibrant: str,
         return False, f"param synthesis error: {e}"
 
 
+def _find_dark_for_image(image_path: Path):
+    """Auto-resolve a dark-field frame from the dataset tree when the caller
+    didn't pass one. Calibration datasets ship a dark (e.g. dark_1p0s_*.h5) and
+    dark subtraction is REQUIRED for reliable ring fitting on attenuated
+    calibrants — without it v2's E-step finds no peaks ("no fitted points").
+
+    Searches the image's directory and up to 4 parent levels (calibrant images
+    are often placed in per-run subfolders like .../calibration/ceria_att3/
+    while the dark sits at the dataset root .../ai_tune/), plus the symlink
+    target's directory. Prefers a dark whose exposure token (e.g. '1p0s')
+    matches the calibrant image. Returns an absolute path string or "".
+    """
+    exts = (".h5", ".hdf5", ".hdf", ".nxs", ".tif", ".tiff",
+            ".ge", ".ge2", ".ge3", ".ge5")
+    m = re.search(r'(\d+p\d+s)', image_path.stem.lower())
+    exp_tok = m.group(1) if m else None
+    # Build the search directory list (dedup, order = nearest first).
+    seen, dirs = set(), []
+    for start in (image_path.parent, image_path.resolve().parent):
+        d = start
+        for _ in range(5):   # image dir + 4 parents
+            try:
+                rp = d.resolve()
+            except Exception:
+                break
+            if rp not in seen and d.is_dir():
+                seen.add(rp); dirs.append(d)
+            if d.parent == d:
+                break
+            d = d.parent
+    cands = []
+    for d in dirs:
+        try:
+            for p in d.iterdir():
+                if (p.is_file() and "dark" in p.name.lower()
+                        and p.suffix.lower() in exts):
+                    cands.append(p)
+        except Exception:
+            continue
+    if not cands:
+        return ""
+    if exp_tok:   # prefer exposure-matched dark
+        for p in cands:
+            if exp_tok in p.name.lower():
+                return str(p.resolve())
+    return str(cands[0].resolve())
+
+
 def _write_calibration_outcome(out_dir, payload: dict):
     """Drop a uniform machine-readable per-run outcome manifest
     (``APEXA_calibration.json``) into the calibration output directory.
@@ -3398,6 +3446,25 @@ async def midas_auto_calibrate(
             dist_mm = float(lsd_match.group(1).replace('p', '.'))
             lsd_from_filename = int(dist_mm * 1000)  # mm → µm
             print(f"✓ Extracted Lsd from original filename: {dist_mm} mm → {lsd_from_filename} µm", file=sys.stderr)
+
+        # ── Auto-resolve the dark frame if the caller didn't pass one ─────────
+        # Dark subtraction is required for reliable ring fitting; when it's
+        # missing, v2's E-step finds no peaks on attenuated calibrants
+        # ("E-step produced no fitted points"). The model should pass dark_file,
+        # but calibration must not depend on it remembering — same poka-yoke as
+        # auto-detecting wavelength/calibrant/Lsd from the filename.
+        if not (dark_file and Path(dark_file).expanduser().exists()):
+            _auto_dark = _find_dark_for_image(image_path)
+            if _auto_dark:
+                dark_file = _auto_dark
+                print(f"✓ Auto-resolved dark frame (none passed): {dark_file}",
+                      file=sys.stderr)
+            else:
+                print("  ⚠ No dark frame passed or found in the dataset tree — "
+                      "calibrating WITHOUT dark subtraction. On attenuated "
+                      "calibrants the rings may be too weak to fit (v2 E-step may "
+                      "report 'no fitted points'); pass dark_file explicitly if so.",
+                      file=sys.stderr)
 
         # ── Engine v2: midas-calibrate-v2 (differentiable; writes calibration.json) ──
         # Produces the SAME artifact a colleague gets from midas-calibrate-v2:
