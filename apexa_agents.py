@@ -2434,10 +2434,12 @@ class OrchestratorAgent:
     def import_history(self, history: List[Dict]):
         """Restore conversation history from a saved/auto-saved session.
 
-        Keeps only the last 12 messages — the same working-context cap the
-        process loop enforces (see conversation_history truncation) so a
-        resumed session feeds the model the same amount of context a live
-        one would, regardless of how long the saved transcript is.
+        In single mode the transcript IS the memory, so restore it in FULL
+        (tool calls + results included) — truncating to a small window on resume
+        would drop exactly the outcomes the model needs to answer "what's done?"
+        (it caused a resumed session to recommend re-running an already-finished
+        calibration). Compaction bounds growth on subsequent turns. Legacy mode
+        keeps the small recent window (older turns carried by running_summary).
         """
         if not history:
             return
@@ -2445,10 +2447,10 @@ class OrchestratorAgent:
             m for m in history
             if isinstance(m, dict) and "role" in m and "content" in m
         ]
-        # Keep the recent verbatim window; older turns are carried by the
-        # restored running_summary (see import_summary), matching how a live
-        # session would present them after compaction.
-        self.conversation_history = cleaned[-self._KEEP_RECENT:]
+        if getattr(self, "_mode", "single") == "single":
+            self.conversation_history = cleaned
+        else:
+            self.conversation_history = cleaned[-self._KEEP_RECENT:]
 
     def export_summary(self) -> str:
         """Return the running compacted summary for session persistence."""
