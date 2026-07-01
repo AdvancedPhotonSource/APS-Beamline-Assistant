@@ -161,36 +161,41 @@ class ArgoProvider:
             "temperature": temperature,
         }
 
-        # Max tokens and params per model family
+        # Max tokens and params per model family (Argo model list, 2026 update)
         if self.model.startswith("claude"):
             payload["max_tokens"] = 21000
-            # Claude Opus 4.7: no sampling params (temperature/top_p/top_k silently
-            # removed by Argo, but cleaner to not send them).  1M context window,
-            # 128K output.  Thinking mode available via output_config if needed.
-            if self.model == "claudeopus47":
+            # Opus 4.8 / 4.7: no sampling params at all (temperature/top_p/top_k
+            # silently removed by Argo). 1M context, 128K output; thinking via
+            # output_config if ever needed.
+            if self.model in ("claudeopus48", "claudeopus47"):
                 payload.pop("temperature", None)
-            # Claude Opus 4.6: requires temperature + top_p (Argo rejects without them)
-            # Claude Haiku 4.5, Sonnet 4.5/4.6: reject temperature + top_p
-            elif self.model in ("claudesonnet45", "claudesonnet46", "claudehaiku45"):
-                pass   # no top_p for these models
+            # Sonnet 4.6/4.5, Haiku 4.5: accept AT MOST ONE of temperature/top_p
+            # (Argo drops top_p if both sent) — send temperature only, no top_p.
+            elif self.model in ("claudesonnet46", "claudesonnet45", "claudehaiku45"):
+                pass
             else:
-                # claudeopus46, claudeopus45, claudeopus41, claudesonnet4, etc.
+                # Opus 4.6/4.5/4.1, Sonnet 4/3.7: require temperature + top_p.
                 payload["top_p"] = 0.9
         elif self.model == "gpt55":
-            # GPT-5.5: temperature must be exactly 1 (no other value accepted)
+            # GPT-5.5: temperature must be exactly 1; top_p + max_completion_tokens ok.
             payload["temperature"] = 1
-            payload["max_completion_tokens"] = 16000
             payload["top_p"] = 0.9
-        elif self.model.startswith("gpto") or self.model.startswith("gpt5"):
-            # o-series and GPT-5 family: use max_completion_tokens, no temperature/top_p
-            # (Argo returns HTTP 400 if either is sent.)
+            payload["max_completion_tokens"] = 16000
+        elif self.model.startswith("gpto"):
+            # o-series (o1/o3/o3-mini/o4-mini): NO temperature/top_p; use
+            # max_completion_tokens (Argo 400s if sampling params are sent).
             payload.pop("temperature", None)
             payload["max_completion_tokens"] = 16000
         elif self.model.startswith("gpt"):
-            # gpt4o, gpt41, etc.: max_completion_tokens + top_p OK
-            payload["max_completion_tokens"] = 16000
+            # gpt4o, gpt41*, and the GPT-5 family (gpt5/gpt51/gpt52/gpt54 +
+            # mini/nano) all accept temperature + top_p + max_completion_tokens
+            # and reject max_tokens. (Note: gpt54 now ACCEPTS temperature — the
+            # earlier "no sampling" rule was removed in the 2026 Argo update.)
             payload["top_p"] = 0.9
+            payload["max_completion_tokens"] = 16000
         elif self.model.startswith("gemini"):
+            # gemini35flash, gemini31flashlite, gemini25pro/flash: Argo max_tokens
+            # maps to Gemini max_output_tokens; temperature accepted.
             payload["max_tokens"] = 16000
         else:
             payload["max_completion_tokens"] = 16000
