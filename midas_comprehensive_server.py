@@ -3030,7 +3030,7 @@ async def midas_auto_calibrate(
     data_loc: str = "",
     energy_kev: float = 0.0,
     wavelength_angstrom: float = 0.0,
-    calibration_engine: str = "v2",
+    calibration_engine: str = "v1",   # v2 opt-in: fails beam-center seeding on off-center detectors (pending MIDAS dev fix)
 ) -> str:
     """🔧 PRIMARY TOOL FOR FF-HEDM DETECTOR CALIBRATION (MIDAS Official)
 
