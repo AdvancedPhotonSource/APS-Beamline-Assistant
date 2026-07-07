@@ -3376,9 +3376,11 @@ async def midas_auto_calibrate(
                    Default: "" = write results alongside the source image file (original behaviour).
                    Use this when calibrating multiple files in a batch so results from each file
                    land in their own directory instead of clobbering each other.
-        lsd_guess: Initial sample-to-detector distance guess in µm (default: 1000000 = auto-detect from ring ratios)
-        bc_x_guess: Initial beam center X coordinate in pixels (default: 0.0 = auto-detect from ring geometry)
-        bc_y_guess: Initial beam center Y coordinate in pixels (default: 0.0 = auto-detect from ring geometry)
+        lsd_guess: Initial sample-to-detector distance guess in µm (default: 1000000 = auto-detect from ring ratios).
+            A value < 10000 is treated as mm and auto-converted to µm (e.g. 895 → 895000).
+        bc_x_guess: Initial beam center X coordinate in pixels. Provide with bc_y_guess or not at all —
+            a partial seed (only one coordinate) is ignored (default: 0.0 = auto-detect from ring geometry).
+        bc_y_guess: Initial beam center Y coordinate in pixels; pair with bc_x_guess (default: 0.0 = auto-detect)
         n_iterations: Maximum number of refinement iterations (default: 40)
         tol_shifts: Panel shift convergence tolerance in pixels (default: 3.0)
         tol_rotation: Panel rotation convergence tolerance in degrees (default: 1.0)
@@ -3927,12 +3929,26 @@ print("APEXA_V2_RESULT="+json.dumps(out))
             if dark_path.exists():
                 cmd.extend(["-darkFN", str(dark_path)])
 
-        if lsd_guess < 1000000:  # User provided a real guess (not auto-detect)
-            cmd.extend(["-LsdGuess", str(int(lsd_guess))])  # Convert to int µm
+        if lsd_guess < 1000000:  # User provided a real guess (not the auto sentinel)
+            # Unit guard: Lsd is µm here, but callers routinely pass mm (e.g. 895
+            # meaning 895 mm). A value < 10000 is physically impossible as µm for a
+            # real detector (<10 mm) → it's mm; convert. This prevented a real
+            # failure: '-LsdGuess 895' (0.9 mm) collapsed a seeded att5 retry.
+            lsd_um = lsd_guess * 1000.0 if 0 < lsd_guess < 10000 else lsd_guess
+            if 0 < lsd_guess < 10000:
+                print(f"  ⚠ LsdGuess {lsd_guess} looks like mm — interpreting as "
+                      f"{int(lsd_um)} µm", file=sys.stderr)
+            cmd.extend(["-LsdGuess", str(int(lsd_um))])
 
-        if bc_x_guess != 0.0 or bc_y_guess != 0.0:
-            # MIDAS expects BCGuess as Y X (not X Y!)
+        # Beam-center seed: MIDAS -BCGuess needs BOTH coordinates (order Y X). A
+        # partial seed (one coord 0) puts the beam centre at the detector edge and
+        # sends the fit into a false minimum — refuse it rather than pass a bad 0.
+        if bc_x_guess != 0.0 and bc_y_guess != 0.0:
             cmd.extend(["-BCGuess", str(bc_y_guess), str(bc_x_guess)])
+        elif bc_x_guess != 0.0 or bc_y_guess != 0.0:
+            print("  ⚠ partial beam-center seed ignored — provide BOTH bc_y_guess "
+                  "and bc_x_guess (or neither); MIDAS -BCGuess needs both.",
+                  file=sys.stderr)
 
         if threshold > 0:  # Manual threshold specified
             cmd.extend(["-Threshold", str(threshold)])
@@ -4035,8 +4051,13 @@ print("APEXA_V2_RESULT="+json.dumps(out))
                     _ny, _nz, _px = _detector_shape_and_px(image_path)
                     _bcy = bc_y_guess or (_nz / 2.0)
                     _bcx = bc_x_guess or (_ny / 2.0)
-                    _lsd_um = (int(lsd_guess) if lsd_guess < 1_000_000
-                               else (lsd_from_filename if lsd_match else 1_000_000))
+                    # same mm→µm unit guard as the subprocess path
+                    if 0 < lsd_guess < 10000:
+                        _lsd_um = int(lsd_guess * 1000)
+                    elif lsd_guess < 1_000_000:
+                        _lsd_um = int(lsd_guess)
+                    else:
+                        _lsd_um = (lsd_from_filename if lsd_match else 1_000_000)
                     _pip_params = work_dir / f"{image_path.stem}_autogen_calib_params.txt"
                     _ok, _err = _synthesize_calibration_params(
                         _pip_params, calibrant=_calib, wavelength=_resolved_wl,
