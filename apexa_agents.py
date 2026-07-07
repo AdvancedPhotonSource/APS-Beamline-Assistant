@@ -724,10 +724,17 @@ memory. Reason over it, then act.
 - Report ONLY what tools actually returned. Never fabricate paths, counts, or
   parameter values. Tool results are ground truth; if one contradicts a user
   claim, the tool is correct.
+- You ARE an agent with WORKING tools that return real output. To inspect a file
+  or directory, CALL the tool (list_directory, read_file, run_command,
+  inspect_dataset_file) — never claim you "can't execute/read/access" anything, and
+  never ask the user to run a command and paste the output. When the user names a
+  directory, call list_directory on that path (do NOT run the bare path as a shell
+  command). Default to acting; only report a non-action when a tool was genuinely
+  blocked or errored (quote the error).
 - Tools are SYNCHRONOUS — there is NO background job and you are NOT re-invoked to
   "report later". Never say an operation was "launched/submitted" or that you will
-  "report when it completes": either emit the tool call now (you get its result in
-  the same reply) or state plainly you did not run it.
+  "report when it completes": emit the tool call now and you get its result in the
+  same reply.
 - NEVER mention pyFAI, .poni files, or azimuthalIntegrator — this system uses
   MIDAS exclusively (calibration output is refined_MIDAS_params*.txt).
 
@@ -1210,6 +1217,21 @@ class AgentRunner:
         r"|\b(launched|submitted to|kicked off|now running|is running|is now running|"
         r"running in the background|queued the|started the)\b[^.\n]{0,80}\b"
         r"(report|results?|update|as soon as|once it|when it|shortly|momentarily))",
+        re.IGNORECASE)
+
+    # Refusal-to-execute guard. The model falsely claims it lacks the ability to
+    # run commands / read files (Opus/Sonnet drift, esp. after compaction), or
+    # punts the work to the user ("please run … and paste the output"). APEXA has
+    # working tools — this is a self-limitation hallucination, not a real limit.
+    _REFUSAL_RE = re.compile(
+        r"(i(?:\s+am|'m)?\s+(?:not\s+(?:\w+\s+)?able|unable)\s+to\s+(?:execute|run|read|access|list|open|get)"
+        r"|i\s+can(?:not|'t|\s+not)\s+(?:actually\s+)?(?:execute|run|read|access|list|open)"
+        r"|(?:please\s+|you\s+(?:can\s+)?)?run\s+(?:the|these|this|it|them)\b[^.\n]{0,50}"
+        r"(?:command|commands|yourself|and\s+paste|then\s+paste)"
+        r"|paste\s+(?:back\s+)?(?:the|its|that|these)\s+(?:output|results?|contents?|listing)"
+        r"|only\s+you\s+can\s+(?:run|produce|execute)"
+        r"|no\s+(?:genuine|real|live|actual)\s+(?:file\s+|directory\s+)?(?:contents?|output|listings?)"
+        r"|i\s+don'?t\s+(?:actually\s+)?have\s+(?:live|confirmed|fresh|real)\b)",
         re.IGNORECASE)
 
     @staticmethod
@@ -1741,6 +1763,7 @@ class AgentRunner:
         _query_is_approval = bool(_approval_re.search(query)) and len(query.split()) <= 10
         _confab_strikes = 0   # anti-confabulation guard: failed tool-call attempts
         _async_strikes = 0    # phantom-launch guard: false "launched / will report later"
+        _refusal_strikes = 0  # refusal guard: false "I can't execute / you run it"
 
         for _ in range(max_iterations):
             response = await provider.chat(messages, agent.temperature)
@@ -2258,6 +2281,35 @@ class AgentRunner:
                         "actually run it, and these tools are synchronous (no background "
                         "job, no later report). Nothing executed. Tell me to proceed and "
                         "I'll issue the actual tool call in-line.")
+
+            # ── Refusal-to-execute guard ─────────────────────────────────────
+            # The model falsely claims it cannot run commands / read files, or asks
+            # the USER to run them and paste output. APEXA is an agent with working
+            # tools (it uses them elsewhere in the same session) — this is a
+            # self-limitation hallucination (common Opus/Sonnet drift after
+            # compaction). Force it to actually call the tool.
+            if text and self._REFUSAL_RE.search(text):
+                if _refusal_strikes < 2:
+                    _refusal_strikes += 1
+                    print(f"  \033[33m⚠ false 'can't execute' — forcing real tool call "
+                          f"(attempt {_refusal_strikes})\033[0m")
+                    messages.append({"role": "assistant", "content": text})
+                    messages.append({"role": "user", "content": (
+                        "⛔ FALSE — you CAN execute tools and they return real output; you "
+                        "have already used them in this session. NEVER say you cannot run "
+                        "commands / read / list files, and NEVER ask me to run something and "
+                        "paste the output — run it yourself NOW. To inspect a directory I "
+                        "named, call list_directory on that path (do NOT run the bare path as "
+                        "a shell command); to read a log, call read_file. Emit the call:\n"
+                        "TOOL_CALL: list_directory\n"
+                        "ARGUMENTS: {\"path\": \"<the directory path>\"}"
+                    )})
+                    continue
+                return _persist("⚠️ The model refused to call its tools (falsely claiming it "
+                        "can't execute), so nothing was inspected. This is usually model "
+                        "drift in a long session. Try `model gpt55` (or gpt54) and/or "
+                        "`session new`, then re-issue the request — APEXA can read these "
+                        "files, the model just declined to.")
 
             # ── No tool calls at all — check for hallucination, then return ──
             if text and not single_mode and self._looks_like_hallucinated_result(text):
