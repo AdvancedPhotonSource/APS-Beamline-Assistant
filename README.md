@@ -104,8 +104,9 @@ Type these at the `APEXA>` prompt (CLI):
 |---|---|
 | `model <name>` | Switch the LLM mid-session (e.g. `model gpt55`). `models` lists all. |
 | `models` | Show available models with context/output sizes and notes |
+| `session new [name]` | Archive the current conversation and start a fresh one (optionally named) |
 | `session save [name]` | Save the conversation (named snapshot, or unnamed) |
-| `session load <name>` | Restore a saved session |
+| `session load <name>` \| `session switch <name>` | Restore a saved session and continue it (new turns append) |
 | `session resume` | Reload the most-recent session (auto-saved after every turn) |
 | `session list` \| `session summary` | List sessions / show current session info |
 | `timing` | Toggle per-response API timing display |

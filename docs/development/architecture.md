@@ -49,7 +49,8 @@ All three call `run_query()` as the single entry point.
 | `apexa_agents.py` | Agent definitions, ArgoProvider, AgentRunner, OrchestratorAgent |
 | `argo_mcp_client.py` | MCP client, tool registry, CLI session loop |
 | `beamline_core_server.py` | Core MCP server: file ops, shell commands, X-ray calculations |
-| `midas_comprehensive_server.py` | MIDAS MCP server: 37 tools for HEDM workflows, validation, stress analysis, PyTorch v11 pipeline |
+| `midas_comprehensive_server.py` | MIDAS MCP server: 38 tools for HEDM workflows, validation, stress analysis, PyTorch v11 pipeline |
+| `apexa_lib.py` | Reusable primitives for debug/test/analysis scripts: robust image/dark loading (`load_image` picks the detector dataset `/exchange/data`, never 1-D metadata), MIDAS param read/write + `compare_geometry`, lineout & outcome-manifest readers. Import this instead of hand-rolling I/O. |
 | `servers.config` | Server configuration (`name:script_path` pairs) |
 | `.agents/skills/` | Agent Skills: canonical MIDAS workflow reference |
 
@@ -64,6 +65,12 @@ Dual-mode tool calling:
 2. **Native API tool_calls** (fallback, rarely used)
 
 Text-based mode is primary because the Argo Gateway returns `{"response": "text"}` -- it strips native tool_calls from model responses.
+
+**Execution-integrity guards** (both agent modes) stop the model from reporting work it did not do:
+- *Anti-confabulation* -- a final answer containing broken tool-call syntax (no parsed call) is forced to retry, then fails honestly rather than confabulating results.
+- *Phantom-launch / false-async* -- "launched / I'll report once it completes" with no tool call is rejected: tools are synchronous, so the model must emit the call now.
+- *Refusal-to-execute* -- a false "I can't run commands / please run it yourself" is rejected and the real tool call is forced (common model-drift failure).
+- *Verify-before-report* -- integration/calibration tools return only outputs found on disk and write an `APEXA_*.json` manifest; an exit-0 with no lineout is reported `incomplete`, never a fabricated path.
 
 ### OrchestratorAgent
 Keyword-score routing to specialist agents:
@@ -85,9 +92,13 @@ System prompt injected into every agent call. Instructs the model to use `TOOL_C
 `list_directory`, `read_file`, `write_file`, `get_file_info`, `run_command`,
 `check_environment`, `xray_calculate`, `validate_beamline_parameters`, `list_common_calibrants`
 
-### MIDAS Server (`midas_comprehensive_server.py`) -- 37 tools
+### MIDAS Server (`midas_comprehensive_server.py`) -- 38 tools
 
-**Workflows:** `midas_auto_calibrate`, `midas_integrate_2d_to_1d`, `midas_batch_integrate`,
+**Workflows:** `midas_auto_calibrate` (supports `seed_from_params=` — seed BC/Lsd
+from a trusted neighbour's params for robust low-SNR calibration),
+`midas_integrate_2d_to_1d`, `midas_integrate_series` (integrate MANY separate
+files in ONE call, per-file verified + one manifest — use instead of looping the
+single-file tool), `midas_batch_integrate`,
 `run_gsas_refinement`, `run_live_analysis`, `fetch_cif_from_mp`,
 `run_ff_hedm_full_workflow`, `run_nf_hedm_reconstruction`, `run_pf_hedm_workflow`,
 `run_ff_calibration`, `match_grains`, `calculate_misorientation`,

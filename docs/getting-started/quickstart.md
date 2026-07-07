@@ -79,10 +79,15 @@ ARGO_MODEL=gpt4o                    # or claudesonnet4, gemini25pro
 | `timing` | Toggle API response time display |
 | `tools` | List all analysis tools |
 | `servers` | Show connected servers |
+| `session new [name]` | Archive current conversation, start a fresh one |
+| `session save [name]` | Save a named (or unnamed) snapshot |
+| `session load <name>` / `session switch <name>` | Restore a session and continue it (new turns append) |
+| `session resume` | Reload the most-recent session (auto-saved each turn) |
+| `session list` / `session summary` | List sessions / current session info |
 | `ls <path>` | List directory |
 | `clear` | Clear conversation history |
 | `help` | Show help |
-| `quit` | Exit |
+| `quit` | Exit (auto-saves; `session resume` to return) |
 
 ## Natural Language Examples
 
