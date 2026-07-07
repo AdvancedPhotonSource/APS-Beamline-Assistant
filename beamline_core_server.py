@@ -292,6 +292,12 @@ def _validate_segments(command: str) -> tuple:
             continue
         first_word = parts[0]
         base = _base_cmd(first_word)
+        # Redirect artifacts: the operator split on '&' turns '2>&1' into a
+        # segment '1', and '&>file'/'>&2' into '>file'/'>2'. These are shell
+        # redirections, not executables — skip them (fixes the "Command not
+        # allowed: 1" false block that stops any command using '2>&1').
+        if base.isdigit() or first_word[0] in '<>':
+            continue
         # Variable assignment (NAME=value or NAME=$(...)): always allowed
         if _re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', first_word):
             continue
