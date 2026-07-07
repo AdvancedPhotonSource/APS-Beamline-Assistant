@@ -724,6 +724,10 @@ memory. Reason over it, then act.
 - Report ONLY what tools actually returned. Never fabricate paths, counts, or
   parameter values. Tool results are ground truth; if one contradicts a user
   claim, the tool is correct.
+- Tools are SYNCHRONOUS — there is NO background job and you are NOT re-invoked to
+  "report later". Never say an operation was "launched/submitted" or that you will
+  "report when it completes": either emit the tool call now (you get its result in
+  the same reply) or state plainly you did not run it.
 - NEVER mention pyFAI, .poni files, or azimuthalIntegrator — this system uses
   MIDAS exclusively (calibration output is refined_MIDAS_params*.txt).
 
@@ -740,7 +744,10 @@ calibrants: att0 may saturate; if a mid-att like att3 fits no rings, try a lower
 att such as att1/att2.)
 
 ## Integration & analysis
-- 2D→1D: midas_integrate_2d_to_1d (single) or midas_batch_integrate (sweeps).
+- 2D→1D: midas_integrate_2d_to_1d (single file), midas_integrate_series (MANY
+  separate files — a scan/series: call it ONCE, never loop the single-file tool),
+  or midas_batch_integrate (a frame range inside one file). For a directory of
+  files, use midas_integrate_series with max_files=3 first (pilot), then the full set.
 - FF/NF/PF-HEDM: run_ff_hedm_full_workflow / run_nf_hedm_reconstruction /
   run_pf_hedm_workflow. Post-process: match_grains, calculate_misorientation,
   overlay_ff_nf_results, extract_grain_centroids, convert_nf_to_dream3d.
@@ -1188,6 +1195,22 @@ class AgentRunner:
     _TOOL_ATTEMPT_RE = re.compile(
         r'(TOOL_CALL\s*:|ARGUMENTS\s*:|<tool_call|<tool_use|<invoke\b'
         r'|<built-in function|<function\b|🛠️)', re.IGNORECASE)
+
+    # Phantom-launch / false-deferred-completion guard. APEXA tools are
+    # SYNCHRONOUS — there is no background job and the agent is not re-invoked to
+    # "report later". A final answer that promises a deferred result ("I'll
+    # report … as soon as it completes") or claims a job was "launched/submitted"
+    # WITHOUT a tool actually running this turn is a confabulation (observed: the
+    # model narrated a calibration launch, ran nothing, and promised a report).
+    _PHANTOM_ASYNC_RE = re.compile(
+        r"((i'?ll|i will|will|going to)\b[^.\n]{0,80}\b"
+        r"(report|update|share|provide|post|send|let you know|come back|follow up|circle back)\b"
+        r"[^.\n]{0,90}\b(as soon as|once|when|after|upon|as it)\b[^.\n]{0,50}\b"
+        r"(complete|completes|completed|finish|finishes|finished|done|ready|returns?|runs?)\b"
+        r"|\b(launched|submitted to|kicked off|now running|is running|is now running|"
+        r"running in the background|queued the|started the)\b[^.\n]{0,80}\b"
+        r"(report|results?|update|as soon as|once it|when it|shortly|momentarily))",
+        re.IGNORECASE)
 
     @staticmethod
     def _extract_balanced_json(s: str, start: int):
@@ -1717,6 +1740,7 @@ class AgentRunner:
         )
         _query_is_approval = bool(_approval_re.search(query)) and len(query.split()) <= 10
         _confab_strikes = 0   # anti-confabulation guard: failed tool-call attempts
+        _async_strikes = 0    # phantom-launch guard: false "launched / will report later"
 
         for _ in range(max_iterations):
             response = await provider.chat(messages, agent.temperature)
@@ -2206,6 +2230,34 @@ class AgentRunner:
                         "files were written. I'm not reporting results I don't have. "
                         "Please retry — and if you're on an Opus/Sonnet model, switch "
                         "to gpt55 or gpt54, which emit the tool-call format reliably.")
+
+            # ── Phantom-launch / false-deferred-completion guard ─────────────
+            # Final answer with NO tool call this iteration, yet it promises a
+            # deferred/async result ("I'll report when it completes") or claims a
+            # job was "launched/submitted". Tools are synchronous — this is a
+            # confabulation. Force the model to ACTUALLY emit the call now.
+            if text and self._PHANTOM_ASYNC_RE.search(text):
+                if _async_strikes < 2:
+                    _async_strikes += 1
+                    print(f"  \033[33m⚠ phantom launch — no tool ran; forcing real call "
+                          f"(attempt {_async_strikes})\033[0m")
+                    messages.append({"role": "assistant", "content": text})
+                    messages.append({"role": "user", "content": (
+                        "⛔ You said an operation was launched/submitted or that you'll "
+                        "report results later — but you issued NO tool call, so NOTHING "
+                        "ran. APEXA tools are SYNCHRONOUS: there is no background job and "
+                        "you will NOT be called again to report. Do ONE of:\n"
+                        "1) Emit the tool call NOW and you'll get its result in THIS reply:\n"
+                        "   TOOL_CALL: <tool_name>\n"
+                        "   ARGUMENTS: {\"key\": \"value\"}\n"
+                        "2) Or, if you should not run it, say plainly what you did NOT do.\n"
+                        "Never claim something was launched or promise a later report."
+                    )})
+                    continue
+                return _persist("⚠️ I described launching an operation but did not "
+                        "actually run it, and these tools are synchronous (no background "
+                        "job, no later report). Nothing executed. Tell me to proceed and "
+                        "I'll issue the actual tool call in-line.")
 
             # ── No tool calls at all — check for hallucination, then return ──
             if text and not single_mode and self._looks_like_hallucinated_result(text):
