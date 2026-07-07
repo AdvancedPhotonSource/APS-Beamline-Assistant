@@ -538,6 +538,69 @@ def run_python_script(script_name: str, args: list, cwd: str = None,
         }
 
 # =============================================================================
+# COMPUTE DISPATCH — tier work to local CPU / local GPU / remote GPU endpoint.
+# Standard-practice policy: docs/COMPUTE_DISPATCH.md
+# =============================================================================
+# Cost = frames x megapixels. Ceiling below which a CPU-only host stays local;
+# above it, a large job is routed to a GPU endpoint when one is configured.
+_COST_LOCAL_CPU = float(os.environ.get("APEXA_COST_LOCAL_CPU", "40"))  # ~5 frames @ 2880^2
+
+def _local_accelerator():
+    """(has_accel, name) — reuse the native probe; fall back to a torch check."""
+    try:
+        from apexa_midas_native import _has_torch_accelerator
+        return _has_torch_accelerator()
+    except Exception:
+        try:
+            import torch
+            if torch.cuda.is_available():
+                return True, "cuda"
+            if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+                return True, "mps"
+        except Exception:
+            pass
+        return False, "cpu"
+
+def _pick_compute_target(n_frames: int = 1, megapixels: float = 8.3, prefer: str = "auto") -> dict:
+    """Decide where a job runs: local-cpu / local-gpu / remote-gpu.
+
+    prefer: 'auto' (default) | 'local' | 'remote' | 'cpu' | 'cuda' | 'mps'.
+    Endpoint config via env: APEXA_GPU_MACHINE (parsl machine name for
+    midas-pipeline --machine, e.g. 'polaris') and/or APEXA_GPU_ENDPOINT
+    (ssh user@host or globus-compute endpoint id). Returns a dict with
+    target, device, cost, reason, and (remote) machine/endpoint.
+    """
+    cost = max(1.0, float(n_frames)) * max(0.1, float(megapixels))
+    accel, name = _local_accelerator()
+    machine = os.environ.get("APEXA_GPU_MACHINE") or None
+    endpoint = os.environ.get("APEXA_GPU_ENDPOINT") or None
+    prefer = (prefer or "auto").lower()
+
+    if prefer == "cpu":
+        return {"target": "local-cpu", "device": "cpu", "cost": cost, "reason": "forced cpu"}
+    if prefer in ("cuda", "mps"):
+        return {"target": "local-gpu", "device": prefer, "cost": cost, "reason": f"forced {prefer}"}
+    if prefer == "local":
+        return {"target": "local-gpu" if accel else "local-cpu",
+                "device": name if accel else "cpu", "cost": cost, "reason": "forced local"}
+
+    if accel and prefer != "remote":
+        return {"target": "local-gpu", "device": name, "cost": cost,
+                "reason": f"local {name} available"}
+    if cost <= _COST_LOCAL_CPU and prefer != "remote":
+        return {"target": "local-cpu", "device": "cpu", "cost": cost,
+                "reason": "small job; local CPU is fine"}
+    if machine or endpoint:
+        return {"target": "remote-gpu", "device": "cuda", "cost": cost,
+                "machine": machine, "endpoint": endpoint,
+                "reason": f"large job (cost {cost:.0f}) on CPU-only host → GPU endpoint"}
+    return {"target": "local-cpu", "device": "cpu", "cost": cost,
+            "reason": (f"large job (cost {cost:.0f}) on a CPU-only host and no GPU endpoint "
+                       "configured (set APEXA_GPU_MACHINE or APEXA_GPU_ENDPOINT) — running "
+                       "on CPU, which will be slow")}
+
+
+# =============================================================================
 # FF-HEDM PRODUCTION TOOLS
 # =============================================================================
 
@@ -552,6 +615,9 @@ async def run_ff_hedm_full_workflow(
     indexer_backend: str = "python",
     refine_backend: str = "python",
     device: str = "cpu",
+    machine: str = "",
+    n_nodes: int = 1,
+    shard_gpus: str = "",
     skip_stages: str = "",
     resume_from: str = "",
     grains_seed_file: str = "",
@@ -660,6 +726,16 @@ async def run_ff_hedm_full_workflow(
             "--refine-backend", refine_backend,
             "--layers", f"{start_layer}-{end_layer}",
         ]
+
+        # Compute dispatch: send large jobs to a GPU cluster/endpoint via parsl.
+        # --machine selects a midas_parsl_configs endpoint (e.g. 'polaris');
+        # --shard-gpus fans grain seeds across GPUs. See docs/COMPUTE_DISPATCH.md.
+        if machine:
+            cmd += ["--machine", machine]
+        if n_nodes and n_nodes > 1:
+            cmd += ["--n-nodes", str(n_nodes)]
+        if shard_gpus:
+            cmd += ["--shard-gpus", shard_gpus]
 
         if data_file:
             valid_d, data_path = validate_file(data_file)
@@ -801,6 +877,9 @@ async def run_pf_hedm_workflow(
     beam_size_um: float = 0.0,
     n_cpus: int = 4,
     device: str = "cpu",
+    machine: str = "",
+    n_nodes: int = 1,
+    shard_gpus: str = "",
     indexer_backend: str = "python",
     refine_backend: str = "python",
     one_sol_per_vox: bool = True,
@@ -860,6 +939,13 @@ async def run_pf_hedm_workflow(
             "--indexer-backend", indexer_backend,
             "--refine-backend", refine_backend,
         ]
+        # Compute dispatch (see docs/COMPUTE_DISPATCH.md): route to a GPU cluster.
+        if machine:
+            cmd += ["--machine", machine]
+        if n_nodes and n_nodes > 1:
+            cmd += ["--n-nodes", str(n_nodes)]
+        if shard_gpus:
+            cmd += ["--shard-gpus", shard_gpus]
         if scan_step_um > 0:
             cmd += ["--scan-step", str(scan_step_um)]
         if beam_size_um > 0:
@@ -2768,6 +2854,7 @@ async def midas_integrate_series(
     max_files: int = None,
     result_folder: str = None,
     n_cpus: int = 8,
+    compute_target: str = "auto",
     convert_files: bool = True,
     short_names: bool = True,
     csv_output: bool = False,
@@ -2831,6 +2918,23 @@ async def midas_integrate_series(
             return format_result({"tool": "midas_integrate_series", "status": "error",
                                   "error": "no image files matched"})
         n_matched = len(files)
+        # 1b) compute-dispatch tiering (docs/COMPUTE_DISPATCH.md). This tool runs
+        # the CPU integrator.py engine; for a large sweep on a CPU-only host with a
+        # GPU endpoint configured, recommend offloading rather than grinding.
+        plan = _pick_compute_target(n_frames=n_matched, megapixels=8.3, prefer=compute_target)
+        if compute_target == "remote" or (
+                plan["target"] == "remote-gpu" and os.environ.get("APEXA_GPU_AUTO_DISPATCH")):
+            tgt = plan.get("machine") or plan.get("endpoint") or "the configured GPU endpoint"
+            return format_result({
+                "tool": "midas_integrate_series", "status": "dispatch_recommended",
+                "compute": plan, "matched_files": n_matched,
+                "recommendation": (
+                    f"Large batch ({n_matched} frames) — run on {tgt}: on a GPU host with a "
+                    "shared view of the data, invoke this same midas_integrate_series call (it "
+                    "will use the GPU engines there), or midas-pipeline --machine "
+                    f"{plan.get('machine','<machine>')} --device cuda. "
+                    "Pass compute_target='local' to force CPU integration here (slow)."),
+            })
         # 2) representative, evenly-spaced subset when capped
         subset_note = None
         if max_files and max_files < n_matched:
@@ -2950,6 +3054,7 @@ async def midas_integrate_series(
             "succeeded": n_ok,
             "failed": n_fail,
             "subset": subset_note,
+            "compute": plan,
             "output_root": str(out_root),
             "results": per_file,
         }
