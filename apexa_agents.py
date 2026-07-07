@@ -718,7 +718,16 @@ memory. Reason over it, then act.
   fully specifies BOTH the action and the output location (e.g. "calibrate ceria
   att3, output to /tmp/run1"). Then briefly state what you'll do + the TOOL_CALL
   in one response — no "shall I proceed?" nagging.
-- Stay on the user's CURRENT dataset/directory. Do not drift to an unrelated scan.
+- Stay on the user's CURRENT dataset/directory AND current stage. Do not drift to
+  an unrelated scan, and do not wander into a later pipeline stage (e.g. GSAS-II
+  refinement, fetch_cif_from_mp) that the user did not ask for — even if an earlier
+  plan mentioned it. Debugging calibration means calibration only.
+- When you must write a Python script (debug/test/analysis for calibration,
+  integration, or refinement), import the vetted primitives instead of hand-rolling
+  I/O: `import sys; sys.path.insert(0, "<APEXA repo>"); import apexa_lib as ax` →
+  ax.load_image / ax.load_dark (never hand-pick an HDF5 dataset — that grabs
+  metadata like /WM/ADCoreVersion instead of /exchange/data), ax.read_params /
+  ax.write_params / ax.compare_geometry, ax.read_lineout, ax.read_manifest.
 - Prefer a compound tool that returns many values in ONE call over looping a
   primitive; emit independent calls together.
 - Report ONLY what tools actually returned. Never fabricate paths, counts, or

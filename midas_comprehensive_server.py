@@ -3319,6 +3319,7 @@ async def midas_auto_calibrate(
     energy_kev: float = 0.0,
     wavelength_angstrom: float = 0.0,
     calibration_engine: str = "v1",   # v2 opt-in: fails beam-center seeding on off-center detectors (pending MIDAS dev fix)
+    seed_from_params: str = "",        # trusted neighbour refined_MIDAS_params*.txt → seed BC/Lsd (robust fallback for low-SNR frames)
 ) -> str:
     """🔧 PRIMARY TOOL FOR FF-HEDM DETECTOR CALIBRATION (MIDAS Official)
 
@@ -3436,6 +3437,39 @@ async def midas_auto_calibrate(
         print(f"   Image: {image_file}", file=sys.stderr)
         print(f"   Params: {parameters_file}", file=sys.stderr)
         print(f"{'='*70}\n", file=sys.stderr)
+
+        # ── Trusted-seed fallback ──────────────────────────────────────────
+        # Robust path for low-SNR frames (e.g. CeO2 att5): seed BC + Lsd from a
+        # neighbour's known-good refined_MIDAS_params*.txt so auto ring-detection
+        # can't wander into a false basin. Reads the CORRECT complete geometry
+        # (both BC coords, Lsd already in µm) — the seed the agent tried to hand-
+        # write and got wrong. Only fills guesses the caller left at defaults.
+        if seed_from_params:
+            _sp = Path(seed_from_params).expanduser().absolute()
+            if not _sp.exists():
+                return format_result({"tool": "midas_auto_calibrate", "status": "error",
+                                      "error": f"seed_from_params not found: {_sp}"})
+            try:
+                _seed = {}
+                for _ln in _sp.read_text().splitlines():
+                    _p = _ln.split()
+                    if not _p:
+                        continue
+                    if _p[0] == "BC" and len(_p) >= 3:
+                        _seed["bc_y"] = float(_p[1]); _seed["bc_x"] = float(_p[2])
+                    elif _p[0] == "Lsd" and len(_p) >= 2:
+                        _seed["lsd"] = float(_p[1])
+                if lsd_guess >= 1000000.0 and "lsd" in _seed:
+                    lsd_guess = _seed["lsd"]            # µm, as written in the params file
+                if bc_x_guess == 0.0 and "bc_x" in _seed:
+                    bc_x_guess = _seed["bc_x"]
+                if bc_y_guess == 0.0 and "bc_y" in _seed:
+                    bc_y_guess = _seed["bc_y"]
+                print(f"  ↳ seeded from {_sp.name}: Lsd={_seed.get('lsd')} µm, "
+                      f"BC=({_seed.get('bc_x')}, {_seed.get('bc_y')})", file=sys.stderr)
+            except Exception as _e:
+                return format_result({"tool": "midas_auto_calibrate", "status": "error",
+                                      "error": f"could not parse seed_from_params {_sp}: {_e}"})
 
         # ── Native engine attempt ──────────────────────────────────────────
         # Native-first: if midas_calibrate is pip-installed (midas-suite),
