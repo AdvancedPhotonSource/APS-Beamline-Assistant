@@ -36,6 +36,13 @@ There are **two Python generations sitting above one C/OpenMP binary** — *not*
   residual-correction maps), both differentiable PyTorch. The only C/C++ code in
   the calibration path is the OMP binary.
 
+> **Robust / seeded retry (e.g. a low-SNR frame that landed in a false basin):**
+> call `midas_auto_calibrate(..., seed_from_params="<good neighbour's
+> refined_MIDAS_params*.txt>")`. It reads a complete, correct seed (both BC coords
+> + Lsd in µm) and runs the proven v1 engine. Do **NOT** hand-write runner scripts
+> against the `midas_calibrate_v2` package — it has its own open issues (e.g.
+> "keeping 1 of N rings" → IndexError) and is not the supported path.
+
 Two MCP tools:
 
 | | **`midas_auto_calibrate`** (preferred) | **`run_ff_calibration`** (lower-level) |
