@@ -34,6 +34,42 @@ REtaMap → CSV). `midas_integrate_2d_to_1d` runs the equivalent in-process.
 > **The old `Integrator` C binary is gone — never use it.** Set
 > `APEXA_USE_NATIVE_MIDAS=0` to force the `integrator.py` subprocess path.
 
+### Many SEPARATE files (a scan/series) → `midas_integrate_series` — never loop
+
+`midas_batch_integrate` handles a **frame range inside one file**. For a directory
+of many **separate** files (e.g. an overnight echem scan `JL_0Nb_*.vrx.h5`), call
+`midas_integrate_series` **once** — do **NOT** call `midas_integrate_2d_to_1d` once
+per file. Looping the single-file tool burns the agent iteration budget, hits the
+iteration cap, and forces a finalize where results get summarised from memory
+(fabricated file lists — a real failure we have observed). One call = one manifest,
+per-file verified outputs.
+
+- **Subset first:** `max_files=3` (evenly-spaced start/middle/end) to smoke-test the
+  params + dark matching, *then* re-run with `max_files` omitted for the full scan.
+- Per-file darks are matched by nearest file number (`dark_after_<n+1>`); pass a
+  single `dark_file=` to override.
+- Writes `APEXA_integration_series.json` (real paths + per-file `success`/`error`).
+
+```python
+midas_integrate_series(
+    parameter_file=".../JLi_params_calib_guess.txt",
+    image_dir=".../overnight_scan_JLi",
+    pattern="JL_0Nb_*.h5",
+    max_files=3,                    # subset first; omit for the full scan
+    result_folder=".../APEXA_benchmark/integration/series",
+)
+```
+
+### Report ONLY verified outputs (all integration tools)
+
+Every integration tool returns the **real** output paths it found on disk and
+writes an `APEXA_integration*.json` manifest. When reporting: cite **only** those
+paths / manifest entries. Never construct an expected `*_lineout.xy` name yourself,
+and never call a file integrated unless its result/manifest marks it `success` —
+`incomplete`/`error` means **no lineout was produced**. If a run was interrupted
+(iteration cap, gateway error), say so explicitly and report only what the
+manifests confirm.
+
 ---
 
 ## Agent prompting protocol (run BEFORE calling either MCP tool)

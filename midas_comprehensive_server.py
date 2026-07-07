@@ -2708,22 +2708,214 @@ async def midas_integrate_2d_to_1d(
         csv_files = sorted(out_dir.glob("*_lineouts.csv"), key=lambda p: p.stat().st_mtime, reverse=True) \
                     if csv_output else []
 
-        return format_result({
-            "tool": "midas_integrate_2d_to_1d", "status": "success",
+        # Verify before reporting: exit-0 with no lineout/zarr means the run did
+        # NOT actually produce an integrated profile — report that, don't claim
+        # success (and never fabricate an output filename).
+        produced = bool(lineout or zarr_out)
+        payload = {
+            "tool": "midas_integrate_2d_to_1d",
+            "status": "success" if produced else "incomplete",
             "input_image": str(image_path),
             "calibration_file": str(param_path),
             "result_folder": str(out_dir),
-            "lineout_xy": str(lineout[0]) if lineout else "not found — check result_folder",
-            "zarr_zip": str(zarr_out[0]) if zarr_out else "not found",
+            "lineout_xy": str(lineout[0]) if lineout else None,
+            "zarr_zip": str(zarr_out[0]) if zarr_out else None,
             "csv_files": [str(p) for p in csv_files] if csv_files else None,
-            "message": f"Integration complete. Lineout: {lineout[0].name if lineout else 'see result_folder'}"
-        })
+            "message": (f"Integration complete. Lineout: {lineout[0].name}" if lineout
+                        else "integrator.py exited 0 but produced no *_lineout.xy / *.zarr.zip "
+                             "in result_folder — treat as not integrated"),
+        }
+        _write_integration_outcome(out_dir, payload)
+        return format_result(payload)
 
     except subprocess.TimeoutExpired:
         return format_result({"tool": "midas_integrate_2d_to_1d", "status": "error",
                               "error": "integrator.py timed out (>10 min)"})
     except Exception as e:
         return format_result({"tool": "midas_integrate_2d_to_1d", "status": "error", "error": str(e)})
+
+
+def _nearest_dark(image_path, dark_files):
+    """Match a sample frame to its dark by file number — the dark_after_<n+1>
+    convention: prefer the closest dark numbered >= the sample, else the nearest.
+    Returns a Path or None."""
+    m = re.search(r'(\d{6})', Path(image_path).stem)
+    if not m or not dark_files:
+        return None
+    n = int(m.group(1))
+    def _num(p):
+        mm = re.search(r'(\d{6})', Path(p).stem)
+        return int(mm.group(1)) if mm else -10**9
+    after = [d for d in dark_files if _num(d) >= n]
+    pool = after or list(dark_files)
+    return min(pool, key=lambda d: abs(_num(d) - n))
+
+
+@mcp.tool()
+async def midas_integrate_series(
+    parameter_file: str,
+    images: list = None,
+    image_dir: str = None,
+    pattern: str = "*.h5",
+    exclude_substring: str = "dark",
+    dark_file: str = None,
+    dark_pattern: str = "*dark*",
+    max_files: int = None,
+    result_folder: str = None,
+    n_cpus: int = 8,
+    convert_files: bool = True,
+    short_names: bool = True,
+    csv_output: bool = False,
+    r_min: float = None, r_max: float = None, r_bin_size: float = None,
+    eta_min: float = None, eta_max: float = None, eta_bin_size: float = None,
+) -> str:
+    """Integrate a SERIES of separate 2D image files in ONE tool call.
+
+    USE THIS instead of calling ``midas_integrate_2d_to_1d`` in a loop over many
+    files. Looping the single-file tool burns the agent's iteration budget and
+    leads to aborted runs that get summarised from memory (fabricated file lists).
+    This tool processes the whole series in one call, verifies each output on
+    disk, and writes ``APEXA_integration_series.json`` so results are cited, not
+    reconstructed. Only files that actually produced a ``*_lineout.xy`` are
+    reported ``success``.
+
+    File selection:
+      • ``images``: explicit list of image paths, OR
+      • ``image_dir`` + ``pattern``: glob (files whose name contains
+        ``exclude_substring`` — e.g. darks — are skipped).
+      • ``max_files``: cap to a representative, evenly-spaced subset (e.g. 3 →
+        start/middle/end). Omit to integrate every matched file.
+
+    Dark matching (per file):
+      • ``dark_file``: one dark for all files, OR
+      • darks are collected from ``image_dir`` via ``dark_pattern`` and each
+        sample is matched to the nearest-numbered dark (dark_after_<n+1>).
+    """
+    try:
+        param_path = Path(parameter_file).expanduser().absolute()
+        if not param_path.exists():
+            return format_result({"tool": "midas_integrate_series", "status": "error",
+                                  "error": f"Parameter file not found: {param_path}"})
+        # 1) resolve the image list
+        if images:
+            files = sorted(Path(p).expanduser().absolute() for p in images)
+        elif image_dir:
+            d = Path(image_dir).expanduser().absolute()
+            if not d.is_dir():
+                return format_result({"tool": "midas_integrate_series", "status": "error",
+                                      "error": f"image_dir not found: {d}"})
+            excl = (exclude_substring or "").lower()
+            files = sorted(p for p in d.glob(pattern)
+                           if p.is_file() and (not excl or excl not in p.name.lower()))
+        else:
+            return format_result({"tool": "midas_integrate_series", "status": "error",
+                                  "error": "provide either images=[...] or image_dir=..."})
+        files = [p for p in files if p.exists()]
+        if not files:
+            return format_result({"tool": "midas_integrate_series", "status": "error",
+                                  "error": "no image files matched"})
+        n_matched = len(files)
+        # 2) representative, evenly-spaced subset when capped
+        subset_note = None
+        if max_files and max_files < n_matched:
+            if max_files == 1:
+                idx = [0]
+            else:
+                idx = sorted({round(i * (n_matched - 1) / (max_files - 1))
+                              for i in range(max_files)})
+            files = [files[i] for i in idx]
+            subset_note = f"{len(files)} of {n_matched} matched files (evenly-spaced subset)"
+        # 3) dark candidates (only if no single dark given)
+        dark_files = []
+        if not dark_file:
+            base = Path(image_dir).expanduser().absolute() if image_dir else files[0].parent
+            dark_files = sorted(base.glob(dark_pattern))
+        # 4) integrator setup (CPU subprocess engine — the batch-scale path)
+        integrator_script = MIDAS_ROOT / "FF_HEDM" / "workflows" / "integrator.py"
+        if not integrator_script.exists():
+            return format_result({"tool": "midas_integrate_series", "status": "error",
+                                  "error": f"integrator.py not found at {integrator_script}"})
+        _warn_deprecated_cpp("integration series: integrator.py")
+        midas_python = find_midas_python()
+        out_root = (Path(result_folder).expanduser().absolute() if result_folder
+                    else files[0].parent / "integration_series")
+        out_root.mkdir(parents=True, exist_ok=True)
+        env = get_midas_env()
+
+        per_file, n_ok = [], 0
+        for img in files:
+            out_dir = out_root / img.stem
+            out_dir.mkdir(parents=True, exist_ok=True)
+            if dark_file:
+                this_dark = Path(dark_file).expanduser().absolute()
+            else:
+                nd = _nearest_dark(img, dark_files)
+                this_dark = Path(nd) if nd else None
+            rec = {"input_image": str(img),
+                   "dark_file": str(this_dark) if this_dark else None,
+                   "result_folder": str(out_dir)}
+            m = re.search(r'(\d{6})', img.stem)
+            file_nr = int(m.group(1)) if m else None
+            cmd = [midas_python, str(integrator_script),
+                   "-paramFN", str(param_path), "-dataFN", str(img),
+                   "-resultFolder", str(out_dir),
+                   "-nCPUsLocal", str(n_cpus), "-nCPUs", "1", "-mapDetector", "1",
+                   "-convertFiles", "1" if convert_files else "0", "-writeMat", "0",
+                   "-shortNames", "1" if short_names else "0",
+                   "-csvOutput", "1" if csv_output else "0"]
+            if file_nr is not None:
+                cmd += ["-startFileNr", str(file_nr), "-endFileNr", str(file_nr)]
+            if this_dark and this_dark.exists():
+                cmd += ["-darkFN", str(this_dark)]
+            for key, val in (("RMin", r_min), ("RMax", r_max), ("RBinSize", r_bin_size),
+                             ("EtaMin", eta_min), ("EtaMax", eta_max), ("EtaBinSize", eta_bin_size)):
+                if val is not None:
+                    cmd += [key, str(val)]
+            try:
+                res = subprocess.run(cmd, cwd=str(img.parent), capture_output=True,
+                                     text=True, timeout=600, env=env)
+                lineout = sorted(out_dir.glob("*_lineout.xy"),
+                                 key=lambda p: p.stat().st_mtime, reverse=True)
+                if res.returncode == 0 and lineout:
+                    rec["status"] = "success"
+                    rec["lineout_xy"] = str(lineout[0])
+                    n_ok += 1
+                else:
+                    rec["status"] = "error"
+                    rec["error"] = (f"integrator.py exit {res.returncode}"
+                                    if res.returncode != 0 else "no *_lineout.xy produced")
+                    rec["stderr_tail"] = "\n".join(res.stderr.strip().splitlines()[-5:])
+            except subprocess.TimeoutExpired:
+                rec["status"] = "error"; rec["error"] = "timeout (>10 min)"
+            except Exception as _e:
+                rec["status"] = "error"; rec["error"] = str(_e)
+            per_file.append(rec)
+            print(f"  [{rec['status']:7s}] {img.name}", file=sys.stderr)
+
+        n_fail = len(per_file) - n_ok
+        summary = {
+            "tool": "midas_integrate_series",
+            "status": "success" if n_fail == 0 else ("partial" if n_ok else "error"),
+            "parameter_file": str(param_path),
+            "matched_files": n_matched,
+            "processed_files": len(per_file),
+            "succeeded": n_ok,
+            "failed": n_fail,
+            "subset": subset_note,
+            "output_root": str(out_root),
+            "results": per_file,
+        }
+        manifest = _write_integration_outcome(
+            out_root, summary, filename="APEXA_integration_series.json")
+        # Return a COMPACT payload: all failures + a few successes; full list is on disk.
+        summary["manifest"] = manifest
+        summary["results"] = ([r for r in per_file if r["status"] != "success"] +
+                              [r for r in per_file if r["status"] == "success"][:5])
+        summary["note"] = ("Cite only outputs listed here or in the manifest; files "
+                           "not marked 'success' produced NO lineout and were not integrated.")
+        return format_result(summary)
+    except Exception as e:
+        return format_result({"tool": "midas_integrate_series", "status": "error", "error": str(e)})
 
 # Phase identification tool moved to analysis_utilities_server.py as identify_phases_basic
 # Use GSAS-II server for comprehensive phase identification
@@ -2942,8 +3134,20 @@ def _find_dark_for_image(image_path: Path):
     target's directory. Prefers a dark whose exposure token (e.g. '1p0s')
     matches the calibrant image. Returns an absolute path string or "".
     """
-    exts = (".h5", ".hdf5", ".hdf", ".nxs", ".tif", ".tiff",
-            ".ge", ".ge2", ".ge3", ".ge5")
+    # The dark must be readable by the SAME code path as the main image.
+    # AutoCalibrateZarr reads a TIFF image's dark with PIL (Image.open), so a raw
+    # GE (.ge*) or HDF5 dark handed to a TIFF calibration crashes with
+    # "cannot load this image". Restrict candidates to the image's own format
+    # family instead of any dark that merely matches the exposure token.
+    fmt_groups = (
+        {".tif", ".tiff"},
+        {".h5", ".hdf5", ".hdf", ".nxs"},
+        {".ge", ".ge1", ".ge2", ".ge3", ".ge5"},
+    )
+    img_suffix = image_path.suffix.lower()
+    compat = next((g for g in fmt_groups if img_suffix in g), None)
+    if compat is None:                       # unknown image type → allow any
+        compat = set().union(*fmt_groups)
     m = re.search(r'(\d+p\d+s)', image_path.stem.lower())
     exp_tok = m.group(1) if m else None
     # Build the search directory list (dedup, order = nearest first).
@@ -2960,18 +3164,30 @@ def _find_dark_for_image(image_path: Path):
             if d.parent == d:
                 break
             d = d.parent
-    cands = []
+    cands, skipped = [], 0
     for d in dirs:
         try:
             for p in d.iterdir():
-                if (p.is_file() and "dark" in p.name.lower()
-                        and p.suffix.lower() in exts):
-                    cands.append(p)
+                name = p.name.lower()
+                if not (p.is_file() and "dark" in name):
+                    continue
+                # Skip MIDAS-generated intermediates (derived artifacts from a
+                # prior run, e.g. dark_*.tif.ge.analysis.MIDAS.ge5) — not raw darks.
+                if ".analysis." in name or ".midas." in name:
+                    continue
+                if p.suffix.lower() not in compat:
+                    skipped += 1
+                    continue
+                cands.append(p)
         except Exception:
             continue
     if not cands:
+        if skipped:
+            print(f"  ⚠ found {skipped} dark(s) but none in the image's format "
+                  f"({img_suffix}); proceeding without dark subtraction.",
+                  file=sys.stderr)
         return ""
-    if exp_tok:   # prefer exposure-matched dark
+    if exp_tok:   # prefer exposure-matched dark within the compatible set
         for p in cands:
             if exp_tok in p.name.lower():
                 return str(p.resolve())
@@ -3005,6 +3221,30 @@ def _write_calibration_outcome(out_dir, payload: dict):
         return str(p)
     except Exception as _e:
         print(f"  ⚠ could not write outcome manifest: {_e}", file=sys.stderr)
+        return None
+
+
+def _write_integration_outcome(out_dir, payload: dict,
+                               filename: str = "APEXA_integration.json"):
+    """Per-run integration outcome manifest — the same on-disk-truth pattern as
+    ``_write_calibration_outcome``. Lets "what was integrated?" be answered from a
+    single authoritative file (real output paths + per-file status), so the agent
+    cites verified results instead of reconstructing plausible filenames after a
+    forced finalize. Never raises. Returns the manifest path, or None.
+    """
+    try:
+        from datetime import datetime, timezone
+        d = Path(out_dir)
+        d.mkdir(parents=True, exist_ok=True)
+        rec = dict(payload)
+        rec.setdefault("manifest", filename)
+        rec.setdefault("written_at", datetime.now(timezone.utc).isoformat())
+        p = d / filename
+        p.write_text(json.dumps(rec, indent=2, default=str))
+        print(f"  ↳ integration manifest: {p}", file=sys.stderr)
+        return str(p)
+    except Exception as _e:
+        print(f"  ⚠ could not write integration manifest: {_e}", file=sys.stderr)
         return None
 
 
