@@ -2759,7 +2759,12 @@ async def midas_integrate_series(
     pattern: str = "*.h5",
     exclude_substring: str = "dark",
     dark_file: str = None,
+    dark_dir: str = None,
     dark_pattern: str = "*dark*",
+    dark_kind: str = "after",
+    dark_source: str = "file",
+    data_location: str = None,
+    dark_location: str = None,
     max_files: int = None,
     result_folder: str = None,
     n_cpus: int = 8,
@@ -2786,10 +2791,21 @@ async def midas_integrate_series(
       • ``max_files``: cap to a representative, evenly-spaced subset (e.g. 3 →
         start/middle/end). Omit to integrate every matched file.
 
-    Dark matching (per file):
-      • ``dark_file``: one dark for all files, OR
-      • darks are collected from ``image_dir`` via ``dark_pattern`` and each
-        sample is matched to the nearest-numbered dark (dark_after_<n+1>).
+    Dark handling (generalizes across data layouts — not every beamtime is
+    structured the same):
+      • ``dark_source="file"`` (default): a separate dark file per frame. Either
+        pass one ``dark_file`` for all, or let the tool discover darks in
+        ``dark_dir`` (default = image dir) via ``dark_pattern``, scoped to THIS
+        sample's prefix and to ``dark_kind`` ("after"/"before"/"any"), then match
+        each frame to the nearest-numbered dark (the dark_after_<n+1> convention,
+        with graceful fallback to nearest).
+      • ``dark_source="embedded"``: each frame's own file carries its dark
+        (e.g. HDF5 ``exchange/data_dark``); set ``dark_location`` accordingly.
+      • ``dark_source="none"``: integrate without dark subtraction.
+      • ``data_location`` / ``dark_location``: HDF5 dataset paths. A separate .h5
+        dark's frame is read from ``dark_location`` (defaults to ``data_location``
+        or ``exchange/data`` — NOT integrator's ``exchange/dark`` default, which
+        is wrong for files that store the dark at ``exchange/data``).
     """
     try:
         param_path = Path(parameter_file).expanduser().absolute()
@@ -2825,11 +2841,28 @@ async def midas_integrate_series(
                               for i in range(max_files)})
             files = [files[i] for i in idx]
             subset_note = f"{len(files)} of {n_matched} matched files (evenly-spaced subset)"
-        # 3) dark candidates (only if no single dark given)
+        # 3) dark candidates (only if no single dark given). Scope to THIS sample
+        # (the prefix before the 6-digit frame number, e.g. "JL_0Nb_") AND to the
+        # requested dark_kind ("after"/"before"/"any"), so a JL_0Nb frame is never
+        # matched to a WY5/JL_Nb dark or the wrong before/after set in a directory
+        # that interleaves many samples and both dark kinds.
         dark_files = []
-        if not dark_file:
-            base = Path(image_dir).expanduser().absolute() if image_dir else files[0].parent
-            dark_files = sorted(base.glob(dark_pattern))
+        if not dark_file and dark_source == "file":
+            import os as _os
+            base = (Path(dark_dir).expanduser().absolute() if dark_dir
+                    else (Path(image_dir).expanduser().absolute() if image_dir else files[0].parent))
+            prefix = _os.path.commonprefix([re.sub(r'\d{6}.*$', '', p.stem) for p in files])
+            sample_tok = prefix.rstrip('_').lower()
+            kind = (dark_kind or "").lower().strip()
+            cand = sorted(base.glob(dark_pattern))
+            def _same_sample(p):
+                return (not sample_tok) or p.name.startswith(prefix) or sample_tok in p.name.lower()
+            scoped = [p for p in cand if _same_sample(p)]
+            if kind in ("after", "before"):
+                kinded = [p for p in scoped if f"dark_{kind}" in p.name.lower()]
+                dark_files = kinded or scoped   # fall back to any-kind if none of that kind
+            else:
+                dark_files = scoped
         # 4) integrator setup (CPU subprocess engine — the batch-scale path)
         integrator_script = MIDAS_ROOT / "FF_HEDM" / "workflows" / "integrator.py"
         if not integrator_script.exists():
@@ -2846,7 +2879,11 @@ async def midas_integrate_series(
         for img in files:
             out_dir = out_root / img.stem
             out_dir.mkdir(parents=True, exist_ok=True)
-            if dark_file:
+            if dark_source == "none":
+                this_dark = None
+            elif dark_source == "embedded":
+                this_dark = img          # the frame's own file carries its dark
+            elif dark_file:
                 this_dark = Path(dark_file).expanduser().absolute()
             else:
                 nd = _nearest_dark(img, dark_files)
@@ -2865,8 +2902,19 @@ async def midas_integrate_series(
                    "-csvOutput", "1" if csv_output else "0"]
             if file_nr is not None:
                 cmd += ["-startFileNr", str(file_nr), "-endFileNr", str(file_nr)]
+            if data_location:
+                cmd += ["-dataLoc", data_location]
             if this_dark and this_dark.exists():
                 cmd += ["-darkFN", str(this_dark)]
+                # A separate .h5 dark's frame lives at the same HDF5 path as the
+                # data (integrator's default -darkLoc exchange/dark is wrong for
+                # these files); an embedded dark lives at its own path (e.g.
+                # exchange/data_dark). Both overridable via dark_location.
+                if dark_source == "embedded":
+                    dkloc = dark_location or "exchange/data_dark"
+                else:
+                    dkloc = dark_location or data_location or "exchange/data"
+                cmd += ["-darkLoc", dkloc]
             for key, val in (("RMin", r_min), ("RMax", r_max), ("RBinSize", r_bin_size),
                              ("EtaMin", eta_min), ("EtaMax", eta_max), ("EtaBinSize", eta_bin_size)):
                 if val is not None:
