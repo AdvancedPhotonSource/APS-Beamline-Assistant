@@ -254,8 +254,10 @@ def _print_help():
     _cmd("monitor stop | status | check", "Control monitoring")
 
     _sec("Sessions")
+    _cmd("session new [name]", "Archive current & start a fresh session")
     _cmd("session save [name]", "Save current session (with conversation)")
-    _cmd("session load <name>", "Load & resume a saved session")
+    _cmd("session load <name>", "Load & resume a saved session (turns append to it)")
+    _cmd("session switch <name>", "Switch active session (resume + continue)")
     _cmd("session resume", "Resume last session (autosaved on exit)")
     _cmd("session list | summary", "Manage sessions")
 
@@ -365,6 +367,32 @@ class ExperimentContext:
             return name or "_autosave"
         except Exception:
             return "_autosave"
+
+    def start_new(self, name: str = None) -> str:
+        """Wind up the current session and begin a fresh, empty one.
+
+        Only resets the *active* slot so subsequent turns start from a clean
+        transcript — archive the previous conversation first (``save_session``)
+        if it is worth keeping. A named new session must not clobber an existing
+        one; the unnamed case reuses the rolling ``_autosave`` slot (wiped clean).
+        """
+        self.loaded_conversation = []
+        self.loaded_summary = ""
+        if name:
+            if (self._transcript_file(name).exists()
+                    or (self.session_dir / f"{name}.json").exists()):
+                raise FileExistsError(name)
+            self.active_session = name
+        else:
+            self.active_session = "_autosave"
+            tf = self._transcript_file("_autosave")
+            try:
+                if tf.exists():
+                    tf.unlink()
+            except Exception:
+                pass
+        self._remember_active()
+        return self.active_session
 
     def append_message(self, role: str, content: str):
         """Append one message to the active session's append-only transcript.
@@ -1773,12 +1801,36 @@ class APEXAClient:
                     session_cmd = user_input[8:].strip().split()
 
                     if not session_cmd:
-                        print("Usage: session <save|load|list> [name]")
+                        print("Usage: session <new|save|load|resume|list|summary> [name]")
                         continue
 
                     action = session_cmd[0]
 
-                    if action == 'save':
+                    if action == 'new':
+                        # Wind up the current session (archive it if non-empty),
+                        # then start a fresh, empty one.
+                        convo = self.orchestrator.export_history() if self.orchestrator else []
+                        if convo:
+                            summ = self.orchestrator.export_summary() if self.orchestrator else ""
+                            archived = self.context.save_session(
+                                None, conversation=convo, summary=summ)
+                            print(f"  {C.GREEN}✓{C.RESET} Previous session archived: "
+                                  f"{C.CYAN}{archived.stem}{C.RESET} "
+                                  f"{C.DIM}({len(convo)} messages — resume later with "
+                                  f"'session load {archived.stem}'){C.RESET}")
+                        new_name = session_cmd[1] if len(session_cmd) > 1 else None
+                        try:
+                            slot = self.context.start_new(new_name)
+                        except FileExistsError:
+                            print(f"  {C.RED}✗{C.RESET} Session '{new_name}' already exists — "
+                                  f"pick another name, or 'session load {new_name}' to continue it")
+                            continue
+                        if self.orchestrator:
+                            self.orchestrator.clear_history()
+                        label = slot if slot != "_autosave" else "new session (autosaved on exit)"
+                        print(f"  {C.GREEN}✓{C.RESET} Started fresh: {C.CYAN}{label}{C.RESET}")
+
+                    elif action == 'save':
                         session_name = session_cmd[1] if len(session_cmd) > 1 else None
                         convo = self.orchestrator.export_history() if self.orchestrator else []
                         summ = self.orchestrator.export_summary() if self.orchestrator else ""
@@ -1788,15 +1840,19 @@ class APEXAClient:
                         print(f"  {C.GREEN}✓{C.RESET} Session saved: {C.CYAN}{saved_file}{C.RESET} "
                               f"{C.DIM}({len(convo)} messages{extra}){C.RESET}")
 
-                    elif action in ('load', 'resume'):
-                        # 'resume' with no name reloads the most-recent session.
+                    elif action in ('load', 'resume', 'switch'):
+                        # load/switch <name>: resume a session AND make it active,
+                        #   so subsequent turns append to it (continue it).
+                        # resume (no name): reload the most-recent session.
                         if action == 'resume' and len(session_cmd) < 2:
                             session_name = self.context.last_active()
                         elif len(session_cmd) < 2:
-                            print("Usage: session load <session_name>")
+                            print(f"Usage: session {action} <session_name>")
                             continue
                         else:
                             session_name = session_cmd[1]
+                        # winding up the current session is automatic: its turns
+                        # are already on disk in its append-only transcript.
                         if self.context.load_session(session_name):
                             restored = self.context.loaded_conversation
                             restored_summary = self.context.loaded_summary
@@ -1826,7 +1882,7 @@ class APEXAClient:
 
                     else:
                         print(f"Unknown session command: {action}")
-                        print("Available: save, load, list, summary")
+                        print("Available: new, save, load, switch, resume, list, summary")
 
                 elif user_input.lower().startswith('image '):
                     # Image analysis command
