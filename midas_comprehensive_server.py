@@ -2926,16 +2926,20 @@ async def midas_integrate_series(
         if not param_path.exists():
             return format_result({"tool": "midas_integrate_series", "status": "error",
                                   "error": f"Parameter file not found: {param_path}"})
-        # 1) resolve the image list. Darks are NEVER samples: exclude any file
-        # matching dark_pattern (or containing 'dark' — dark_before AND dark_after)
-        # from the SAMPLE set, independent of exclude_substring. Integrating a dark
-        # frame as data is a silent, meaningless result (observed: dark_before
-        # leaked in and doubled the file count 192→384).
+        # 1) resolve the image list. Darks are NEVER samples: a file that the dark
+        # layer would treat as a dark must not be integrated as data. This is
+        # driven by the configurable `dark_pattern` (the single knob for "what is a
+        # dark" — default *dark*, override for other conventions like *bg*/*empty*),
+        # NOT a hardcoded name; `dark_kind` only chooses WHICH darks to subtract,
+        # it never affects this exclusion. Independent of `exclude_substring`.
+        # (Generic fix for the observed dark_before leak that doubled 192→384.)
         import fnmatch as _fnm
         _dpat = (dark_pattern or "").lower()
         def _is_dark(name: str) -> bool:
             n = name.lower()
-            return ("dark" in n) or bool(_dpat and _fnm.fnmatch(n, _dpat))
+            if _dpat:
+                return _fnm.fnmatch(n, _dpat)     # configurable dark identifier
+            return "dark" in n                    # fallback only if no dark_pattern set
         excl = (exclude_substring or "").lower()
         if images:
             allp = sorted(Path(p).expanduser().absolute() for p in images)
