@@ -14,7 +14,7 @@ interface ConnectionState {
 
 export const useConnectionStore = create<ConnectionState>((set) => ({
   connected: false,
-  selectedModel: 'gpt4o',
+  selectedModel: 'gpt55',   // backend default (ARGO_MODEL); replaced by /models on load
   availableModels: {},
 
   init: () => {

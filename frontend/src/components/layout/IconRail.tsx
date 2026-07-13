@@ -93,12 +93,14 @@ function RailButton({
         width: 58,
         height: 56,
         borderRadius: 10,
-        border: active ? '1px solid rgba(59,130,246,0.3)' : '1px solid transparent',
+        border: active ? '1px solid rgba(59,130,246,0.35)' : '1px solid transparent',
         cursor: 'pointer',
-        transition: 'all 150ms',
-        background: active ? 'var(--apexa-rail-active)' : 'transparent',
-        color: active ? '#3b82f6' : 'var(--apexa-text-muted)',
-        boxShadow: active ? '0 0 12px rgba(59,130,246,0.1)' : 'none',
+        transition: 'all 150ms var(--apexa-ease)',
+        background: active
+          ? 'linear-gradient(135deg, var(--apexa-accent-soft), transparent)'
+          : 'transparent',
+        color: active ? 'var(--apexa-accent)' : 'var(--apexa-text-muted)',
+        boxShadow: active ? 'inset 2px 0 0 var(--apexa-accent), 0 0 16px rgba(59,130,246,0.16)' : 'none',
       }}
       onMouseEnter={(e) => {
         if (!active) {

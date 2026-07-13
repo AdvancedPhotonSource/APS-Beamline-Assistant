@@ -1,6 +1,7 @@
 import { useState, useRef, type KeyboardEvent, type ClipboardEvent, type DragEvent } from 'react'
 import { useChatStore } from '@/stores/chatStore'
 import { useImageStore } from '@/stores/imageStore'
+import { useConnectionStore } from '@/stores/connectionStore'
 import { uploadFile } from '@/api/endpoints'
 
 interface Attachment {
@@ -27,6 +28,7 @@ export function ChatInput() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const { sendMessage, isLoading } = useChatStore()
   const loadImage = useImageStore((s) => s.loadImage)
+  const selectedModel = useConnectionStore((s) => s.selectedModel)
 
   const handleFiles = async (files: FileList | File[]) => {
     const list = Array.from(files)
@@ -181,8 +183,9 @@ export function ChatInput() {
             disabled={(!text.trim() && attachments.length === 0) || isLoading}
             className="shrink-0 w-8 h-8 rounded-lg flex items-center justify-center transition-all duration-150"
             style={{
-              background: (text.trim() || attachments.length > 0) ? 'linear-gradient(135deg, #3b82f6, #6366f1)' : 'var(--apexa-surface-3)',
+              background: (text.trim() || attachments.length > 0) ? 'var(--apexa-accent-grad)' : 'var(--apexa-surface-3)',
               color: (text.trim() || attachments.length > 0) ? 'white' : 'var(--apexa-text-muted)',
+              boxShadow: (text.trim() || attachments.length > 0) && !isLoading ? 'var(--apexa-glow)' : 'none',
               opacity: ((!text.trim() && attachments.length === 0) || isLoading) ? 0.4 : 1,
               cursor: ((!text.trim() && attachments.length === 0) || isLoading) ? 'default' : 'pointer',
             }}
@@ -196,7 +199,7 @@ export function ChatInput() {
       </div>
       <div className="flex items-center justify-between mt-1.5 px-1">
         <div className="flex items-center gap-2 text-[10px]" style={{ color: 'var(--apexa-text-muted)' }}>
-          <span className="px-1.5 py-0.5 rounded bg-[var(--apexa-surface-3)] font-mono text-[9px]">gpt4o</span>
+          <span className="px-1.5 py-0.5 rounded bg-[var(--apexa-surface-3)] font-mono text-[9px]">{selectedModel || '…'}</span>
           <span className="opacity-60">via Argo</span>
         </div>
         <div className="text-[10px]" style={{ color: 'var(--apexa-text-muted)' }}>

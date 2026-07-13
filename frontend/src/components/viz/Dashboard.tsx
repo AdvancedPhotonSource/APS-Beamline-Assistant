@@ -72,10 +72,11 @@ export function Dashboard() {
   const card: React.CSSProperties = {
     borderRadius: 12, border: '1px solid var(--apexa-border)',
     background: 'var(--apexa-surface)', overflow: 'hidden',
+    boxShadow: 'var(--apexa-elev-1)',
   }
 
   return (
-    <div style={{ height: '100%', overflow: 'auto', padding: 20, background: 'var(--apexa-panel-bg)' }}>
+    <div style={{ height: '100%', overflow: 'auto', padding: 20, background: 'transparent' }}>
       {/* Purpose — what this panel is for */}
       <div style={{ marginBottom: 16 }}>
         <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.6, textTransform: 'uppercase', color: 'var(--apexa-text-2)' }}>Canvas</div>
@@ -130,7 +131,7 @@ export function Dashboard() {
         </div>
 
         {/* What renders here — a legend, not fake data */}
-        <div style={{ ...card, padding: 14 }}>
+        <div className="apexa-hoverable" style={{ ...card, padding: 14 }}>
           <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--apexa-text)', marginBottom: 10 }}>What shows up here</div>
           {[
             ['1D diffraction patterns', '.xy .dat .csv'],
@@ -147,7 +148,7 @@ export function Dashboard() {
         </div>
 
         {/* Grounded starter actions — every one sends a real command to chat */}
-        <div style={{ ...card, padding: 14 }}>
+        <div className="apexa-hoverable" style={{ ...card, padding: 14 }}>
           <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--apexa-text)', marginBottom: 4 }}>Not sure where to start?</div>
           <div style={{ fontSize: 11, color: 'var(--apexa-text-muted)', marginBottom: 10 }}>
             APEXA can inspect your data and recommend the next step.
@@ -163,7 +164,7 @@ export function Dashboard() {
         </div>
 
         {/* Common commands — send to chat, don't just decorate */}
-        <div style={{ ...card, gridColumn: '1 / -1', padding: 14 }}>
+        <div className="apexa-hoverable" style={{ ...card, gridColumn: '1 / -1', padding: 14 }}>
           <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--apexa-text)', marginBottom: 8 }}>Common commands</div>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             {[
@@ -195,11 +196,13 @@ function StarterBtn({ primary, onClick, children }: { primary?: boolean; onClick
   return (
     <button
       onClick={onClick}
+      className={primary ? 'apexa-sheen' : undefined}
       style={{
         textAlign: 'left', padding: '8px 11px', borderRadius: 8, fontSize: 12.5, cursor: 'pointer',
         border: primary ? 'none' : '1px solid var(--apexa-border)',
-        background: primary ? 'var(--apexa-accent, #3b82f6)' : 'var(--apexa-surface)',
+        background: primary ? 'var(--apexa-accent-grad)' : 'var(--apexa-surface)',
         color: primary ? '#fff' : 'var(--apexa-text)', fontWeight: primary ? 600 : 500,
+        boxShadow: primary ? 'var(--apexa-glow)' : 'none',
       }}
     >{children}</button>
   )

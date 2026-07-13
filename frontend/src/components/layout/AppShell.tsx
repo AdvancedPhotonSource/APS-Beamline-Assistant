@@ -120,7 +120,7 @@ export function AppShell() {
   }, [sideW, sideCollapsed])
 
   return (
-    <div style={{ height: '100vh', width: '100%', display: 'flex', flexDirection: 'column', background: 'var(--apexa-panel-bg)', color: 'var(--apexa-text)' }}>
+    <div style={{ height: '100vh', width: '100%', display: 'flex', flexDirection: 'column', background: 'transparent', color: 'var(--apexa-text)' }}>
       <Header />
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
         {/* Icon Rail */}

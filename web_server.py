@@ -726,15 +726,18 @@ async def quick_phase_identification(
 async def chat_with_assistant(
     message: str = Form(...),
     file_id: Optional[str] = Form(None),
-    model: str = Form("gpt4o")
+    model: str = Form("")
 ):
     """Chat with the AI assistant"""
     if not mcp_client:
         raise HTTPException(status_code=503, detail="MCP client not available")
-    
+
     try:
-        # Set the model if different
-        if model != mcp_client.selected_model:
+        # Only switch on an EXPLICIT, non-empty model. Defaulting this to a fixed
+        # model (e.g. gpt4o) would silently reset the session model on every
+        # untargeted request (image upload, HTTP fallback) — keep the session's
+        # own selected_model (ARGO_MODEL default) unless the caller overrides it.
+        if model and model != mcp_client.selected_model:
             mcp_client.selected_model = model
         
         # Find file path if file_id provided
@@ -904,7 +907,7 @@ async def get_available_models():
     """Get available AI models for the frontend model selector"""
     if mcp_client:
         return {"models": mcp_client.available_models, "selected": mcp_client.selected_model}
-    return {"models": {}, "selected": "gpt4o"}
+    return {"models": {}, "selected": os.getenv("ARGO_MODEL", "gpt55")}
 
 @app.get("/api/files")
 async def list_uploaded_files():

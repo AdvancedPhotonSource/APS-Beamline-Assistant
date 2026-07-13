@@ -21,9 +21,11 @@ export function Header() {
       alignItems: 'center',
       justifyContent: 'space-between',
       padding: '8px 16px',
-      background: 'var(--apexa-surface)',
+      background: 'color-mix(in srgb, var(--apexa-surface) 72%, transparent)',
+      backdropFilter: 'blur(12px) saturate(1.3)',
+      WebkitBackdropFilter: 'blur(12px) saturate(1.3)',
       borderBottom: '1px solid var(--apexa-border)',
-      boxShadow: '0 1px 3px rgba(0,0,0,0.1), 0 0 12px rgba(59,130,246,0.03)',
+      boxShadow: 'var(--apexa-elev-1)',
     }}>
       {/* Logo */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
