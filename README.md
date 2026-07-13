@@ -42,7 +42,7 @@ User (natural language)
                              |
                   +----------+----------+
                   |   core (10 tools)   |
-                  |   midas (39 tools)  |
+                  |   midas (40 tools)  |
                   |   motor (13 tools)  |
                   +---------------------+
 ```
@@ -59,7 +59,7 @@ User (natural language)
 | Server | File | Tools |
 |---|---|---|
 | core | `beamline_core_server.py` | 10 tools: file ops, shell commands, X-ray calculations |
-| midas | `midas_comprehensive_server.py` | 39 tools: FF/NF/PF-HEDM, calibration, single + **series/batch** integration, GSAS-II refinement, CIF fetcher, visualization, validation, stress |
+| midas | `midas_comprehensive_server.py` | 40 tools: FF/NF/PF-HEDM, calibration, single + **series/batch** integration, GSAS-II refinement, CIF fetcher, visualization, validation, stress, **data-driven workflow recommendation** |
 | motor | `epics_motor_server.py` | 13 tools: EPICS motor control (read/move/jog/limits) |
 
 ### Agent Skills (`.agents/skills/`)

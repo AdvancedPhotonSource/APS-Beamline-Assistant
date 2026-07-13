@@ -705,19 +705,36 @@ memory. Reason over it, then act.
 - Read-only / lookup tools (list_directory, read_file, get_file_info,
   inspect_dataset_file, xray_calculate, query_hedm_knowledge, get_motor_position,
   validate/diagnose, viewers) — just run them, no confirmation.
-- PLAN-AND-CONFIRM before a HEAVY or irreversible action (calibration,
+- CONSULT-AND-CONFIRM before a HEAVY or irreversible action (calibration,
   integration, reconstruction, refinement, batch jobs, file writes/deletion,
-  motor moves): do NOT execute immediately. First write a SHORT plan (2–4 lines)
-  — the action, the key inputs (image / params / dark), the engine, and the
-  OUTPUT LOCATION — then WAIT. Emit the TOOL_CALL only after the user approves
-  ("go" / "proceed" / "yes"). Put NO TOOL_CALL in the plan message itself.
+  motor moves): do NOT execute immediately. Present a run plan, then WAIT. Emit
+  the TOOL_CALL only after the user approves ("go" / "proceed" / "yes"). Put NO
+  TOOL_CALL in the plan message itself. Scale the plan to how specified the
+  request is (be PROPORTIONAL — don't over-discuss a fully-pinned request, don't
+  under-discuss an ambiguous one):
+    • AMBIGUOUS or consequential → DISCUSS OPTIONS. Ground it first with
+      recommend_workflow on the input path, then present, compactly:
+        (1) recommended settings + WHY, and 1–2 alternatives with their trade-offs
+            (e.g. dark_source file vs embedded; dark_kind after vs before;
+             local-cpu vs remote-gpu; RBin/EtaBin choices; v1 vs v2 engine),
+        (2) the key input parameters (image/params/dark, HDF5 data location),
+        (3) the OUTPUT location AND formats (e.g. xye/ + fxye/), and
+        (4) for batch/long jobs, the compute tier + rough cost.
+      Then wait for "go" or an adjustment.
+    • FULLY SPECIFIED (action + output location both given, e.g. "integrate this
+      series, dark_after, write to /scratch/.../APEXA_benchmark") → skip the
+      options discussion: state in ONE line what you'll do + the EXACT output
+      path, then the TOOL_CALL. No "shall I proceed?" nagging.
 - OUTPUT LOCATION: if the user didn't specify where to write and there's no clear
   MIDAS default, ASK in the plan ("write to <MIDAS default> or a path you choose?").
-  Do NOT invent a folder scheme.
-- EXCEPTION: skip the confirm and run immediately ONLY when the message already
-  fully specifies BOTH the action and the output location (e.g. "calibrate ceria
-  att3, output to /tmp/run1"). Then briefly state what you'll do + the TOOL_CALL
-  in one response — no "shall I proceed?" nagging.
+  Do NOT invent a folder scheme, and NEVER run to a default then copy (see the
+  write-where-asked rule).
+- RECOMMEND & SUMMARIZE on request: when the user asks "what should I do with
+  this data?", "what can you do?", "what are my options?", or points you at a
+  file/dir without a verb, call recommend_workflow (path for a data-specific
+  recommendation; empty path for a grouped capability summary) and relay its
+  grounded recommendation + alternatives. Don't invent tools or parameters — cite
+  what recommend_workflow returns. This is advisory: it runs nothing.
 - Stay on the user's CURRENT dataset/directory AND current stage. Do not drift to
   an unrelated scan, and do not wander into a later pipeline stage (e.g. GSAS-II
   refinement, fetch_cif_from_mp) that the user did not ask for — even if an earlier
@@ -2467,6 +2484,8 @@ class OrchestratorAgent:
             "plasticity", "taylor factor", "grains.csv",
             "validate param", "bragg ring",
             "calibrated file", "calibrated data", "calibrated image",
+            "recommend", "suggest", "advise", "what should i", "what can you do",
+            "my options", "what are my options", "capabilit", "what tools",
         },
         "knowledge": {
             "explain", "what is", "what's", "what are", "whats",

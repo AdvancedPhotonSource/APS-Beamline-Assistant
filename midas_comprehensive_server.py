@@ -7177,6 +7177,240 @@ async def diagnose_parameter_file(
         return format_result({"tool": "diagnose_parameter_file", "status": "error", "error": str(e)})
 
 
+def _classify_input(p: Path) -> dict:
+    """Read-only, fast classification of a data path (for recommend_workflow).
+
+    Globs + a light HDF5 key peek only — no heavy reads. Distinguishes single
+    images, a series directory (with dark_before/after detection and calibrant
+    vs sample split), grains/mic/param/CIF/zarr files, and HDF5 layout (incl.
+    embedded darks).
+    """
+    info = {"path": str(p), "exists": p.exists(), "kind": "unknown"}
+    if not p.exists():
+        return info
+    # Strict calibrant test: only True when the name LITERALLY contains a known
+    # calibrant token. (_detect_calibrant_from_name defaults to CeO2 and would
+    # mislabel every sample as a calibrant.)
+    def _explicit_calibrant(stem: str):
+        low = stem.lower()
+        for nm in _CALIBRANT_DB:
+            if nm.lower() in low:
+                return nm
+        return None
+    IMG_PATS = ("*.h5", "*.hdf5", "*.hdf", "*.tif", "*.tiff",
+                "*.ge", "*.ge2", "*.ge3", "*.ge5", "*.cbf")
+    if p.is_dir():
+        info["kind"] = "directory"
+        imgs = sorted({q for pat in IMG_PATS for q in p.glob(pat) if q.is_file()})
+        darks = [q for q in imgs if "dark" in q.name.lower()]
+        samples = [q for q in imgs if "dark" not in q.name.lower()]
+        cal = [q for q in samples if _explicit_calibrant(q.stem)]
+        info.update({
+            "n_images": len(imgs), "n_samples": len(samples), "n_darks": len(darks),
+            "has_dark_before": any("dark_before" in q.name.lower() for q in darks),
+            "has_dark_after": any("dark_after" in q.name.lower() for q in darks),
+            "calibrant_files": [q.name for q in cal[:3]],
+            "sample_example": samples[0].name if samples else (imgs[0].name if imgs else None),
+            "sample_first": str(samples[0]) if samples else None,
+            "grains_csv": [q.name for q in sorted(p.glob("*[Gg]rains*.csv"))[:3]],
+            "mic_files": [q.name for q in sorted(p.glob("*.mic"))[:3]],
+            "param_files": [q.name for q in (sorted(p.glob("refined_MIDAS_params*.txt"))
+                                             + sorted(p.glob("*[Pp]arams*.txt")))[:3]],
+        })
+        return info
+    # single file
+    suf = p.suffix.lower(); name = p.name.lower()
+    info["suffix"] = suf
+    info["calibrant"] = _explicit_calibrant(p.stem)
+    if "grains" in name and suf == ".csv":
+        info["kind"] = "grains_csv"
+    elif suf == ".mic":
+        info["kind"] = "mic"
+    elif suf == ".cif":
+        info["kind"] = "cif"
+    elif name.endswith(".zarr.zip"):
+        info["kind"] = "zarr_integration"
+    elif suf == ".txt" and ("param" in name or "midas" in name):
+        info["kind"] = "param_file"
+    elif suf in (".h5", ".hdf5", ".hdf", ".nxs"):
+        info["kind"] = "hdf5_image"
+        try:
+            import h5py
+            dsets = []
+            with h5py.File(p, "r") as h:
+                def _v(n, o):
+                    if isinstance(o, h5py.Dataset) and getattr(o, "ndim", 0) >= 2:
+                        dsets.append((n, list(o.shape)))
+                h.visititems(_v)
+            info["hdf5_datasets"] = [{"path": n, "shape": s} for n, s in dsets[:6]]
+            info["embedded_dark"] = any("dark" in n.lower() for n, _ in dsets)
+            info["data_location_guess"] = next(
+                (n for n, _ in dsets if n.lower().endswith("data")
+                 and "dark" not in n.lower()), (dsets[0][0] if dsets else None))
+        except Exception as e:
+            info["hdf5_peek_error"] = str(e)
+    elif suf in (".tif", ".tiff", ".cbf"):
+        info["kind"] = "tiff_image"
+    elif suf in (".ge", ".ge2", ".ge3", ".ge5"):
+        info["kind"] = "ge_image"
+    return info
+
+
+# Grouped, grounded capability summary (real tool names) — returned when
+# recommend_workflow is called with no path, or the user asks "what can you do".
+_CAPABILITY_GROUPS = {
+    "Calibrate detector geometry": [
+        "midas_auto_calibrate — refine Lsd/beam-center/tilts from a CeO2/LaB6/Si ring image (→ refined_MIDAS_params*.txt)",
+        "run_ff_calibration — CalibrantOMP FF calibration from a param file",
+        "estimate_parameters_from_image — first-guess Lsd/BC from measured ring radii",
+    ],
+    "Integrate 2D → 1D": [
+        "midas_integrate_series — a SERIES of separate files in ONE call (auto dark-match, xye/fxye per sample)",
+        "midas_batch_integrate — a frame RANGE inside one file",
+        "midas_integrate_2d_to_1d — a single image",
+    ],
+    "FF / NF / PF HEDM": [
+        "run_ff_hedm_full_workflow — full FF grain reconstruction (→ Grains.csv)",
+        "run_nf_hedm_reconstruction / convert_nf_to_dream3d / extract_grain_centroids",
+        "run_pf_hedm_workflow, run_forward_simulation, match_grains, calculate_misorientation",
+    ],
+    "Phase / strain / refinement": [
+        "run_gsas_refinement — Rietveld/lattice refinement from an integrated pattern + CIF",
+        "compute_grain_stress, get_material_stiffness, correct_d0_equilibrium, analyze_slip_systems",
+        "fetch_cif_from_mp, get_material_properties, read_grains_summary",
+    ],
+    "Inspect / validate / advise": [
+        "recommend_workflow — inspect data and recommend the next tool + parameters (this tool)",
+        "inspect_dataset_file, validate_parameter_file, diagnose_parameter_file, get_typical_hedm_parameters",
+    ],
+    "Visualize": [
+        "run_midas_viewer — caked heatmaps, lineouts, calibrant/peak overlays",
+    ],
+}
+
+
+@mcp.tool()
+async def recommend_workflow(path: str = "", goal: str = "") -> str:
+    """Inspect input data and recommend the APEXA tool + parameters to run next.
+
+    READ-ONLY advisory — nothing is executed. Classifies what `path` is (single
+    image, a series directory, calibrant, HDF5 with/without embedded dark, grains
+    file, param file, CIF, zarr), then returns a GROUNDED recommendation: the
+    primary tool to call, its key parameters (dark scheme, HDF5 data location,
+    compute tier from frame count), a suggested output location, 1–2 alternatives
+    with trade-offs, and the natural next step. Use this to answer "what should I
+    do with this data?" or "what can you do?" BEFORE committing to a heavy run.
+
+    Args:
+        path: file or directory to inspect. Empty → return a capability summary.
+        goal: optional steer — "calibrate" / "integrate" / "index" / "refine" /
+              "convert" — biases which recommendation is ranked first.
+    """
+    try:
+        if not path:
+            return format_result({
+                "tool": "recommend_workflow", "status": "success",
+                "mode": "capability_summary",
+                "capabilities": _CAPABILITY_GROUPS,
+                "hint": "Call recommend_workflow with a path to a file or directory "
+                        "for a data-specific recommendation.",
+            })
+        p = Path(path).expanduser().absolute()
+        info = _classify_input(p)
+        if not info["exists"]:
+            return format_result({"tool": "recommend_workflow", "status": "error",
+                                  "error": f"path not found: {p}"})
+
+        recs = []          # ranked list of {tool, why, params, output, alternative}
+        kind = info["kind"]
+        g = (goal or "").lower()
+
+        if kind == "directory":
+            ns = info["n_samples"]
+            if info["calibrant_files"] and (ns <= 5 or "calibrat" in g):
+                recs.append({
+                    "tool": "midas_auto_calibrate",
+                    "why": f"calibrant image(s) present ({', '.join(info['calibrant_files'])})",
+                    "params": {"image_file": "<the calibrant image>",
+                               "output_dir": "<where to write refined_MIDAS_params*.txt>"},
+                    "note": "energy/pixel auto-detected from filename; dark auto-resolved.",
+                })
+            if ns >= 2:
+                dark_kind = ("after" if info["has_dark_after"]
+                             else "before" if info["has_dark_before"] else "any")
+                dark_source = "file" if info["n_darks"] else "none"
+                plan = _pick_compute_target(n_frames=ns, megapixels=8.3)
+                recs.append({
+                    "tool": "midas_integrate_series",
+                    "why": f"{ns} sample files → integrate the whole series in one call",
+                    "params": {"image_dir": str(p),
+                               "dark_source": dark_source, "dark_kind": dark_kind,
+                               "result_folder": "<APEXA_benchmark/.../<sample>_integrated_data>",
+                               "compute_target": plan["target"]},
+                    "output": "writes xye/ + fxye/ per sample (darks excluded automatically)",
+                    "compute": plan,
+                    "alternative": "midas_batch_integrate — only if all frames live INSIDE one file",
+                })
+            if info["grains_csv"]:
+                recs.append({"tool": "read_grains_summary / compute_grain_stress",
+                             "why": f"grains file(s) present: {', '.join(info['grains_csv'])}"})
+        elif kind == "hdf5_image":
+            dl = info.get("data_location_guess")
+            dsrc = "embedded" if info.get("embedded_dark") else "file"
+            recs.append({
+                "tool": "midas_integrate_series (image_dir=parent) or midas_integrate_2d_to_1d",
+                "why": "HDF5 detector image",
+                "params": {"data_location": dl,
+                           "dark_source": dsrc,
+                           **({"dark_location": next((d["path"] for d in info.get("hdf5_datasets", [])
+                                                      if "dark" in d["path"].lower()), None)}
+                              if dsrc == "embedded" else {})},
+                "note": f"HDF5 datasets: {[d['path'] for d in info.get('hdf5_datasets', [])]}",
+            })
+            if info.get("calibrant") in ("CeO2", "LaB6", "Si", "Al2O3"):
+                recs.insert(0, {"tool": "midas_auto_calibrate",
+                                "why": f"filename looks like a {info['calibrant']} calibrant"})
+        elif kind in ("tiff_image", "ge_image"):
+            if info.get("calibrant") in ("CeO2", "LaB6", "Si", "Al2O3"):
+                recs.append({"tool": "midas_auto_calibrate",
+                             "why": f"{info['calibrant']} calibrant image"})
+            recs.append({"tool": "midas_integrate_2d_to_1d",
+                         "why": "single 2D image → 1D pattern",
+                         "alternative": "batch_convert_ge_to_tiff first if downstream needs TIFF"})
+        elif kind == "grains_csv":
+            recs.append({"tool": "read_grains_summary",
+                         "why": "grain table → summary, then compute_grain_stress / analyze_slip_systems"})
+        elif kind == "mic":
+            recs.append({"tool": "extract_grain_centroids / convert_nf_to_dream3d",
+                         "why": "NF .mic reconstruction output"})
+        elif kind == "cif":
+            recs.append({"tool": "run_gsas_refinement",
+                         "why": "CIF phase → pair with an integrated pattern (.xy/.xye/.zarr.zip) to refine"})
+        elif kind == "zarr_integration":
+            recs.append({"tool": "run_gsas_refinement",
+                         "why": "zarr integration output → refine with a CIF",
+                         "alternative": "run_midas_viewer — caked heatmap + lineout"})
+        elif kind == "param_file":
+            recs.append({"tool": "validate_parameter_file → diagnose_parameter_file",
+                         "why": "MIDAS parameter file → validate before using it in a pipeline"})
+        else:
+            recs.append({"tool": "inspect_dataset_file",
+                         "why": "unrecognized type — inspect to extract geometry/metadata first"})
+
+        return format_result({
+            "tool": "recommend_workflow", "status": "success",
+            "mode": "recommendation",
+            "input": info,
+            "goal": goal or None,
+            "recommendations": recs,
+            "note": "Advisory only — nothing was run. Confirm parameters + output "
+                    "location, then call the recommended tool with result_folder/"
+                    "output_dir set to where you want the output.",
+        })
+    except Exception as e:
+        return format_result({"tool": "recommend_workflow", "status": "error", "error": str(e)})
+
+
 @mcp.tool()
 async def inspect_dataset_file(
     dataset_file: str
