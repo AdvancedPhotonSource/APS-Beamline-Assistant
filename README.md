@@ -41,8 +41,9 @@ User (natural language)
             +----------------+-----------------+      MIDAS viewer scripts
                              |
                   +----------+----------+
-                  |   core (9 tools)    |
-                  |   midas (25 tools)  |
+                  |   core (10 tools)   |
+                  |   midas (39 tools)  |
+                  |   motor (13 tools)  |
                   +---------------------+
 ```
 
@@ -57,16 +58,25 @@ User (natural language)
 ### MCP Servers (`servers.config`)
 | Server | File | Tools |
 |---|---|---|
-| core | `beamline_core_server.py` | 9 tools: file ops, shell commands, X-ray calculations |
-| midas | `midas_comprehensive_server.py` | 25 tools: FF/NF/PF-HEDM, calibration, integration, GSAS-II refinement, CIF fetcher, visualization |
+| core | `beamline_core_server.py` | 10 tools: file ops, shell commands, X-ray calculations |
+| midas | `midas_comprehensive_server.py` | 39 tools: FF/NF/PF-HEDM, calibration, single + **series/batch** integration, GSAS-II refinement, CIF fetcher, visualization, validation, stress |
+| motor | `epics_motor_server.py` | 13 tools: EPICS motor control (read/move/jog/limits) |
 
 ### Agent Skills (`.agents/skills/`)
 Canonical MIDAS workflow reference — correct v11 flags, scripts, output files:
-- `midas-calibrate` — AutoCalibrateZarr.py workflow
-- `midas-integrate` — integrator.py (CPU) and integrator_batch_process.py (GPU)
-- `midas-hedm` — FF/NF/PF-HEDM full pipeline
+- `midas-validate` — parameter-file / dataset validation (run first)
+- `midas-calibrate` — native `midas_calibrate` workflow (AutoCalibrateZarr fallback)
+- `midas-integrate` — single (`midas_integrate_2d_to_1d`), **series** (`midas_integrate_series`, many files, one call, per-frame darks), and GPU-streaming integration
+- `midas-hedm` / `midas-ff-hedm` — FF/NF/PF-HEDM full pipeline
 - `midas-gsasii` — GSAS-II refinement, live analysis pipeline, CIF fetcher
-- `midas-visualize` — MIDAS viewer scripts for lineouts, caked, grains
+- `midas-visualize` — MIDAS viewer scripts for lineouts, caked, grains, 3D spots/PF
+
+### Compute dispatch (`docs/COMPUTE_DISPATCH.md`)
+APEXA tiers work to **local CPU / local GPU / remote GPU endpoint** by task size and
+available hardware. Large batch/HEDM on a CPU-only beamline host can offload to an
+ANL GPU (ALCF Polaris via `--machine polaris`, or a lab GPU node) — set
+`APEXA_GPU_MACHINE` or `APEXA_GPU_ENDPOINT`. FF/PF workflows accept
+`machine`/`n_nodes`/`shard_gpus`; `midas_integrate_series` accepts `compute_target`.
 
 ---
 

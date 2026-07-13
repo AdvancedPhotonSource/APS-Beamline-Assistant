@@ -21,10 +21,12 @@ Then open: **http://localhost:8001**
 **That's it!** Natural language interface ready for:
 - ✅ Detector calibration (CeO2, LaB6, Si)
 - ✅ 2D→1D integration with dark subtraction
+- ✅ Series/batch integration of a whole scan in one call (per-frame darks)
 - ✅ FF-HEDM grain reconstruction
 - ✅ NF-HEDM microstructure mapping
 - ✅ Phase identification
-- ✅ Batch processing
+- ✅ Tiered CPU/GPU compute dispatch — offload big jobs to an ANL GPU endpoint
+  (see [Compute Dispatch](COMPUTE_DISPATCH.md))
 - ✅ Real-time monitoring
 
 ---
