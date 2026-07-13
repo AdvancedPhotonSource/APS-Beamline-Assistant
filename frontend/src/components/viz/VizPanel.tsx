@@ -1,6 +1,8 @@
+import { useState } from 'react'
 import { useVizStore } from '@/stores/vizStore'
 import { VizTabs } from './VizTabs'
 import { Dashboard } from './Dashboard'
+import { CanvasHistory } from './CanvasHistory'
 import { ArtifactBody } from './ArtifactBody'
 import { ProvenanceBar } from './ProvenanceBar'
 import { ViewerControls } from '@/components/viewer/ViewerControls'
@@ -9,28 +11,110 @@ import { deriveProvenance } from '@/lib/provenance'
 import type { VizArtifact } from '@/api/types'
 
 /**
- * VizPanel = the Artifact Canvas. Holds the active scientific object (plot, image,
- * table, …) as a stable, addressable thing you can pin, compare side-by-side, and
- * trace back to what produced it (provenance footer). This is the "Canvas holds"
- * zone of the chat-drives / canvas-holds / facility-rail-watches layout.
+ * VizPanel = the Artifact Canvas: the "evidence" zone of the chat-drives /
+ * canvas-holds / rail-watches layout. It holds the scientific objects APEXA
+ * produces (plot, image, table) as stable, addressable things you can pin,
+ * compare side-by-side, and trace back to what produced them (provenance footer).
+ * A persistent header states that role and toggles between the open artifact
+ * (Active) and the full session record (Results) for reproducibility.
  */
 export function VizPanel() {
-  const { artifacts, activeId, setActive, removeArtifact, pinned, togglePin, compareIds, toggleCompare, clearCompare } =
+  const { artifacts, openIds, activeId, setActive, closeTab, pinned, togglePin, compareIds, toggleCompare, clearCompare } =
     useVizStore()
+  const [view, setView] = useState<'active' | 'results'>('active')
 
+  // Nothing produced yet → the empty state explains the panel's purpose itself.
   if (artifacts.length === 0) return <Dashboard />
 
-  const active = artifacts.find((a) => a.id === activeId) ?? artifacts[artifacts.length - 1]
+  const openArtifacts = openIds
+    .map((id) => artifacts.find((a) => a.id === id))
+    .filter((a): a is VizArtifact => !!a)
+  const active = openArtifacts.find((a) => a.id === activeId) ?? openArtifacts[openArtifacts.length - 1]
   const compareArtifacts = compareIds
     .map((id) => artifacts.find((a) => a.id === id))
     .filter((a): a is VizArtifact => !!a)
   const inCompare = compareArtifacts.length === 2
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--apexa-surface)' }}>
+      {/* Canvas identity + Active/Results segmented control (always visible so the
+          panel's role is legible). */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 10,
+        padding: '7px 12px', borderBottom: '1px solid var(--apexa-border)',
+        background: 'var(--apexa-surface-2)',
+      }}>
+        <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.6, textTransform: 'uppercase', color: 'var(--apexa-text-2)' }}>
+          Canvas
+        </span>
+        <span style={{ fontSize: 10, color: 'var(--apexa-text-muted)' }}>results APEXA produced</span>
+        <span style={{ flex: 1 }} />
+        <div style={{ display: 'flex', borderRadius: 7, overflow: 'hidden', border: '1px solid var(--apexa-border)' }}>
+          <SegBtn active={view === 'active'} onClick={() => setView('active')}>Active</SegBtn>
+          <SegBtn active={view === 'results'} onClick={() => setView('results')}>Results ({artifacts.length})</SegBtn>
+        </div>
+      </div>
+
+      {view === 'results' ? (
+        <CanvasHistory onOpen={() => setView('active')} />
+      ) : !active ? (
+        <div style={{ padding: 24, color: 'var(--apexa-text-muted)', fontSize: 13 }}>
+          All tabs closed. Switch to <b>Results ({artifacts.length})</b> to re-open a result.
+        </div>
+      ) : (
+      <ActiveView
+        active={active}
+        openArtifacts={openArtifacts}
+        setActive={setActive}
+        closeTab={closeTab}
+        pinned={pinned}
+        togglePin={togglePin}
+        compareIds={compareIds}
+        toggleCompare={toggleCompare}
+        clearCompare={clearCompare}
+        compareArtifacts={compareArtifacts}
+        inCompare={inCompare}
+      />
+      )}
+    </div>
+  )
+}
+
+function SegBtn({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        padding: '3px 10px', border: 'none', fontSize: 11, cursor: 'pointer',
+        background: active ? 'var(--apexa-accent, #3b82f6)' : 'var(--apexa-surface)',
+        color: active ? '#fff' : 'var(--apexa-text-2)',
+      }}
+    >{children}</button>
+  )
+}
+
+function ActiveView({
+  active, openArtifacts, setActive, closeTab, pinned, togglePin,
+  compareIds, toggleCompare, clearCompare, compareArtifacts, inCompare,
+}: {
+  active: VizArtifact
+  openArtifacts: VizArtifact[]
+  setActive: (id: string) => void
+  closeTab: (id: string) => void
+  pinned: string[]
+  togglePin: (id: string) => void
+  compareIds: string[]
+  toggleCompare: (id: string) => void
+  clearCompare: () => void
+  compareArtifacts: VizArtifact[]
+  inCompare: boolean
+}) {
   const isPinned = pinned.includes(active.id)
   const isComparing = compareIds.includes(active.id)
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--apexa-surface)' }}>
-      <VizTabs artifacts={artifacts} activeId={active.id} onSelect={setActive} onClose={removeArtifact} />
+    <>
+      <VizTabs artifacts={openArtifacts} activeId={active.id} onSelect={setActive} onClose={closeTab} />
 
       {/* Canvas toolbar — pin / compare actions on the active artifact */}
       <div
@@ -114,7 +198,7 @@ export function VizPanel() {
           </>
         )}
       </div>
-    </div>
+    </>
   )
 }
 

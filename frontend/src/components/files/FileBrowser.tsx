@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { useFileStore } from '@/stores/fileStore'
 import { useImageStore } from '@/stores/imageStore'
 import { useVizStore } from '@/stores/vizStore'
+import { useChatStore } from '@/stores/chatStore'
 import { fetchCsvData } from '@/api/endpoints'
 
 const IMAGE_EXTS = new Set(['.tif', '.tiff', '.ge', '.ge2', '.ge3', '.ge4', '.ge5', '.h5', '.hdf5', '.nxs', '.png'])
@@ -10,7 +11,14 @@ const DATA_EXTS = new Set(['.csv', '.dat', '.xy', '.txt'])
 export function FileBrowser() {
   const { currentPath, parentPath, entries, isLoading, error, browse, goUp } = useFileStore()
   const loadImage = useImageStore((s) => s.loadImage)
+  const sendMessage = useChatStore((s) => s.sendMessage)
   const initialized = useRef(false)
+
+  // Grounded recommendation: hand the real path to APEXA → it calls
+  // recommend_workflow and reports options in chat (nothing is executed).
+  const recommend = (path: string, isDir: boolean) =>
+    sendMessage(`Recommend a workflow for this ${isDir ? 'directory' : 'file'}: ${path}. `
+      + `Inspect it and tell me what I can do and my options before running anything.`)
 
   useEffect(() => {
     if (!initialized.current) {
@@ -90,9 +98,18 @@ export function FileBrowser() {
             color: 'var(--apexa-text-2)',
           }}>..</button>
         )}
-        <span style={{ color: 'var(--apexa-text-muted)', fontFamily: 'var(--font-mono)', fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={currentPath}>
+        <span style={{ color: 'var(--apexa-text-muted)', fontFamily: 'var(--font-mono)', fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }} title={currentPath}>
           {displayPath}
         </span>
+        <button
+          onClick={() => recommend(currentPath, true)}
+          title="Ask APEXA to recommend a workflow for this folder"
+          style={{
+            flexShrink: 0, padding: '2px 8px', borderRadius: 4, fontSize: 10, cursor: 'pointer',
+            background: 'var(--apexa-surface-2)', border: '1px solid var(--apexa-border)',
+            color: 'var(--apexa-text-2)', display: 'flex', alignItems: 'center', gap: 3,
+          }}
+        >💡 Recommend</button>
       </div>
 
       {error && (
@@ -105,43 +122,61 @@ export function FileBrowser() {
           <div style={{ padding: 16, textAlign: 'center', color: 'var(--apexa-text-muted)' }}>Loading...</div>
         ) : (
           entries.map((entry) => (
-            <button
+            <div
               key={entry.path}
-              onClick={() => entry.is_dir ? browse(entry.path) : handleFileClick(entry.path, entry.ext)}
+              className="apexa-file-row"
               style={{
-                display: 'flex', alignItems: 'center', gap: 8, width: '100%',
-                padding: '5px 10px', textAlign: 'left', cursor: 'pointer',
-                background: 'transparent', border: 'none',
-                color: entry.is_dir ? 'var(--apexa-text)' : entry.is_diffraction ? '#3b82f6' : 'var(--apexa-text-2)',
-                fontSize: 12, transition: 'background 100ms',
+                display: 'flex', alignItems: 'center', width: '100%',
+                transition: 'background 100ms',
               }}
               onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--apexa-surface-2)' }}
               onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
             >
-              <span style={{ flexShrink: 0, width: 16, textAlign: 'center' }}>
-                {entry.is_dir ? (
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#eab308" strokeWidth="2">
-                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-                  </svg>
-                ) : entry.is_diffraction ? (
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" strokeWidth="2">
-                    <circle cx="12" cy="12" r="10" /><circle cx="12" cy="12" r="6" /><circle cx="12" cy="12" r="2" />
-                  </svg>
-                ) : (
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--apexa-text-muted)" strokeWidth="2">
-                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" />
-                  </svg>
-                )}
-              </span>
-              <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {entry.name}
-              </span>
-              {entry.size != null && (
-                <span style={{ flexShrink: 0, color: 'var(--apexa-text-muted)', fontFamily: 'var(--font-mono)', fontSize: 10 }}>
-                  {formatSize(entry.size)}
+              <button
+                onClick={() => entry.is_dir ? browse(entry.path) : handleFileClick(entry.path, entry.ext)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0,
+                  padding: '5px 4px 5px 10px', textAlign: 'left', cursor: 'pointer',
+                  background: 'transparent', border: 'none',
+                  color: entry.is_dir ? 'var(--apexa-text)' : entry.is_diffraction ? '#3b82f6' : 'var(--apexa-text-2)',
+                  fontSize: 12,
+                }}
+              >
+                <span style={{ flexShrink: 0, width: 16, textAlign: 'center' }}>
+                  {entry.is_dir ? (
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#eab308" strokeWidth="2">
+                      <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+                    </svg>
+                  ) : entry.is_diffraction ? (
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" strokeWidth="2">
+                      <circle cx="12" cy="12" r="10" /><circle cx="12" cy="12" r="6" /><circle cx="12" cy="12" r="2" />
+                    </svg>
+                  ) : (
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--apexa-text-muted)" strokeWidth="2">
+                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" />
+                    </svg>
+                  )}
                 </span>
-              )}
-            </button>
+                <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {entry.name}
+                </span>
+                {entry.size != null && (
+                  <span style={{ flexShrink: 0, color: 'var(--apexa-text-muted)', fontFamily: 'var(--font-mono)', fontSize: 10 }}>
+                    {formatSize(entry.size)}
+                  </span>
+                )}
+              </button>
+              <button
+                onClick={() => recommend(entry.path, entry.is_dir)}
+                title="Recommend a workflow for this"
+                className="apexa-file-recommend"
+                style={{
+                  flexShrink: 0, width: 24, marginRight: 4, padding: '4px 0', borderRadius: 4,
+                  background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 12,
+                  color: 'var(--apexa-text-muted)',
+                }}
+              >💡</button>
+            </div>
           ))
         )}
       </div>

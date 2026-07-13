@@ -47,6 +47,7 @@ export interface VizArtifact {
   data: unknown
   sourceMessageId: string
   provenance?: Provenance
+  createdAt?: number             // epoch ms, stamped by vizStore on add
 }
 
 export interface WsOutgoing {

@@ -1,27 +1,20 @@
-import { useState, useCallback, useRef, Component, type ReactNode, type ErrorInfo } from 'react'
-import Plot from './LazyPlot'
+import { useState, useCallback, useRef } from 'react'
 import { useVizStore } from '@/stores/vizStore'
 import { useImageStore } from '@/stores/imageStore'
+import { useChatStore } from '@/stores/chatStore'
 import { fetchCsvData } from '@/api/endpoints'
 
-class SafeWrapper extends Component<{ children: ReactNode }, { error: string | null }> {
-  state = { error: null as string | null }
-  static getDerivedStateFromError(err: Error) { return { error: err.message } }
-  componentDidCatch(err: Error, info: ErrorInfo) { console.error('Dashboard error:', err, info) }
-  render() {
-    if (this.state.error) {
-      return <div style={{ padding: 20, color: '#ef4444', fontSize: 13 }}>Chart error: {this.state.error}</div>
-    }
-    return this.props.children
-  }
-}
-
-const XRD_X = [10,15,20,25,28,28.5,29,29.5,30,33,33.2,33.5,34,38,42,47,47.3,47.6,48,52,56,56.3,56.5,56.8,57,62,66,69,69.2,69.5,70,74,76.5,76.8,77,80]
-const XRD_Y = [20,18,25,30,80,350,1000,350,80,60,250,480,60,28,20,120,380,120,35,18,40,180,550,180,40,20,25,50,200,50,25,18,100,300,100,20]
-
+/**
+ * Canvas empty state. States the panel's purpose plainly (no fake demo data),
+ * accepts dropped files, lists what renders here, and offers grounded starter
+ * actions that all route through chat — so the Canvas reads as the "evidence"
+ * half of chat-drives / canvas-holds. Nothing here is decorative: every control
+ * either loads a real file or sends a real command to APEXA.
+ */
 export function Dashboard() {
   const addArtifact = useVizStore((s) => s.addArtifact)
   const loadImage = useImageStore((s) => s.loadImage)
+  const sendMessage = useChatStore((s) => s.sendMessage)
   const [isDragOver, setIsDragOver] = useState(false)
   const [status, setStatus] = useState<{ msg: string; type: 'info' | 'error' } | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
@@ -29,7 +22,7 @@ export function Dashboard() {
   const processFiles = useCallback(async (files: File[]) => {
     for (const file of files) {
       const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
-      if (['tif','tiff','ge','ge2','ge3','ge4','ge5'].includes(ext)) {
+      if (['tif','tiff','ge','ge2','ge3','ge4','ge5','h5','hdf5'].includes(ext)) {
         setStatus({ msg: `Loading ${file.name}...`, type: 'info' })
         const form = new FormData()
         form.append('file', file)
@@ -37,10 +30,7 @@ export function Dashboard() {
           const res = await fetch('/api/upload', { method: 'POST', body: form })
           if (!res.ok) throw new Error(`Upload failed: ${res.status}`)
           const data = await res.json()
-          if (data.saved_path) {
-            await loadImage(data.saved_path)
-            setStatus(null)
-          }
+          if (data.saved_path) { await loadImage(data.saved_path); setStatus(null) }
         } catch (err) {
           setStatus({ msg: `Failed to load ${file.name}: ${err}`, type: 'error' })
         }
@@ -75,13 +65,8 @@ export function Dashboard() {
   }, [addArtifact, loadImage])
 
   const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    setIsDragOver(false)
+    e.preventDefault(); setIsDragOver(false)
     processFiles(Array.from(e.dataTransfer.files))
-  }, [processFiles])
-
-  const handleFileInput = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) processFiles(Array.from(e.target.files))
   }, [processFiles])
 
   const card: React.CSSProperties = {
@@ -91,70 +76,45 @@ export function Dashboard() {
 
   return (
     <div style={{ height: '100%', overflow: 'auto', padding: 20, background: 'var(--apexa-panel-bg)' }}>
+      {/* Purpose — what this panel is for */}
       <div style={{ marginBottom: 16 }}>
-        <h2 style={{ fontSize: 16, fontWeight: 700, color: 'var(--apexa-text)', marginBottom: 4 }}>Data Workspace</h2>
-        <p style={{ fontSize: 12, color: 'var(--apexa-text-muted)' }}>Interactive visualizations, drag-and-drop data, live analysis results</p>
+        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.6, textTransform: 'uppercase', color: 'var(--apexa-text-2)' }}>Canvas</div>
+        <h2 style={{ fontSize: 17, fontWeight: 700, color: 'var(--apexa-text)', margin: '4px 0 4px' }}>
+          Results appear here
+        </h2>
+        <p style={{ fontSize: 12.5, color: 'var(--apexa-text-muted)', lineHeight: 1.5, maxWidth: 560 }}>
+          Plots, detector images, and tables APEXA produces open here as tabs — each
+          one you can pin, compare side-by-side, and trace back to the exact tool and
+          inputs that made it (the provenance footer). Ask in <b>chat</b>, drop a file
+          below, or pick one in the <b>Files</b> panel and hit <b>Recommend</b>.
+        </p>
       </div>
 
       {status && (
         <div style={{
-          marginBottom: 12, padding: '8px 14px', borderRadius: 8,
-          fontSize: 12,
+          marginBottom: 12, padding: '8px 14px', borderRadius: 8, fontSize: 12,
           background: status.type === 'error' ? 'rgba(239,68,68,0.1)' : 'rgba(59,130,246,0.1)',
           color: status.type === 'error' ? '#ef4444' : '#3b82f6',
           border: `1px solid ${status.type === 'error' ? 'rgba(239,68,68,0.2)' : 'rgba(59,130,246,0.2)'}`,
-        }}>
-          {status.msg}
-        </div>
+        }}>{status.msg}</div>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-        {/* Sample XRD */}
-        <div style={{ ...card, gridColumn: '1 / -1' }}>
-          <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--apexa-border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--apexa-text)' }}>Sample: CeO2 X-ray Diffraction</span>
-            <span style={{ fontSize: 11, color: 'var(--apexa-text-muted)' }}>Zoom, pan, hover for data</span>
-          </div>
-          <SafeWrapper>
-            <div style={{ height: 250 }}>
-              <Plot
-                data={[{
-                  x: XRD_X, y: XRD_Y,
-                  type: 'scatter' as Plotly.PlotType,
-                  mode: 'lines' as const, line: { color: '#3b82f6', width: 1.5 },
-                  fill: 'tozeroy' as const, fillcolor: 'rgba(59,130,246,0.08)',
-                }]}
-                layout={{
-                  paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
-                  font: { color: '#999', size: 11 },
-                  margin: { t: 10, r: 20, b: 40, l: 50 },
-                  xaxis: { gridcolor: 'rgba(128,128,128,0.2)' },
-                  yaxis: { gridcolor: 'rgba(128,128,128,0.2)' },
-                  autosize: true, showlegend: false,
-                }}
-                config={{ responsive: true, displayModeBar: false }}
-                useResizeHandler style={{ width: '100%', height: '100%' }}
-              />
-            </div>
-          </SafeWrapper>
-        </div>
+      <input
+        ref={fileRef} type="file" multiple
+        accept=".tif,.tiff,.ge,.ge2,.ge3,.ge4,.ge5,.h5,.hdf5,.csv,.dat,.xy,.txt"
+        onChange={(e) => e.target.files && processFiles(Array.from(e.target.files))}
+        style={{ display: 'none' }}
+      />
 
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
         {/* Drop zone */}
-        <input
-          ref={fileRef}
-          type="file"
-          multiple
-          accept=".tif,.tiff,.ge,.ge2,.ge3,.ge4,.ge5,.csv,.dat,.xy,.txt"
-          onChange={handleFileInput}
-          style={{ display: 'none' }}
-        />
         <div
           onDragOver={(e) => { e.preventDefault(); setIsDragOver(true) }}
           onDragLeave={() => setIsDragOver(false)}
           onDrop={handleDrop}
           onClick={() => fileRef.current?.click()}
           style={{
-            borderRadius: 12, minHeight: 150,
+            gridColumn: '1 / -1', borderRadius: 12, minHeight: 130,
             border: isDragOver ? '2px dashed #3b82f6' : '2px dashed var(--apexa-border)',
             background: isDragOver ? 'rgba(59,130,246,0.05)' : 'var(--apexa-surface)',
             padding: 24, display: 'flex', flexDirection: 'column',
@@ -162,22 +122,22 @@ export function Dashboard() {
             cursor: 'pointer', transition: 'all 200ms',
           }}
         >
-          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke={isDragOver ? '#3b82f6' : 'var(--apexa-text-muted)'} strokeWidth="1.5" style={{ marginBottom: 10 }}>
+          <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke={isDragOver ? '#3b82f6' : 'var(--apexa-text-muted)'} strokeWidth="1.5" style={{ marginBottom: 8 }}>
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" />
           </svg>
-          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--apexa-text)', marginBottom: 4 }}>Drop Files or Click to Browse</div>
-          <div style={{ fontSize: 11, color: 'var(--apexa-text-muted)' }}>.tif .ge .csv .dat .xy</div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--apexa-text)', marginBottom: 4 }}>Drop a file or click to browse</div>
+          <div style={{ fontSize: 11, color: 'var(--apexa-text-muted)' }}>.tif .ge .h5 .csv .dat .xy</div>
         </div>
 
-        {/* Info card */}
+        {/* What renders here — a legend, not fake data */}
         <div style={{ ...card, padding: 14 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--apexa-text)', marginBottom: 10 }}>Visualizations</div>
+          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--apexa-text)', marginBottom: 10 }}>What shows up here</div>
           {[
-            ['1D Diffraction Patterns', '.xy .dat .csv'],
-            ['2D Detector Images', '.tif .ge .h5'],
-            ['Grain Maps (FF-HEDM)', 'Grains.csv'],
-            ['Caked Heatmaps', '2\u03B8 x \u03B7'],
-            ['Calibration Results', 'Residuals'],
+            ['1D diffraction patterns', '.xy .dat .csv'],
+            ['2D detector images', '.tif .ge .h5'],
+            ['Caked heatmaps', '2θ × η'],
+            ['Grain maps (FF-HEDM)', 'Grains.csv'],
+            ['Calibration QC', 'residuals'],
           ].map(([label, desc]) => (
             <div key={label} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6, fontSize: 12 }}>
               <span style={{ color: 'var(--apexa-text)' }}>{label}</span>
@@ -186,21 +146,61 @@ export function Dashboard() {
           ))}
         </div>
 
-        {/* Quick commands */}
-        <div style={{ ...card, gridColumn: '1 / -1', padding: 14 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--apexa-text)', marginBottom: 8 }}>
-            Ask APEXA in chat to generate results here
+        {/* Grounded starter actions — every one sends a real command to chat */}
+        <div style={{ ...card, padding: 14 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--apexa-text)', marginBottom: 4 }}>Not sure where to start?</div>
+          <div style={{ fontSize: 11, color: 'var(--apexa-text-muted)', marginBottom: 10 }}>
+            APEXA can inspect your data and recommend the next step.
           </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <StarterBtn primary onClick={() => sendMessage('What can you do? Summarize your capabilities and the tools available.')}>
+              What can you do?
+            </StarterBtn>
+            <StarterBtn onClick={() => sendMessage('Look at my current working directory, tell me what data is there, and recommend a workflow with my options.')}>
+              Recommend a workflow for my data
+            </StarterBtn>
+          </div>
+        </div>
+
+        {/* Common commands — send to chat, don't just decorate */}
+        <div style={{ ...card, gridColumn: '1 / -1', padding: 14 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--apexa-text)', marginBottom: 8 }}>Common commands</div>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            {['Calibrate CeO2', 'Integrate 2D to 1D', 'Calculate d-spacing', 'Run FF-HEDM', 'List calibrants'].map((cmd) => (
-              <span key={cmd} style={{
-                fontSize: 11, padding: '4px 10px', borderRadius: 16,
-                background: 'var(--apexa-surface-2)', border: '1px solid var(--apexa-border)', color: 'var(--apexa-text-2)',
-              }}>{cmd}</span>
+            {[
+              'Calibrate the CeO2 detector image',
+              'Integrate this series to 1D (xye + fxye)',
+              'Run the FF-HEDM workflow',
+              'List calibrants',
+              'Calculate d-spacing at 61.332 keV',
+            ].map((cmd) => (
+              <button
+                key={cmd}
+                onClick={() => sendMessage(cmd)}
+                style={{
+                  fontSize: 11, padding: '5px 11px', borderRadius: 16, cursor: 'pointer',
+                  background: 'var(--apexa-surface-2)', border: '1px solid var(--apexa-border)', color: 'var(--apexa-text-2)',
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'var(--apexa-accent, #3b82f6)')}
+                onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'var(--apexa-border)')}
+              >{cmd}</button>
             ))}
           </div>
         </div>
       </div>
     </div>
+  )
+}
+
+function StarterBtn({ primary, onClick, children }: { primary?: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        textAlign: 'left', padding: '8px 11px', borderRadius: 8, fontSize: 12.5, cursor: 'pointer',
+        border: primary ? 'none' : '1px solid var(--apexa-border)',
+        background: primary ? 'var(--apexa-accent, #3b82f6)' : 'var(--apexa-surface)',
+        color: primary ? '#fff' : 'var(--apexa-text)', fontWeight: primary ? 600 : 500,
+      }}
+    >{children}</button>
   )
 }

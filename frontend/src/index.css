@@ -136,3 +136,8 @@ body {
 ::selection {
   background: rgba(59, 130, 246, 0.3);
 }
+
+/* File-browser per-row "Recommend" affordance: subtle until row hover */
+.apexa-file-recommend { opacity: 0; transition: opacity 120ms; }
+.apexa-file-row:hover .apexa-file-recommend { opacity: 0.7; }
+.apexa-file-recommend:hover { opacity: 1 !important; }
