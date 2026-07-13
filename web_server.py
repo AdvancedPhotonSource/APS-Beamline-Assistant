@@ -843,6 +843,7 @@ async def websocket_endpoint(websocket: WebSocket):
                                 await manager.send_personal_message({
                                     "type": "tool_result",
                                     "tool": tool_name,
+                                    "args": arguments,          # for the UI "in:" view
                                     "result": clean,
                                 }, websocket)
                             except Exception as e:

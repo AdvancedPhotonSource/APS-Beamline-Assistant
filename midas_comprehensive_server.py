@@ -615,6 +615,14 @@ def _apexa_scratch_dir(subdir: str = "") -> Path:
     return d
 
 
+def _announce_output(tool: str, out_path, **extras) -> None:
+    """One-line, up-front announcement of where a tool writes its output
+    (Claude-Code style: say what + where before doing it). Prints to stderr so
+    it appears immediately in the agent/CLI stream."""
+    kv = "  ".join(f"{k}={v}" for k, v in extras.items() if v not in (None, "", []))
+    print(f"[{tool}] → output: {out_path}" + (f"  ({kv})" if kv else ""), file=sys.stderr)
+
+
 # =============================================================================
 # FF-HEDM PRODUCTION TOOLS
 # =============================================================================
@@ -713,6 +721,8 @@ async def run_ff_hedm_full_workflow(
 
         result_path = Path(result_folder).expanduser().absolute()
         result_path.mkdir(parents=True, exist_ok=True)
+        _announce_output("run_ff_hedm_full_workflow", result_path,
+                         layers=f"{start_layer}-{end_layer}", device=device)
 
         valid, param_path = validate_file(param_file)
         if not valid:
@@ -929,6 +939,7 @@ async def run_pf_hedm_workflow(
         import shutil as _shutil
         result_path = Path(result_folder).expanduser().absolute()
         result_path.mkdir(parents=True, exist_ok=True)
+        _announce_output("run_pf_hedm_workflow", result_path, n_scans=n_scans, device=device)
 
         valid, param_path = validate_file(param_file)
         if not valid:
@@ -2737,6 +2748,7 @@ async def midas_integrate_2d_to_1d(
         out_dir = Path(result_folder).expanduser().absolute() if result_folder \
                   else image_path.parent / "integration"
         out_dir.mkdir(parents=True, exist_ok=True)
+        _announce_output("midas_integrate_2d_to_1d", out_dir)
 
         # Extract file number from basename only (not full path) to avoid
         # matching numbers in parent directories (e.g. /Users/b324240/ → 324240)

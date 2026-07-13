@@ -96,6 +96,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             data.result ?? '{}'
           )
           if (toolResult) {
+            if (data.args) toolResult.args = data.args   // for the "in:" view
             set((s) => ({
               _pendingToolResults: [...s._pendingToolResults, toolResult],
             }))

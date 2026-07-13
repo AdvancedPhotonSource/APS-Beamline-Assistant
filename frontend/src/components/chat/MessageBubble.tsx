@@ -1,5 +1,5 @@
 import type { ChatMessage } from '@/api/types'
-import { ToolResultCard } from '@/components/cards/ToolResultCard'
+import { ToolCallBox } from '@/components/cards/ToolCallBox'
 import { useVizStore } from '@/stores/vizStore'
 import { useChatStore } from '@/stores/chatStore'
 import { ApexaLogo } from '@/components/layout/IconRail'
@@ -105,7 +105,7 @@ export function MessageBubble({ message }: { message: ChatMessage }) {
         {message.toolResults && message.toolResults.length > 0 && (
           <div className="px-4 pb-3">
             {message.toolResults.map((result, i) => (
-              <ToolResultCard key={i} result={result} />
+              <ToolCallBox key={i} result={result} />
             ))}
           </div>
         )}

@@ -13,6 +13,7 @@ export interface ToolResult {
   tool: string
   status: 'success' | 'error' | 'completed' | 'failed' | 'warning'
   data: Record<string, unknown>
+  args?: Record<string, unknown>   // tool-call inputs, for the "in:" view
 }
 
 export interface ChatSession {
@@ -64,6 +65,7 @@ export interface WsIncoming {
   model?: string
   tool?: string
   result?: string
+  args?: Record<string, unknown>
   // confirm_required (human-in-the-loop gate for consequential actions)
   confirm_id?: string
   action?: string          // e.g. "move_motor_absolute"
