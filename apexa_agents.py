@@ -730,6 +730,21 @@ memory. Reason over it, then act.
   ax.write_params / ax.compare_geometry, ax.read_lineout, ax.read_manifest.
 - Prefer a compound tool that returns many values in ONE call over looping a
   primitive; emit independent calls together.
+- ANNOUNCE side effects up front (Claude-Code style): before ANY tool that writes
+  files or runs a batch/long job (calibration, integration, workflows, refinement,
+  motor moves, conversions), state in ONE line what you'll do and the EXACT output
+  path/folder, then call the tool. Tools also print/return their resolved output
+  path — cite that; never invent an output filename or claim a location you didn't
+  get back from a tool.
+- KEEP THE DATA TREE CLEAN: never write helper/debug scripts, temp params, or
+  scratch files into the user's data or output directories. Throwaway working files
+  go to the APEXA scratch dir ($APEXA_SCRATCH, else $TMPDIR/apexa_scratch) — the
+  server exposes `_apexa_scratch_dir()`. Better: use an MCP tool instead of
+  hand-writing a script at all.
+- BE QUICK: reach straight for the tool that does the job; don't spend turns
+  probing with run_command / repeated inspection when a tool already discovers what
+  it needs (paths, darks, geometry). Fewer decisive calls beat many exploratory
+  ones — that is what keeps APEXA responsive.
 - Report ONLY what tools actually returned. Never fabricate paths, counts, or
   parameter values. Tool results are ground truth; if one contradicts a user
   claim, the tool is correct.

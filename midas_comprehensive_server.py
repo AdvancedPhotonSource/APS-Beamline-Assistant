@@ -600,6 +600,21 @@ def _pick_compute_target(n_frames: int = 1, megapixels: float = 8.3, prefer: str
                        "on CPU, which will be slow")}
 
 
+def _apexa_scratch_dir(subdir: str = "") -> Path:
+    """Per-session scratch for throwaway scripts / temp params / working files.
+
+    Claude-Code style: ephemeral files live here (under $APEXA_SCRATCH, else
+    $TMPDIR/apexa_scratch), NEVER scattered into the user's data or output
+    directories. Tools that need a temp param file or helper script should write
+    it here; agents should not hand-write scripts into the data tree.
+    """
+    import tempfile as _tf
+    root = Path(os.environ.get("APEXA_SCRATCH") or (Path(_tf.gettempdir()) / "apexa_scratch"))
+    d = (root / subdir) if subdir else root
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 # =============================================================================
 # FF-HEDM PRODUCTION TOOLS
 # =============================================================================
@@ -2978,6 +2993,12 @@ async def midas_integrate_series(
                     else files[0].parent / "integration_series")
         out_root.mkdir(parents=True, exist_ok=True)
         env = get_midas_env()
+
+        # Announce BEFORE running (Claude-Code style: say what + where up front).
+        _dscheme = (f"{dark_source}/{dark_kind}" if dark_source == "file" else dark_source)
+        print(f"[integrate_series] {len(files)} file(s) → {out_root}", file=sys.stderr)
+        print(f"[integrate_series] params={param_path.name}  darks={_dscheme}  "
+              f"compute={plan['target']}", file=sys.stderr)
 
         per_file, n_ok = [], 0
         for img in files:
