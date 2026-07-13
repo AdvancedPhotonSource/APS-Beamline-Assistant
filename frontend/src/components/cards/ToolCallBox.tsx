@@ -43,6 +43,7 @@ export function ToolCallBox({ result }: { result: ToolResult }) {
         borderRadius: 8,
         overflow: 'hidden',
         background: 'var(--apexa-surface-2)',
+        boxShadow: 'var(--apexa-elev-1)',
       }}
     >
       {/* Header — click to expand/collapse */}

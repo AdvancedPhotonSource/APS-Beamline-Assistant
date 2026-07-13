@@ -40,10 +40,11 @@ export function VizPanel() {
       {/* Canvas identity + Active/Results segmented control (always visible so the
           panel's role is legible). */}
       <div style={{
-        display: 'flex', alignItems: 'center', gap: 10,
+        display: 'flex', alignItems: 'center', gap: 8,
         padding: '7px 12px', borderBottom: '1px solid var(--apexa-border)',
-        background: 'var(--apexa-surface-2)',
+        background: 'linear-gradient(180deg, var(--apexa-surface-2), transparent)',
       }}>
+        <span style={{ width: 3, height: 12, borderRadius: 2, background: 'var(--apexa-accent-grad)', boxShadow: 'var(--apexa-glow)' }} />
         <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.6, textTransform: 'uppercase', color: 'var(--apexa-text-2)' }}>
           Canvas
         </span>
@@ -86,8 +87,9 @@ function SegBtn({ active, onClick, children }: { active: boolean; onClick: () =>
       onClick={onClick}
       style={{
         padding: '3px 10px', border: 'none', fontSize: 11, cursor: 'pointer',
-        background: active ? 'var(--apexa-accent, #3b82f6)' : 'var(--apexa-surface)',
+        background: active ? 'var(--apexa-accent-grad)' : 'var(--apexa-surface)',
         color: active ? '#fff' : 'var(--apexa-text-2)',
+        boxShadow: active ? 'var(--apexa-glow)' : 'none',
       }}
     >{children}</button>
   )
@@ -220,9 +222,10 @@ function ToolbarBtn({
       style={{
         padding: '3px 10px',
         borderRadius: 6,
-        border: '1px solid var(--apexa-border)',
-        background: active ? 'var(--apexa-accent, #3b82f6)' : 'var(--apexa-surface)',
+        border: active ? '1px solid transparent' : '1px solid var(--apexa-border)',
+        background: active ? 'var(--apexa-accent-grad)' : 'var(--apexa-surface)',
         color: active ? '#fff' : 'var(--apexa-text)',
+        boxShadow: active ? 'var(--apexa-glow)' : 'none',
         fontSize: 11,
         cursor: 'pointer',
         whiteSpace: 'nowrap',

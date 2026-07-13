@@ -80,12 +80,17 @@ export function MessageBubble({ message }: { message: ChatMessage }) {
         </div>
       )}
 
-      <div className={`max-w-[82%] rounded-2xl transition-shadow ${
+      <div className={`max-w-[82%] rounded-2xl transition-all ${
         isUser
-          ? 'bg-[var(--apexa-chat-user)] shadow-sm'
-          : 'bg-[var(--apexa-chat-assistant)] shadow-sm hover:shadow-md'
+          ? 'bg-[var(--apexa-chat-user)]'
+          : 'bg-[var(--apexa-chat-assistant)]'
       }`} style={{
-        border: '1px solid var(--apexa-border)',
+        border: isUser
+          ? '1px solid color-mix(in srgb, var(--apexa-accent) 34%, var(--apexa-border))'
+          : '1px solid var(--apexa-border)',
+        boxShadow: isUser
+          ? '0 1px 2px rgba(0,0,0,0.14), 0 0 16px rgba(59,130,246,0.10)'
+          : 'var(--apexa-elev-1)',
         color: 'var(--apexa-text)',
       }}>
         {message.content && (

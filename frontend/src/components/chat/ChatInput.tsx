@@ -101,7 +101,7 @@ export function ChatInput() {
   }
 
   return (
-    <div className="px-5 pb-4 pt-3" style={{ background: 'var(--apexa-surface)' }}>
+    <div className="px-5 pb-4 pt-3" style={{ background: 'transparent' }}>
       <input
         ref={fileInputRef}
         type="file"
@@ -116,9 +116,11 @@ export function ChatInput() {
         onDragLeave={() => setDragOver(false)}
         onDrop={handleDrop}
         style={{
-          borderColor: dragOver ? '#3b82f6' : focused ? '#3b82f6' : 'var(--apexa-border)',
-          background: dragOver ? 'rgba(59,130,246,0.06)' : 'var(--apexa-surface-2)',
-          boxShadow: focused ? '0 0 0 3px rgba(59,130,246,0.1), 0 2px 8px rgba(0,0,0,0.1)' : '0 1px 3px rgba(0,0,0,0.05)',
+          borderColor: (dragOver || focused) ? 'var(--apexa-accent)' : 'var(--apexa-border)',
+          background: dragOver ? 'var(--apexa-accent-soft)' : 'var(--apexa-surface-2)',
+          boxShadow: focused
+            ? '0 0 0 3px var(--apexa-accent-soft), var(--apexa-glow)'
+            : 'var(--apexa-elev-1)',
         }}
       >
         {/* Attachment chips */}

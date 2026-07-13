@@ -20,11 +20,12 @@ export function ConfirmModal() {
         position: 'fixed',
         inset: 0,
         zIndex: 1000,
-        background: 'rgba(0,0,0,0.5)',
+        background: 'rgba(6,8,15,0.55)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        backdropFilter: 'blur(2px)',
+        backdropFilter: 'blur(6px) saturate(1.1)',
+        WebkitBackdropFilter: 'blur(6px) saturate(1.1)',
       }}
     >
       <div
@@ -35,8 +36,10 @@ export function ConfirmModal() {
           background: 'var(--apexa-surface)',
           color: 'var(--apexa-text)',
           border: `1px solid ${danger ? 'rgba(239,68,68,0.5)' : 'var(--apexa-border)'}`,
-          borderRadius: 12,
-          boxShadow: '0 20px 60px rgba(0,0,0,0.4)',
+          borderRadius: 14,
+          boxShadow: danger
+            ? '0 24px 70px rgba(0,0,0,0.5), 0 0 40px rgba(239,68,68,0.18)'
+            : '0 24px 70px rgba(0,0,0,0.5), 0 0 40px rgba(59,130,246,0.14)',
           overflow: 'hidden',
         }}
       >
@@ -104,11 +107,12 @@ export function ConfirmModal() {
               padding: '7px 16px',
               borderRadius: 8,
               border: 'none',
-              background: danger ? '#dc2626' : 'var(--apexa-accent, #2563eb)',
+              background: danger ? '#dc2626' : 'var(--apexa-accent-grad)',
               color: '#fff',
               fontSize: 13,
               fontWeight: 600,
               cursor: 'pointer',
+              boxShadow: danger ? '0 0 16px rgba(239,68,68,0.35)' : 'var(--apexa-glow)',
             }}
           >
             {pending.confirmLabel ?? (danger ? 'Approve & run' : 'Confirm')}
