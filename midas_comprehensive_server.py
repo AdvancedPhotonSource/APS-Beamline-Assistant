@@ -2926,24 +2926,34 @@ async def midas_integrate_series(
         if not param_path.exists():
             return format_result({"tool": "midas_integrate_series", "status": "error",
                                   "error": f"Parameter file not found: {param_path}"})
-        # 1) resolve the image list
+        # 1) resolve the image list. Darks are NEVER samples: exclude any file
+        # matching dark_pattern (or containing 'dark' — dark_before AND dark_after)
+        # from the SAMPLE set, independent of exclude_substring. Integrating a dark
+        # frame as data is a silent, meaningless result (observed: dark_before
+        # leaked in and doubled the file count 192→384).
+        import fnmatch as _fnm
+        _dpat = (dark_pattern or "").lower()
+        def _is_dark(name: str) -> bool:
+            n = name.lower()
+            return ("dark" in n) or bool(_dpat and _fnm.fnmatch(n, _dpat))
+        excl = (exclude_substring or "").lower()
         if images:
-            files = sorted(Path(p).expanduser().absolute() for p in images)
+            allp = sorted(Path(p).expanduser().absolute() for p in images)
         elif image_dir:
             d = Path(image_dir).expanduser().absolute()
             if not d.is_dir():
                 return format_result({"tool": "midas_integrate_series", "status": "error",
                                       "error": f"image_dir not found: {d}"})
-            excl = (exclude_substring or "").lower()
-            files = sorted(p for p in d.glob(pattern)
-                           if p.is_file() and (not excl or excl not in p.name.lower()))
+            allp = sorted(p for p in d.glob(pattern) if p.is_file())
         else:
             return format_result({"tool": "midas_integrate_series", "status": "error",
                                   "error": "provide either images=[...] or image_dir=..."})
-        files = [p for p in files if p.exists()]
+        files = [p for p in allp if p.exists() and not _is_dark(p.name)
+                 and (not excl or excl not in p.name.lower())]
+        n_darks_excluded = len(allp) - len(files)
         if not files:
             return format_result({"tool": "midas_integrate_series", "status": "error",
-                                  "error": "no image files matched"})
+                                  "error": f"no sample image files matched (excluded {n_darks_excluded} darks)"})
         n_matched = len(files)
         # 1b) compute-dispatch tiering (docs/COMPUTE_DISPATCH.md). This tool runs
         # the CPU integrator.py engine; for a large sweep on a CPU-only host with a
@@ -3083,6 +3093,7 @@ async def midas_integrate_series(
             "status": "success" if n_fail == 0 else ("partial" if n_ok else "error"),
             "parameter_file": str(param_path),
             "matched_files": n_matched,
+            "darks_excluded": n_darks_excluded,
             "processed_files": len(per_file),
             "succeeded": n_ok,
             "failed": n_fail,
