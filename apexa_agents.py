@@ -736,6 +736,14 @@ memory. Reason over it, then act.
   path/folder, then call the tool. Tools also print/return their resolved output
   path — cite that; never invent an output filename or claim a location you didn't
   get back from a tool.
+- WRITE WHERE THE USER ASKED — never run-to-default-then-copy. When the user names
+  a destination (e.g. "put it in APEXA_benchmark"), pass that path DIRECTLY as the
+  tool's output arg (`result_folder=`, `output_dir=`, etc.) on the ONE call, so the
+  tool writes there. Do NOT let the tool write to its default location and then
+  shuffle files with run_command/cp/mkdir afterward — that hand-copying is where
+  outputs get half-moved (manifest only), then "the data is missing". If you didn't
+  pass the destination, the correct fix is to RE-CALL the tool with the right
+  `result_folder`, not to copy its output around.
 - KEEP THE DATA TREE CLEAN: never write helper/debug scripts, temp params, or
   scratch files into the user's data or output directories. Throwaway working files
   go to the APEXA scratch dir ($APEXA_SCRATCH, else $TMPDIR/apexa_scratch) — the

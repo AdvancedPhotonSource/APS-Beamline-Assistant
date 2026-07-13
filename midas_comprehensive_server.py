@@ -1058,6 +1058,7 @@ async def run_ff_calibration(
             return format_result({"error": param_path, "status": "failed"})
 
         work_dir = Path(param_path).parent
+        _announce_output("run_ff_calibration", work_dir, params=Path(param_path).name)
         results = {
             "tool": "run_ff_calibration",
             "workflow": "FF-HEDM Calibration",
@@ -1302,6 +1303,7 @@ async def run_nf_hedm_reconstruction(
         if result_folder:
             rp = Path(result_folder).expanduser().absolute()
             rp.mkdir(parents=True, exist_ok=True)
+            _announce_output("run_nf_hedm_reconstruction", rp)
             cmd += ["--result-folder", str(rp)]
         else:
             rp = Path(param_path).parent
@@ -1398,6 +1400,7 @@ async def convert_nf_to_dream3d(
 
         work_dir = Path(mic_path).parent
         output_path = work_dir / output_hdf5
+        _announce_output("convert_nf_to_dream3d", output_path, mic=Path(mic_path).name)
 
         # Build command for conversion utility
         args = [
@@ -1721,6 +1724,7 @@ async def run_forward_simulation(
             return format_result({"error": param_path, "status": "failed"})
 
         work_dir = Path(param_path).parent
+        _announce_output("run_forward_simulation", work_dir, params=Path(param_path).name)
 
         # Update parameter file with input grains and output prefix
         # This is a simplified approach - actual implementation may need
@@ -1829,6 +1833,7 @@ async def extract_grain_centroids(
 
         work_dir = Path(mic_path).parent
         output_path = work_dir / output_csv
+        _announce_output("extract_grain_centroids", output_path, mic=Path(mic_path).name)
 
         # MIDAS v11: the standalone NFGrainCentroids binary was removed. Grain
         # centroids/volumes/orientations are produced by Mic2GrainsList, exposed
@@ -1985,6 +1990,7 @@ async def batch_convert_ge_to_tiff(
 
         output_path = Path(output_folder).expanduser()
         output_path.mkdir(parents=True, exist_ok=True)
+        _announce_output("batch_convert_ge_to_tiff", output_path)
 
         # Find GE files
         ge_files = list(ge_path.glob(file_pattern))
@@ -2104,6 +2110,7 @@ async def create_midas_parameter_file(
             })
 
         output_path = Path(output_file).expanduser()
+        _announce_output("create_midas_parameter_file", output_path)
 
         # Write parameter file
         with open(output_path, 'w') as f:
@@ -3092,6 +3099,26 @@ async def midas_integrate_series(
             print(f"  [{rec['status']:7s}] {img.name}", file=sys.stderr)
 
         n_fail = len(per_file) - n_ok
+        # Consolidate: gather every successful lineout into ONE flat directory at
+        # result_folder with clean per-sample names (<frame>.xy), mirroring the
+        # expert's per-sample layout. The whole series then lives in one place the
+        # agent already knows — no post-hoc list_directory/copy choreography (which
+        # is where hand-copying only the manifest, then "can't find the data",
+        # came from). Cheap: lineouts are small text files.
+        import shutil as _sh
+        lineout_dir = out_root / "lineouts"
+        consolidated = []
+        for rec in per_file:
+            if rec.get("status") == "success" and rec.get("lineout_xy"):
+                lineout_dir.mkdir(parents=True, exist_ok=True)
+                stem = Path(rec["input_image"]).stem
+                dest = lineout_dir / f"{stem}.xy"
+                try:
+                    _sh.copyfile(rec["lineout_xy"], dest)
+                    rec["consolidated_xy"] = str(dest)
+                    consolidated.append(str(dest))
+                except Exception as _e:
+                    rec["consolidate_error"] = str(_e)
         summary = {
             "tool": "midas_integrate_series",
             "status": "success" if n_fail == 0 else ("partial" if n_ok else "error"),
@@ -3104,10 +3131,14 @@ async def midas_integrate_series(
             "subset": subset_note,
             "compute": plan,
             "output_root": str(out_root),
+            "lineouts_dir": str(lineout_dir) if consolidated else None,
+            "consolidated_count": len(consolidated),
             "results": per_file,
         }
         manifest = _write_integration_outcome(
             out_root, summary, filename="APEXA_integration_series.json")
+        _announce_output("midas_integrate_series", out_root,
+                         lineouts=summary["lineouts_dir"], succeeded=n_ok, failed=n_fail)
         # Return a COMPACT payload: all failures + a few successes; full list is on disk.
         summary["manifest"] = manifest
         summary["results"] = ([r for r in per_file if r["status"] != "success"] +
@@ -3958,6 +3989,10 @@ async def midas_auto_calibrate(
         # AutoCalibrateZarr does). APEXA does NOT invent a subfolder scheme here
         # — when the location matters and isn't specified, the AGENT asks the
         # user for it before calling this tool (see APEXA_AGENT prompt).
+        _calib_out = (Path(output_dir).expanduser().absolute()
+                      if output_dir else image_path.parent)
+        _announce_output("midas_auto_calibrate", _calib_out,
+                         engine=str(calibration_engine), image=image_path.name)
 
         # ── Engine v2: midas-calibrate-v2 (differentiable; writes calibration.json) ──
         # Produces the SAME artifact a colleague gets from midas-calibrate-v2:
@@ -4745,6 +4780,8 @@ async def midas_batch_integrate(
                                            f"Use refined_MIDAS_params*.txt from midas_auto_calibrate."})
 
         _strip_empty_value_lines(param_path)
+        _announce_output("midas_batch_integrate", Path(result_folder).resolve(),
+                         frames=f"{start_frame}-{end_frame}", data=data_path.name)
 
         # ── Python default (operando): per-frame dark-subtract + v2 integrate ──
         # Preferred when a dark is given (v2-batch can't dark-subtract). Resolves
@@ -5895,6 +5932,7 @@ async def _gsas_refine_xy(data_path: Path, cif_files: List[str],
 
     out_path = Path(output_dir).expanduser().absolute()
     out_path.mkdir(parents=True, exist_ok=True)
+    _announce_output("run_gsas_refinement", out_path, data=data_path.name)
     gpx_path = out_path / (data_path.stem + "_refine.gpx")
 
     wl = wavelength_A or 0.22291
@@ -6304,6 +6342,7 @@ async def run_gsas_refinement(
 
         out_path = Path(output_dir).expanduser().absolute()
         out_path.mkdir(parents=True, exist_ok=True)
+        _announce_output("run_gsas_refinement", out_path, data=data_path.name)
 
         # Auto-extract instrument parameters from the zarr if no instprm provided
         generated_instprm = None
@@ -6601,6 +6640,7 @@ async def run_live_analysis(
 
         out_path = Path(output_dir).expanduser().absolute()
         out_path.mkdir(parents=True, exist_ok=True)
+        _announce_output("run_live_analysis", out_path)
 
         env = get_midas_env()
         midas_python = find_midas_python()
