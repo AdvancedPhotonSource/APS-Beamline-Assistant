@@ -2905,6 +2905,17 @@ async def midas_integrate_series(
     reconstructed. Only files that actually produced a ``*_lineout.xy`` are
     reported ``success``.
 
+    Output layout (written by the tool — do NOT hand-copy with run_command):
+      <result_folder>/<frame>/*_lineout.xy   (raw per-frame integrator output)
+      <result_folder>/xye/<frame>.xye        (TOPAS: 2θ°,  I, σ=√I)
+      <result_folder>/fxye/<frame>.fxye      (GSAS:  2θ×100, I, σ=√I)
+      <result_folder>/APEXA_integration_series.json  (manifest)
+    The consolidated xye/ + fxye/ dirs mirror the expert per-sample layout and are
+    byte-format-identical to midas_batch_integrate. Pass ``result_folder`` to write
+    directly where you want it (e.g. an APEXA_benchmark dir) — never integrate to a
+    default then copy. Darks are excluded from the sample set, so xye/ + fxye/
+    contain samples only.
+
     File selection:
       • ``images``: explicit list of image paths, OR
       • ``image_dir`` + ``pattern``: glob (files whose name contains
@@ -3099,24 +3110,47 @@ async def midas_integrate_series(
             print(f"  [{rec['status']:7s}] {img.name}", file=sys.stderr)
 
         n_fail = len(per_file) - n_ok
-        # Consolidate: gather every successful lineout into ONE flat directory at
-        # result_folder with clean per-sample names (<frame>.xy), mirroring the
-        # expert's per-sample layout. The whole series then lives in one place the
-        # agent already knows — no post-hoc list_directory/copy choreography (which
-        # is where hand-copying only the manifest, then "can't find the data",
-        # came from). Cheap: lineouts are small text files.
-        import shutil as _sh
-        lineout_dir = out_root / "lineouts"
+        # Consolidate into the expert's per-sample layout at result_folder:
+        #   <result_folder>/xye/<frame>.xye   (TOPAS: 2θ°,  I, σ=√I)
+        #   <result_folder>/fxye/<frame>.fxye (GSAS:  2θ×100, I, σ=√I)
+        # Each successful *_lineout.xy (2-col: 2θ°, I) is read and re-written in
+        # BOTH formats with the SAME _write_xye/_write_fxye helpers midas_batch_
+        # integrate uses — so a series is byte-format-identical to the operando
+        # batch tool and directly GSAS/TOPAS-ready. Only the samples reach here
+        # (darks were excluded from `files`), and the tool writes them itself — the
+        # agent never hand-copies, so darks cannot leak back in (the 384-xye /
+        # 0-fxye mess came entirely from agent run_command copying).
+        def _read_lineout_xy(p):
+            tth, inten = [], []
+            with open(p) as fh:
+                for ln in fh:
+                    ln = ln.strip()
+                    if not ln or ln[0] in "#Rr":     # skip blank/header
+                        continue
+                    parts = ln.replace(",", " ").split()
+                    if len(parts) >= 2:
+                        try:
+                            tth.append(float(parts[0])); inten.append(float(parts[1]))
+                        except ValueError:
+                            continue
+            return tth, inten
+        xye_dir, fxye_dir = out_root / "xye", out_root / "fxye"
         consolidated = []
         for rec in per_file:
             if rec.get("status") == "success" and rec.get("lineout_xy"):
-                lineout_dir.mkdir(parents=True, exist_ok=True)
                 stem = Path(rec["input_image"]).stem
-                dest = lineout_dir / f"{stem}.xy"
                 try:
-                    _sh.copyfile(rec["lineout_xy"], dest)
-                    rec["consolidated_xy"] = str(dest)
-                    consolidated.append(str(dest))
+                    tth, inten = _read_lineout_xy(rec["lineout_xy"])
+                    if not tth:
+                        raise RuntimeError("empty/unreadable lineout")
+                    xye_dir.mkdir(parents=True, exist_ok=True)
+                    fxye_dir.mkdir(parents=True, exist_ok=True)
+                    xye_p = xye_dir / f"{stem}.xye"
+                    fxye_p = fxye_dir / f"{stem}.fxye"
+                    _write_xye(xye_p, tth, inten)
+                    _write_fxye(fxye_p, tth, inten, title=stem)
+                    rec["xye"] = str(xye_p); rec["fxye"] = str(fxye_p)
+                    consolidated.append(stem)
                 except Exception as _e:
                     rec["consolidate_error"] = str(_e)
         summary = {
@@ -3131,14 +3165,16 @@ async def midas_integrate_series(
             "subset": subset_note,
             "compute": plan,
             "output_root": str(out_root),
-            "lineouts_dir": str(lineout_dir) if consolidated else None,
+            "xye_dir": str(xye_dir) if consolidated else None,
+            "fxye_dir": str(fxye_dir) if consolidated else None,
             "consolidated_count": len(consolidated),
             "results": per_file,
         }
         manifest = _write_integration_outcome(
             out_root, summary, filename="APEXA_integration_series.json")
         _announce_output("midas_integrate_series", out_root,
-                         lineouts=summary["lineouts_dir"], succeeded=n_ok, failed=n_fail)
+                         xye=summary["xye_dir"], fxye=summary["fxye_dir"],
+                         succeeded=n_ok, failed=n_fail)
         # Return a COMPACT payload: all failures + a few successes; full list is on disk.
         summary["manifest"] = manifest
         summary["results"] = ([r for r in per_file if r["status"] != "success"] +
