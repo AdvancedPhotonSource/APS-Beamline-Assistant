@@ -15,6 +15,15 @@ import shutil
 import re
 from typing import Optional, Dict, Any, List
 from contextlib import AsyncExitStack
+
+# Force UTF-8 stdio so the CLI runs cleanly on Windows, whose console defaults to
+# cp1252 and raises UnicodeEncodeError on the ⚠/°/µ/→/✓ status prints (which would
+# otherwise abort a turn and can surface as a degenerate/empty response).
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
 from datetime import datetime
 from pathlib import Path
 

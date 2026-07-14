@@ -9,9 +9,18 @@ import asyncio
 import json
 import os
 import re
+import sys
 import tempfile
 import io
 import base64
+
+# Force UTF-8 stdio so the server runs cleanly on Windows, whose console defaults
+# to cp1252 and raises UnicodeEncodeError on the ⚠/°/µ/→/✓ status prints.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 import uuid

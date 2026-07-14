@@ -298,7 +298,22 @@ class ArgoProvider:
                 if response.status_code != 200:
                     print(f"  Argo API error ({response.status_code}): {response.text[:500]}", file=sys.stderr)
                     response.raise_for_status()
-                return self._parse_response(response.json())
+                data = response.json()
+                parsed = self._parse_response(data)
+                # Diagnostic: a 200 with NO content and NO tool calls is the
+                # degenerate case that surfaced as the "Hi I'm APEXA" greeting.
+                # Log what the gateway actually returned (and the user field) so a
+                # platform-specific empty-completion (e.g. a bad per-machine .env
+                # ANL_USERNAME on Windows) is diagnosable instead of silent.
+                if not parsed.content and not parsed.tool_calls:
+                    try:
+                        _raw = json.dumps(data)[:400]
+                    except Exception:
+                        _raw = str(data)[:400]
+                    print(f"  \033[33m⚠ Argo returned an EMPTY completion\033[0m "
+                          f"(model={self.model}, user={self.username!r}). Raw: {_raw}",
+                          file=sys.stderr)
+                return parsed
             except httpx.TimeoutException:
                 if attempt < retries - 1:
                     wait = 2 ** attempt
