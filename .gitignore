@@ -146,9 +146,12 @@ autocal.log
 Parameters.txt
 Parameters_CeO2_7m.txt
 
-# Frontend build artifacts (source tracked, dist rebuilt locally)
-frontend/dist/
+# Frontend: node_modules rebuilt locally; dist IS committed so the Web UI runs
+# without Node/npm (Windows/demo boxes). Rebuild + recommit after frontend edits.
+# Negation overrides the generic `dist/` rule above so frontend/dist stays tracked.
 frontend/node_modules/
+!frontend/dist/
+!frontend/dist/**
 
 # Misc
 paraview_export.py

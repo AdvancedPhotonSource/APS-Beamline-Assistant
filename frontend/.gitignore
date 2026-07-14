@@ -8,7 +8,8 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
-dist
+# dist IS committed so the Web UI runs without Node/npm (Windows/demo boxes).
+# Rebuild (npm run build) and recommit after editing frontend source.
 dist-ssr
 *.local
 

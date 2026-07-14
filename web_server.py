@@ -1842,10 +1842,16 @@ if __name__ == "__main__":
     print("Dependencies should be installed with uv:")
     print("  uv add fastapi uvicorn websockets python-multipart")
 
+    # reload=True spawns a file-watcher subprocess that is flaky on Windows and
+    # unnecessary for running the app; default OFF, opt in with APEXA_WEB_RELOAD=1.
+    _reload = os.environ.get("APEXA_WEB_RELOAD", "").strip() in ("1", "true", "yes")
+    _host = os.environ.get("APEXA_WEB_HOST", "0.0.0.0")
+    _port = int(os.environ.get("APEXA_WEB_PORT", "8001"))
+    print(f"\n🚀 Web UI:  http://localhost:{_port}   (host={_host}, reload={_reload})\n")
     uvicorn.run(
-        "web_server:app",
-        host="0.0.0.0",
-        port=8001,
-        reload=True,
-        log_level="info"
+        "web_server:app" if _reload else app,
+        host=_host,
+        port=_port,
+        reload=_reload,
+        log_level="info",
     )
