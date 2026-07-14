@@ -92,7 +92,7 @@ def main():
     # Check system Python
     print("\n\nChecking system Python...")
     import shutil
-    system_python = shutil.which("python3")
+    system_python = shutil.which("python3") or shutil.which("python")
     if system_python:
         has_deps, info = check_python_has_deps(system_python)
         status = "✓" if has_deps else "✗"

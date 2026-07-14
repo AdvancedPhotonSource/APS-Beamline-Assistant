@@ -17,10 +17,30 @@ AI-powered agentic framework for HEDM data analysis at Argonne National Laborato
 ./start_gradio_ui.sh             # Opens at http://localhost:7860
 ```
 
-### Web UI
+### Web UI (with image viewer)
 ```bash
-python web_server.py             # Opens at http://localhost:8000
+./start_web_viewer.sh            # builds the React frontend, opens http://localhost:8001
 ```
+
+### Windows
+
+The `.sh` scripts need bash. On Windows use the `.bat`/`.ps1` launchers (or run the
+Python directly) — everything else is the same:
+```bat
+copy .env.template .env          :: then edit ANL_USERNAME / ARGO_MODEL
+uv sync                          :: install deps
+start_beamline_assistant.bat     :: CLI  (or: uv run python launch.py)
+start_gradio_ui.bat              :: Gradio UI
+start_web_viewer.bat             :: Web UI (needs Node.js/npm; http://localhost:8001)
+```
+PowerShell: `.\start_beamline_assistant.ps1` (add `-ExecutionPolicy Bypass` if blocked).
+`launch.py` is a cross-platform launcher that works everywhere via `uv run python launch.py`.
+
+> **Note:** the **motor (EPICS)** server needs `caget`/`caput` (Unix) and **MIDAS** needs a
+> platform build, so native Windows runs the CLI, agent, and core tools; for full HEDM
+> calibration/integration + motor control use **WSL2 (Ubuntu)** or Linux, where the `.sh`
+> scripts run as-is. To launch only the always-available servers on Windows, keep just
+> `core:beamline_core_server.py` in `servers.config`.
 
 ---
 

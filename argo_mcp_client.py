@@ -1500,10 +1500,16 @@ class APEXAClient:
             script_path = config["script_path"]
             
             try:
-                # Use venv Python if available, otherwise fall back to system python
+                # Use venv Python if available, otherwise the current interpreter.
+                # Cross-platform: Windows venv is .venv\Scripts\python.exe, Unix is
+                # .venv/bin/python3. sys.executable is the uv-managed venv under
+                # `uv run` and is the correct fallback on every OS (the old
+                # hardcoded ".venv/bin/python3" / "python3" broke server spawn on Windows).
                 if script_path.endswith('.py'):
-                    venv_python = Path(".venv/bin/python3")
-                    command = str(venv_python) if venv_python.exists() else "python3"
+                    _cands = [Path(".venv/Scripts/python.exe"),
+                              Path(".venv/bin/python3"), Path(".venv/bin/python")]
+                    _vp = next((p for p in _cands if p.exists()), None)
+                    command = str(_vp) if _vp else sys.executable
                 else:
                     command = "node"
 
