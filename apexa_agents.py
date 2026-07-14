@@ -154,10 +154,26 @@ class ArgoProvider:
 
     def _build_payload(self, messages: List[Dict],
                        temperature: float) -> Dict:
+        # Sanitize messages: Argo needs role + STRING content on every turn. A
+        # message with content=None or a non-string (a stray tool_calls-only
+        # assistant turn, a bad restored-session entry) can make the gateway return
+        # an empty completion — which then surfaced as the canned greeting. Coerce
+        # content to a string and keep only role+content (Argo ignores other keys).
+        safe_messages: List[Dict] = []
+        for m in messages:
+            c = m.get("content", "")
+            if c is None:
+                c = ""
+            elif not isinstance(c, str):
+                try:
+                    c = json.dumps(c)
+                except Exception:
+                    c = str(c)
+            safe_messages.append({"role": m.get("role", "user"), "content": c})
         payload: Dict[str, Any] = {
             "user":        self.username,
             "model":       self.model,
-            "messages":    messages,
+            "messages":    safe_messages,
             "temperature": temperature,
         }
 
@@ -1838,6 +1854,7 @@ class AgentRunner:
         _confab_strikes = 0   # anti-confabulation guard: failed tool-call attempts
         _async_strikes = 0    # phantom-launch guard: false "launched / will report later"
         _refusal_strikes = 0  # refusal guard: false "I can't execute / you run it"
+        _empty_strikes = 0    # empty-response guard: model returned nothing this turn
 
         for _ in range(max_iterations):
             response = await provider.chat(messages, agent.temperature)
@@ -2418,16 +2435,50 @@ class AgentRunner:
             if text:
                 return _persist(text)
             # Empty model response. If tools ran this turn, the work happened but
-            # the model didn't summarize; otherwise the input was almost certainly
-            # small talk (a bare "hi") — never claim "analysis complete" for that.
+            # the model didn't summarize.
             if log_entry and log_entry.tool_calls:
                 return _persist("Done — see the tool output above.")
+            # No text and no tools. Two very different cases — do NOT conflate them
+            # (conflating is why "Hi I'm APEXA" was returned to EVERY query when the
+            # model degenerated to empty replies):
+            #   (a) the input really is small talk (a bare "hi") → greet;
+            #   (b) a real request got an EMPTY model reply (transient gateway issue,
+            #       reasoning-token exhaustion, degenerate turn) → retry, then report
+            #       honestly. Never mask (b) as a greeting.
+            # Empty/whitespace query — the input never really arrived (e.g. a
+            # client that sent a blank message). Say so plainly instead of greeting;
+            # this also makes an input-delivery bug (seen on some Windows clients)
+            # diagnosable rather than masked as "Hi I'm APEXA".
+            if not (query or "").strip():
+                return _persist(
+                    "I didn't receive any message text. Type your request and I'll help "
+                    "— e.g. \"calibrate this CeO2 image\" or \"integrate the JL_0Nb series\".")
+            _small_talk = bool(re.fullmatch(
+                r"\s*(hi|hey|hello|yo|sup|howdy|thanks|thank you|ty|ok|okay|cool)"
+                r"[\s!.,]*", query, re.I))
+            if _small_talk:
+                return _persist(
+                    "Hi! I'm APEXA, your HEDM beamline assistant. I can calibrate "
+                    "(CeO2/LaB6), integrate patterns (single, series, or batch), run "
+                    "FF/NF/PF-HEDM workflows, refine with GSAS-II, plot results, move "
+                    "motors, and answer HEDM questions. Point me at a data file and "
+                    "I'll suggest what to do, or just tell me what you need."
+                )
+            if _empty_strikes < 2:
+                _empty_strikes += 1
+                print(f"  \033[33m⚠ empty model response — nudging retry "
+                      f"({_empty_strikes}/2)\033[0m")
+                messages.append({"role": "user", "content": (
+                    "Your previous reply was completely empty. Respond to my request "
+                    "NOW: either emit a TOOL_CALL: / ARGUMENTS: to run a tool, or give "
+                    "a direct text answer. Do not return an empty message.")})
+                continue
             return _persist(
-                "Hi! I'm APEXA, your HEDM beamline assistant. I can calibrate "
-                "(CeO2/LaB6), integrate patterns (single, series, or batch), run "
-                "FF/NF/PF-HEDM workflows, refine with GSAS-II, plot results, move "
-                "motors, and answer HEDM questions. Point me at a data file and "
-                "I'll suggest what to do, or just tell me what you need."
+                "⚠ The model returned an empty response for that request (it did not "
+                "produce text or a tool call, even after a retry). This is usually a "
+                "transient Argo gateway issue or an overloaded context. Please retry; "
+                "if it persists, start a fresh context with `session new`, or switch "
+                "models with `model gpt54`."
             )
 
         # ── Forced finalize at iteration cap ─────────────────────────────────
