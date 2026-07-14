@@ -10,3 +10,9 @@ if exist "frontend" if not exist "frontend\dist\index.html" (
     popd
 )
 where uv >nul 2>nul && (uv run python web_server.py %*) || (python web_server.py %*)
+
+if errorlevel 1 (
+    echo.
+    echo APEXA exited with an error - read the message above.
+    pause
+)
