@@ -3,6 +3,8 @@
 # If script execution is blocked:  powershell -ExecutionPolicy Bypass -File .\start_beamline_assistant.ps1
 Set-Location -Path $PSScriptRoot
 $env:NUMEXPR_MAX_THREADS = "10"
+# Let older CMake-based native deps (e.g. midas-index) build under CMake 4.x
+$env:CMAKE_POLICY_VERSION_MINIMUM = "3.5"
 if (Get-Command uv -ErrorAction SilentlyContinue) {
     uv run python launch.py @args
 } else {

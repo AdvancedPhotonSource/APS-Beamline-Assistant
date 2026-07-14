@@ -3,6 +3,8 @@ setlocal
 REM APEXA CLI launcher for Windows. Double-click, or run in a terminal.
 cd /d "%~dp0"
 set NUMEXPR_MAX_THREADS=10
+REM Let older CMake-based native deps (e.g. midas-index) build under CMake 4.x
+set CMAKE_POLICY_VERSION_MINIMUM=3.5
 
 if not exist ".env" echo [!] .env not found - copy .env.template to .env and set ANL_USERNAME.
 

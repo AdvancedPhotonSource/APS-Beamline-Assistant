@@ -47,6 +47,14 @@ start_web_viewer.bat             :: Web UI (needs Node.js/npm; http://localhost:
 PowerShell: `.\start_beamline_assistant.ps1` (add `-ExecutionPolicy Bypass` if blocked).
 `launch.py` is a cross-platform launcher that works everywhere via `uv run python launch.py`.
 
+> **If `uv sync` fails to build `midas-index`** (`cmake_minimum_required < 3.5 removed`):
+> it compiles native code, so it needs **CMake** + a **C/C++ compiler**
+> (`winget install Kitware.CMake Microsoft.VisualStudio.2022.BuildTools`, pick "Desktop
+> development with C++"), and `set CMAKE_POLICY_VERSION_MINIMUM=3.5` before `uv sync`
+> (the `.bat`/`.ps1` launchers already set this). If you don't need MIDAS HEDM tools on
+> this box, skip the native build entirely with `uv sync` after removing `midas-suite`
+> from `pyproject.toml`, or run MIDAS under WSL2/Linux (below).
+
 > **Note:** the **motor (EPICS)** server needs `caget`/`caput` (Unix) and **MIDAS** needs a
 > platform build, so native Windows runs the CLI, agent, and core tools; for full HEDM
 > calibration/integration + motor control use **WSL2 (Ubuntu)** or Linux, where the `.sh`
