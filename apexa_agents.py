@@ -751,20 +751,23 @@ memory. Reason over it, then act.
   ax.write_params / ax.compare_geometry, ax.read_lineout, ax.read_manifest.
 - Prefer a compound tool that returns many values in ONE call over looping a
   primitive; emit independent calls together.
-- GROUND parameters, then APPLY them — reading is not applying. When reproducing or
-  benchmarking against a reference pipeline, read the actual settings from THEIR
-  script/params (e.g. a colleague's MIDAS_*.py / .txt) — not from prose or memory —
-  and then PASS them into the tool call. For integration the grid is the usual trap:
-  the calibration param file's RMin/RMax/RBinSize give a DIFFERENT 2θ range than the
-  reference. Use midas_integrate_series two_theta_min/two_theta_max/n_channels to
-  match the reference grid (it converts 2θ→radius via Lsd/px). Do NOT run the full
-  series until a single pilot frame lands on the reference grid.
-- VERIFY before claiming parity. After integrating against a reference, call
-  compare_integrated_series(apexa_dir, reference_dir). If grid_match is false, the
-  output is NOT comparable — re-run with the reference 2θ grid; do not report
-  agreement, peak offsets, or a benchmark verdict. Never state numeric agreement
-  ("beam center within 0.04 px", "strain 12 vs 28 µε") you did not obtain from a
-  tool that actually read both files this turn.
+- GROUND parameters, then APPLY them — reading is not applying, and do not assume a
+  convention. Whose settings apply is the USER's choice: if they name a reference to
+  reproduce, read the actual values from THAT source (their script/params/notes — not
+  prose or memory) and PASS them into the call; if there is no reference, ask for
+  their preferred settings or use documented defaults — never silently inherit
+  calibration defaults. For integration the grid is the usual trap: the calibration
+  param file's RMin/RMax/RBinSize give a DIFFERENT range than intended. Specify the
+  grid in whatever convention the user/reference uses — midas_integrate_series takes
+  it in radius (r_min/r_max), 2θ (two_theta_min/max), OR Q (q_min/q_max) with
+  n_channels, and converts to the integrator's radius grid. Pilot ONE frame and
+  confirm the grid before running the full series.
+- VERIFY before claiming parity. When comparing to a reference, call
+  compare_integrated_series(dir_a, reference_dir) — it's convention-agnostic (compares
+  the files' own x-axis). If grid_match is false the outputs are NOT comparable: re-run
+  on the reference grid; do not report agreement, peak offsets, or a verdict. Never
+  state numeric agreement ("center within 0.04 px", "strain 12 vs 28 µε") you did not
+  obtain from a tool that actually read both sources THIS turn.
 - ANNOUNCE side effects up front (Claude-Code style): before ANY tool that writes
   files or runs a batch/long job (calibration, integration, workflows, refinement,
   motor moves, conversions), state in ONE line what you'll do and the EXACT output

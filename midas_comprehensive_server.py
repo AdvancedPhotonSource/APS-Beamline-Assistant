@@ -121,7 +121,7 @@ def find_midas_python() -> str:
         pass
 
     # PRIORITY 3: Try system python3
-    python3_path = shutil.which("python3")
+    python3_path = shutil.which("python3") or shutil.which("python")
     if python3_path and check_python_deps(python3_path):
         return python3_path
 
@@ -2894,7 +2894,8 @@ async def midas_integrate_series(
     csv_output: bool = False,
     r_min: float = None, r_max: float = None, r_bin_size: float = None,
     eta_min: float = None, eta_max: float = None, eta_bin_size: float = None,
-    two_theta_min: float = None, two_theta_max: float = None, n_channels: int = None,
+    two_theta_min: float = None, two_theta_max: float = None,
+    q_min: float = None, q_max: float = None, n_channels: int = None,
 ) -> str:
     """Integrate a SERIES of separate 2D image files in ONE tool call.
 
@@ -2917,12 +2918,16 @@ async def midas_integrate_series(
     default then copy. Darks are excluded from the sample set, so xye/ + fxye/
     contain samples only.
 
-    2θ grid (to match a reference pipeline): pass ``two_theta_min``/``two_theta_max``
-    (degrees) and ``n_channels``; the tool converts them to the integrator's radius
-    grid via R=(Lsd/px)·tan(2θ) using Lsd/px from the parameter file, so the output
-    lands on the SAME 2θ grid as the reference (e.g. 0.5–14°, 2500 channels) instead
-    of leaving RMin/RMax at calibration defaults (a different 2θ range). Read the
-    reference values from THEIR script/params — do not guess.
+    Output grid — specify in WHATEVER convention you use (none is privileged):
+      • radius (px):  ``r_min`` / ``r_max`` / ``r_bin_size``   (integrator-native)
+      • 2θ (degrees): ``two_theta_min`` / ``two_theta_max`` / ``n_channels``
+      • Q (1/Å):      ``q_min`` / ``q_max`` / ``n_channels``
+    2θ and Q are converted to the radius grid the integrator needs, using Lsd/px
+    (and Wavelength for Q) from the parameter file — R=(Lsd/px)·tan(2θ),
+    Q=4π·sin(θ)/λ. Use this to reproduce a reference/desired grid exactly instead of
+    leaving RMin/RMax at calibration defaults (which yields a different range). If
+    you're matching someone else's output, read THEIR grid from their script/params
+    — don't guess; if there's no reference, ask the user for their preferred grid.
 
     File selection:
       • ``images``: explicit list of image paths, OR
@@ -3046,46 +3051,70 @@ async def midas_integrate_series(
         out_root.mkdir(parents=True, exist_ok=True)
         env = get_midas_env()
 
-        # 2θ grid → radius grid. The integrator bins in detector RADIUS (px), but a
-        # reference pipeline (e.g. a colleague's) usually specifies the grid in 2θ:
-        # a range and a channel count. Convert here using Lsd/px from the param file
-        # so the output lands on the SAME 2θ grid — R = (Lsd/px)·tan(2θ). This is
-        # what makes an APEXA-vs-expert integration benchmark actually comparable
-        # (the earlier mismatch — 0.1–10.1° / 991 rows vs 0.5–14° / 1351 rows — was
-        # exactly a radius-grid-left-at-calibration-defaults bug).
-        tt_grid = None
-        if two_theta_min is not None or two_theta_max is not None or n_channels is not None:
+        # Grid convention → radius grid. The integrator bins in detector RADIUS
+        # (px), but users specify the grid in whichever convention THEY prefer —
+        # radius (r_min/r_max, pass through), 2θ degrees (two_theta_*), or Q inverse-
+        # Å (q_*). No convention is privileged: convert the one that's given to the
+        # radius grid using the geometry in the param file, so APEXA reproduces the
+        # user's/reference's grid exactly instead of leaving RMin/RMax at calibration
+        # defaults. R=(Lsd/px)·tan(2θ);  Q=4π·sin(θ)/λ ⇒ 2θ=2·asin(Qλ/4π).
+        grid_info = None
+        if any(v is not None for v in (two_theta_min, two_theta_max, q_min, q_max)):
             import math as _m
-            _lsd = _px = None
+            _lsd = _px = _wl = None
             for _ln in param_path.read_text().splitlines():
                 _t = _ln.split()
                 if len(_t) >= 2 and _t[0] == "Lsd":
                     _lsd = float(_t[1])
                 elif len(_t) >= 2 and _t[0] in ("px", "PixelSize", "pxY"):
                     _px = float(_t[1])
+                elif len(_t) >= 2 and _t[0] in ("Wavelength", "wavelength", "Lambda"):
+                    _wl = float(_t[1])
             if not _lsd or not _px:
                 return format_result({"tool": "midas_integrate_series", "status": "error",
-                                      "error": "two_theta_* requires Lsd and px in the parameter file "
-                                               "to convert 2θ→radius; none found."})
-            if two_theta_min is not None:
-                r_min = (_lsd / _px) * _m.tan(_m.radians(two_theta_min))
-            if two_theta_max is not None:
-                r_max = (_lsd / _px) * _m.tan(_m.radians(two_theta_max))
+                                      "error": "grid spec needs Lsd and px in the parameter file "
+                                               "to convert to the radius grid; none found."})
+            def _tt_to_r(tt_deg):
+                return (_lsd / _px) * _m.tan(_m.radians(tt_deg))
+            def _q_to_r(q):
+                if not _wl:
+                    raise ValueError("Q grid needs Wavelength in the parameter file")
+                two_theta = 2.0 * _m.degrees(_m.asin(q * _wl / (4.0 * _m.pi)))
+                return _tt_to_r(two_theta)
+            try:
+                if q_min is not None or q_max is not None:      # Q convention
+                    convention = "Q(1/Å)"
+                    lo, hi = q_min, q_max
+                    if q_min is not None:
+                        r_min = _q_to_r(q_min)
+                    if q_max is not None:
+                        r_max = _q_to_r(q_max)
+                else:                                            # 2θ convention
+                    convention = "2θ(deg)"
+                    lo, hi = two_theta_min, two_theta_max
+                    if two_theta_min is not None:
+                        r_min = _tt_to_r(two_theta_min)
+                    if two_theta_max is not None:
+                        r_max = _tt_to_r(two_theta_max)
+            except ValueError as _ve:
+                return format_result({"tool": "midas_integrate_series", "status": "error",
+                                      "error": str(_ve)})
             if n_channels and r_min is not None and r_max is not None:
                 r_bin_size = (r_max - r_min) / float(n_channels)
-            tt_grid = {"two_theta_min": two_theta_min, "two_theta_max": two_theta_max,
-                       "n_channels": n_channels, "Lsd_um": _lsd, "px_um": _px,
-                       "r_min_px": r_min, "r_max_px": r_max, "r_bin_px": r_bin_size}
+            grid_info = {"convention": convention, "min": lo, "max": hi,
+                         "n_channels": n_channels, "Lsd_um": _lsd, "px_um": _px,
+                         "wavelength_A": _wl, "r_min_px": r_min, "r_max_px": r_max,
+                         "r_bin_px": r_bin_size}
 
         # Announce BEFORE running (Claude-Code style: say what + where up front).
         _dscheme = (f"{dark_source}/{dark_kind}" if dark_source == "file" else dark_source)
         print(f"[integrate_series] {len(files)} file(s) → {out_root}", file=sys.stderr)
         print(f"[integrate_series] params={param_path.name}  darks={_dscheme}  "
               f"compute={plan['target']}", file=sys.stderr)
-        if tt_grid:
-            print(f"[integrate_series] 2θ grid {two_theta_min}–{two_theta_max}° / "
-                  f"{n_channels} ch → R {r_min:.1f}–{r_max:.1f}px bin {r_bin_size:.4f}px",
-                  file=sys.stderr)
+        if grid_info:
+            print(f"[integrate_series] grid {grid_info['min']}–{grid_info['max']} "
+                  f"{grid_info['convention']} / {n_channels} ch → R {r_min:.1f}–{r_max:.1f}px "
+                  f"bin {r_bin_size:.4f}px", file=sys.stderr)
 
         per_file, n_ok = [], 0
         for img in files:
@@ -3208,7 +3237,7 @@ async def midas_integrate_series(
             "subset": subset_note,
             "compute": plan,
             "output_root": str(out_root),
-            "two_theta_grid": tt_grid,
+            "grid": grid_info,
             "xye_dir": str(xye_dir) if consolidated else None,
             "fxye_dir": str(fxye_dir) if consolidated else None,
             "consolidated_count": len(consolidated),
@@ -3252,20 +3281,25 @@ def _read_xy_grid(path: Path):
 @mcp.tool()
 async def compare_integrated_series(apexa_dir: str, reference_dir: str,
                                     pattern: str = "*.xye",
-                                    two_theta_tol_deg: float = 0.02) -> str:
-    """Verify an APEXA integration against a reference (e.g. a colleague's) — grid,
-    count, and peak alignment — and REFUSE to claim parity unless they actually match.
+                                    x_tol: float = 0.02) -> str:
+    """Verify one set of integrated 1D patterns against a reference — grid, count,
+    and peak alignment — and REFUSE to claim parity unless they actually match.
 
-    Compares the 1D patterns in two per-sample directories (``apexa_dir`` vs
-    ``reference_dir``, matched by filename). Reports, per the common files:
+    Convention-agnostic: it compares whatever x-axis the files use (radius, 2θ, Q,
+    or d) by reading the first two numeric columns — it does not assume degrees.
+    ``pattern`` selects the format to compare (``*.xye``, ``*.xy``, ``*.fxye``,
+    ``*.dat``, ``*.chi``, …); compare like-for-like. ``x_tol`` is the allowed
+    difference in x-min/x-max in the files' own x units.
+
+    Compares two per-sample directories (``apexa_dir`` vs ``reference_dir``, matched
+    by filename) and reports, over the common files:
       • file-count agreement,
-      • x-grid (2θ) agreement: row count + min/max within ``two_theta_tol_deg``,
+      • x-grid agreement: row count + min/max within ``x_tol``,
       • strongest-peak position offset (a cheap alignment sanity check).
-    Returns ``grid_match``/``parity`` booleans. This is the guard against reporting
-    a benchmark as "matching" when the grids differ (the 0.1–10° / 991-row vs
-    0.5–14° / 1351-row mismatch): if ``grid_match`` is false, the integration must
-    be re-run (usually with the reference 2θ grid via midas_integrate_series
-    two_theta_min/max/n_channels) before any comparison is trustworthy.
+    Returns ``grid_match``/``parity`` booleans — the guard against reporting a
+    comparison as "matching" when the grids differ. If ``grid_match`` is false,
+    re-run the integration on the reference grid (midas_integrate_series accepts the
+    grid in radius, 2θ, or Q) before any comparison is trustworthy.
     """
     try:
         ad, rd = Path(apexa_dir).expanduser(), Path(reference_dir).expanduser()
@@ -3297,25 +3331,26 @@ async def compare_integrated_series(apexa_dir: str, reference_dir: str,
             return xs[i]
         apk, rpk = _peak(ax, ay), _peak(rx, ry)
         grid_match = (an == rn and amin is not None and rmin is not None
-                      and abs(amin - rmin) <= two_theta_tol_deg
-                      and abs(amax - rmax) <= two_theta_tol_deg)
+                      and abs(amin - rmin) <= x_tol
+                      and abs(amax - rmax) <= x_tol)
         result.update({
             "probe_file": probe,
             "apexa_grid": {"rows": an, "x_min": amin, "x_max": amax},
             "reference_grid": {"rows": rn, "x_min": rmin, "x_max": rmax},
             "row_match": an == rn,
             "range_match": (amin is not None and rmin is not None
-                            and abs(amin - rmin) <= two_theta_tol_deg
-                            and abs(amax - rmax) <= two_theta_tol_deg),
+                            and abs(amin - rmin) <= x_tol
+                            and abs(amax - rmax) <= x_tol),
             "grid_match": grid_match,
-            "peak_offset_deg": (round(abs(apk - rpk), 5) if (apk is not None and rpk is not None) else None),
+            "peak_offset": (round(abs(apk - rpk), 5) if (apk is not None and rpk is not None) else None),
             "parity": bool(grid_match and result["count_match"]),
         })
         if not grid_match:
             result["recommendation"] = (
-                f"Grids differ (APEXA {an} rows {amin}–{amax} vs reference {rn} rows "
-                f"{rmin}–{rmax}). Re-run midas_integrate_series with two_theta_min/max/"
-                "n_channels set to the reference grid BEFORE claiming any parity.")
+                f"Grids differ (dir-A {an} rows {amin}–{amax} vs reference {rn} rows "
+                f"{rmin}–{rmax}, in the files' own x units). Re-run the integration on "
+                "the reference grid (midas_integrate_series takes the grid in radius, "
+                "2θ, or Q) BEFORE claiming any parity.")
         return format_result(result)
     except Exception as e:
         return format_result({"tool": "compare_integrated_series", "status": "error", "error": str(e)})
