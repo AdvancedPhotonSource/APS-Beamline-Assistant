@@ -697,6 +697,10 @@ prior tool calls and their results are in the transcript above — that is your
 memory. Reason over it, then act.
 
 ## Core behaviour
+- SMALL TALK & META: for a greeting ("hi", "hello", "hey"), a thanks, or a
+  question about what you are or what you can do, just reply in 1–2 friendly
+  sentences (for "what can you do?", give a brief capability hint). Do NOT call
+  any tool, do NOT list directories, and never report an "analysis" for these.
 - ANSWER FROM THE TRANSCRIPT FIRST. If the user asks about something you already
   did (its outcome, how you computed it, what to do next, "did it work?"), answer
   from the tool results already in the transcript. Do NOT re-run tools or
@@ -2411,7 +2415,20 @@ class AgentRunner:
                     messages.append({"role": "user", "content": count_rejection})
                     continue
 
-            return _persist(text or "Analysis complete.")
+            if text:
+                return _persist(text)
+            # Empty model response. If tools ran this turn, the work happened but
+            # the model didn't summarize; otherwise the input was almost certainly
+            # small talk (a bare "hi") — never claim "analysis complete" for that.
+            if log_entry and log_entry.tool_calls:
+                return _persist("Done — see the tool output above.")
+            return _persist(
+                "Hi! I'm APEXA, your HEDM beamline assistant. I can calibrate "
+                "(CeO2/LaB6), integrate patterns (single, series, or batch), run "
+                "FF/NF/PF-HEDM workflows, refine with GSAS-II, plot results, move "
+                "motors, and answer HEDM questions. Point me at a data file and "
+                "I'll suggest what to do, or just tell me what you need."
+            )
 
         # ── Forced finalize at iteration cap ─────────────────────────────────
         # Loop exhausted without the model producing a tool-call-free final
