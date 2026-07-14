@@ -48,7 +48,10 @@ dependencies = [
     "autogen-agentchat>=0.7.5",
     "autogen-ext>=0.7.5",
     "einops>=0.8.2",
-    "midas-suite[ff]>=0.3.16",
+    # MIDAS native stack (midas-index, midas-fit-grain, ...) compiles C/C++/CUDA and
+    # has no Windows wheels — skip it on native Windows so `uv sync` installs cleanly
+    # (CLI/agent/core work; run MIDAS HEDM tools under WSL2/Linux). Unchanged elsewhere.
+    "midas-suite[ff]>=0.3.16 ; sys_platform != 'win32'",
 ]
 
 [project.optional-dependencies]
