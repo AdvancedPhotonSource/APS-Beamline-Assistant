@@ -5883,6 +5883,183 @@ def _build_viewer_cmd(viewer: str, script_path: Path,
 
     return cmd
 
+
+@mcp.tool()
+async def plot_lineout_series_contour(
+    input_dir: str = "",
+    images: list = None,
+    pattern: str = "*.xye",
+    output_file: str = "",
+    x_col: int = 0,
+    y_col: int = 1,
+    x_label: str = "2θ (deg)",
+    title: str = "",
+    log_scale: bool = False,
+    interactive: bool = True,
+    open_it: bool = True,
+) -> str:
+    """Operando contour / waterfall of a SERIES of 1D patterns (.xye/.xy/.dat/.chi).
+
+    Use this for "contour / waterfall / operando plot of a folder of lineouts" —
+    MIDAS has NO series viewer, and .xye is not a MIDAS-native lineout format (its
+    Qt lineout viewer opens BLANK on .xye), so do NOT route these through
+    run_midas_viewer and do NOT hand-roll a matplotlib script via run_command.
+
+    Builds a 2D map across all files — x = radial axis (column ``x_col``), y =
+    frame/scan order (from the number in each filename), colour = intensity (column
+    ``y_col``) — writes a PNG and, by default, an interactive Plotly HTML that
+    actually renders these files (zoom/pan/hover) and is opened in your browser.
+    Convention-agnostic: point x_col/y_col at whatever columns your files use
+    (default col0 = x, col1 = intensity).
+
+    Args:
+        input_dir:  directory of 1D pattern files (with ``pattern``), OR
+        images:     explicit list of file paths (overrides input_dir).
+        pattern:    glob for input_dir (default ``*.xye``).
+        output_file: PNG path (default ``<input_dir>/<name>_contour.png``).
+        x_col/y_col: 0-based columns for the radial axis and intensity.
+        x_label:    axis label for the radial axis.
+        log_scale:  log-scale the intensity colour (log1p) for weak features.
+        interactive: also write an interactive Plotly HTML alongside the PNG.
+        open_it:    best-effort open the result in the OS default app/browser.
+    """
+    try:
+        import numpy as _np
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as _plt
+        import re as _re
+
+        # 1) resolve + order the files by the number in the filename (scan order)
+        if images:
+            files = [Path(p).expanduser().absolute() for p in images]
+        elif input_dir:
+            d = Path(input_dir).expanduser().absolute()
+            if not d.is_dir():
+                return format_result({"tool": "plot_lineout_series_contour",
+                                      "status": "error", "error": f"input_dir not found: {d}"})
+            files = [p for p in d.glob(pattern) if p.is_file()]
+        else:
+            return format_result({"tool": "plot_lineout_series_contour", "status": "error",
+                                  "error": "provide input_dir=... or images=[...]"})
+        def _fnum(p):
+            m = _re.findall(r"\d+", p.stem)
+            return int(m[-1]) if m else -1
+        files = sorted([p for p in files if p.exists()], key=_fnum)
+        if not files:
+            return format_result({"tool": "plot_lineout_series_contour", "status": "error",
+                                  "error": f"no files matched {pattern!r}"})
+
+        # 2) read each pattern (first numeric x_col/y_col); interpolate onto the
+        #    reference x-grid when grids differ slightly across frames.
+        def _read(p):
+            xs, ys = [], []
+            for ln in p.read_text().splitlines():
+                ln = ln.strip()
+                if not ln or ln[0] in "#;Bb":
+                    continue
+                t = ln.replace(",", " ").split()
+                if len(t) > max(x_col, y_col):
+                    try:
+                        xs.append(float(t[x_col])); ys.append(float(t[y_col]))
+                    except ValueError:
+                        continue
+            return _np.asarray(xs), _np.asarray(ys)
+
+        x_ref, y0 = _read(files[0])
+        if x_ref.size == 0:
+            return format_result({"tool": "plot_lineout_series_contour", "status": "error",
+                                  "error": f"no numeric data in {files[0].name} "
+                                           f"(x_col={x_col}, y_col={y_col})"})
+        rows, frames, skipped = [], [], []
+        for p in files:
+            xs, ys = _read(p)
+            if xs.size == 0:
+                skipped.append(p.name); continue
+            rows.append(ys if (xs.shape == x_ref.shape and _np.allclose(xs, x_ref))
+                        else _np.interp(x_ref, xs, ys))
+            frames.append(_fnum(p))
+        Z = _np.vstack(rows)
+        if log_scale:
+            Z = _np.log1p(_np.clip(Z, 0, None))
+
+        # 3) output paths
+        base_dir = Path(input_dir).expanduser().absolute() if input_dir else files[0].parent
+        stem = (Path(output_file).stem if output_file
+                else f"{_os_common_prefix(files)}contour")
+        png_path = (Path(output_file).expanduser().absolute() if output_file
+                    else base_dir / f"{stem}.png")
+        png_path.parent.mkdir(parents=True, exist_ok=True)
+        _announce_output("plot_lineout_series_contour", png_path,
+                         files=len(rows), interactive=interactive)
+
+        # 4) static PNG (always)
+        fig, ax = _plt.subplots(figsize=(9, 6))
+        mesh = ax.pcolormesh(x_ref, _np.arange(len(rows)), Z, shading="auto", cmap="viridis")
+        ax.set_xlabel(x_label)
+        ax.set_ylabel("frame index (scan order)")
+        ax.set_title(title or f"Operando contour — {len(rows)} patterns "
+                              f"({frames[0]}–{frames[-1]})")
+        fig.colorbar(mesh, ax=ax, label="log(1+I)" if log_scale else "intensity")
+        fig.tight_layout(); fig.savefig(png_path, dpi=150); _plt.close(fig)
+
+        outputs = {"png": str(png_path)}
+        # 5) interactive Plotly HTML (renders .xye that the MIDAS Qt viewer can't)
+        if interactive:
+            try:
+                import plotly.graph_objects as _go
+                html_path = png_path.with_suffix(".html")
+                figp = _go.Figure(data=_go.Heatmap(
+                    z=Z.tolist(), x=x_ref.tolist(), y=frames,
+                    colorscale="Viridis",
+                    colorbar=dict(title="log(1+I)" if log_scale else "intensity")))
+                figp.update_layout(
+                    title=title or f"Operando contour — {len(rows)} patterns",
+                    xaxis_title=x_label, yaxis_title="frame / scan number",
+                    template="plotly_dark")
+                figp.write_html(str(html_path), include_plotlyjs="cdn")
+                outputs["html"] = str(html_path)
+            except Exception as _e:
+                outputs["html_error"] = str(_e)
+
+        # 6) best-effort open (the analog of a viewer "launching")
+        opened = None
+        if open_it:
+            target = outputs.get("html") or outputs["png"]
+            try:
+                import subprocess as _sp, sys as _sys
+                if _sys.platform == "darwin":
+                    _sp.Popen(["open", target])
+                elif _sys.platform.startswith("win"):
+                    os.startfile(target)  # type: ignore[attr-defined]
+                else:
+                    _sp.Popen(["xdg-open", target])
+                opened = target
+            except Exception:
+                opened = None
+
+        return format_result({
+            "tool": "plot_lineout_series_contour", "status": "success",
+            "n_patterns": len(rows), "n_x": int(x_ref.size),
+            "frame_range": [frames[0], frames[-1]] if frames else None,
+            "x_range": [float(x_ref.min()), float(x_ref.max())],
+            "outputs": outputs, "opened": opened,
+            "skipped_empty": skipped or None,
+            "note": "Open the .html for an interactive contour (zoom/pan/hover); the "
+                    ".png is a static copy. MIDAS has no native viewer for a series "
+                    "of .xye patterns.",
+        })
+    except Exception as e:
+        return format_result({"tool": "plot_lineout_series_contour", "status": "error", "error": str(e)})
+
+
+def _os_common_prefix(files) -> str:
+    """Common filename prefix (before the frame number) for naming outputs."""
+    import os as _os, re as _re
+    pref = _os.path.commonprefix([_re.sub(r"\d.*$", "", f.stem) for f in files])
+    return (pref.rstrip("_") + "_") if pref.strip("_") else ""
+
+
 @mcp.tool()
 async def run_midas_viewer(
     viewer: str,
