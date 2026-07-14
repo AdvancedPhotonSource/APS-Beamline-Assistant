@@ -24,6 +24,17 @@ AI-powered agentic framework for HEDM data analysis at Argonne National Laborato
 
 ### Windows
 
+**Install the prerequisites once** (PowerShell; `winget` ships with Win 10/11). npm comes
+bundled with Node.js, which is only needed for the Web UI:
+```powershell
+winget install --id=astral-sh.uv -e          # uv (Python package/venv manager)
+winget install --id=OpenJS.NodeJS.LTS -e     # Node.js + npm (Web UI only)
+winget install --id=Python.Python.3.13 -e    # Python 3.13 (skip if already installed)
+```
+Close and reopen the terminal, then verify: `uv --version`, `node --version`, `npm --version`.
+No winget? Use the installers: https://astral.sh/uv, https://nodejs.org (LTS), https://python.org
+(uv alt: `powershell -ExecutionPolicy Bypass -c "irm https://astral.sh/uv/install.ps1 | iex"`).
+
 The `.sh` scripts need bash. On Windows use the `.bat`/`.ps1` launchers (or run the
 Python directly) — everything else is the same:
 ```bat
