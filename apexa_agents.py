@@ -497,7 +497,11 @@ GSAS-II refinement workflow:
      - cif_files=[<CIF path>]
      - two_theta_limits=[2.0, 15.0] (ALWAYS set — without limits Rwp will be ~100%)
      - n_cpus=8 (parallelize across histograms)
-  4. NEVER use run_command for GSAS-II — always use run_gsas_refinement
+  4. To RUN a GSAS-II refinement, use run_gsas_refinement — never drive GSAS-II
+     itself via run_command. (This is ONLY about invoking a refinement. Reading,
+     listing, or grepping files whose NAME or PATH contains "GSAS-II" — e.g. a
+     reference dir integrated_data_GSAS-II/ or a colleague's GSAS-II_*.py script —
+     is completely fine via run_command/read_file/list_directory.)
 
 CRITICAL: After calling a tool, read the result carefully. Do NOT call list_directory
 to verify files you already know about. Use the paths from the tool results directly.
@@ -747,6 +751,20 @@ memory. Reason over it, then act.
   ax.write_params / ax.compare_geometry, ax.read_lineout, ax.read_manifest.
 - Prefer a compound tool that returns many values in ONE call over looping a
   primitive; emit independent calls together.
+- GROUND parameters, then APPLY them — reading is not applying. When reproducing or
+  benchmarking against a reference pipeline, read the actual settings from THEIR
+  script/params (e.g. a colleague's MIDAS_*.py / .txt) — not from prose or memory —
+  and then PASS them into the tool call. For integration the grid is the usual trap:
+  the calibration param file's RMin/RMax/RBinSize give a DIFFERENT 2θ range than the
+  reference. Use midas_integrate_series two_theta_min/two_theta_max/n_channels to
+  match the reference grid (it converts 2θ→radius via Lsd/px). Do NOT run the full
+  series until a single pilot frame lands on the reference grid.
+- VERIFY before claiming parity. After integrating against a reference, call
+  compare_integrated_series(apexa_dir, reference_dir). If grid_match is false, the
+  output is NOT comparable — re-run with the reference 2θ grid; do not report
+  agreement, peak offsets, or a benchmark verdict. Never state numeric agreement
+  ("beam center within 0.04 px", "strain 12 vs 28 µε") you did not obtain from a
+  tool that actually read both files this turn.
 - ANNOUNCE side effects up front (Claude-Code style): before ANY tool that writes
   files or runs a batch/long job (calibration, integration, workflows, refinement,
   motor moves, conversions), state in ONE line what you'll do and the EXACT output

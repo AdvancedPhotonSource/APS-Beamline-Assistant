@@ -2894,6 +2894,7 @@ async def midas_integrate_series(
     csv_output: bool = False,
     r_min: float = None, r_max: float = None, r_bin_size: float = None,
     eta_min: float = None, eta_max: float = None, eta_bin_size: float = None,
+    two_theta_min: float = None, two_theta_max: float = None, n_channels: int = None,
 ) -> str:
     """Integrate a SERIES of separate 2D image files in ONE tool call.
 
@@ -2915,6 +2916,13 @@ async def midas_integrate_series(
     directly where you want it (e.g. an APEXA_benchmark dir) — never integrate to a
     default then copy. Darks are excluded from the sample set, so xye/ + fxye/
     contain samples only.
+
+    2θ grid (to match a reference pipeline): pass ``two_theta_min``/``two_theta_max``
+    (degrees) and ``n_channels``; the tool converts them to the integrator's radius
+    grid via R=(Lsd/px)·tan(2θ) using Lsd/px from the parameter file, so the output
+    lands on the SAME 2θ grid as the reference (e.g. 0.5–14°, 2500 channels) instead
+    of leaving RMin/RMax at calibration defaults (a different 2θ range). Read the
+    reference values from THEIR script/params — do not guess.
 
     File selection:
       • ``images``: explicit list of image paths, OR
@@ -3038,11 +3046,46 @@ async def midas_integrate_series(
         out_root.mkdir(parents=True, exist_ok=True)
         env = get_midas_env()
 
+        # 2θ grid → radius grid. The integrator bins in detector RADIUS (px), but a
+        # reference pipeline (e.g. a colleague's) usually specifies the grid in 2θ:
+        # a range and a channel count. Convert here using Lsd/px from the param file
+        # so the output lands on the SAME 2θ grid — R = (Lsd/px)·tan(2θ). This is
+        # what makes an APEXA-vs-expert integration benchmark actually comparable
+        # (the earlier mismatch — 0.1–10.1° / 991 rows vs 0.5–14° / 1351 rows — was
+        # exactly a radius-grid-left-at-calibration-defaults bug).
+        tt_grid = None
+        if two_theta_min is not None or two_theta_max is not None or n_channels is not None:
+            import math as _m
+            _lsd = _px = None
+            for _ln in param_path.read_text().splitlines():
+                _t = _ln.split()
+                if len(_t) >= 2 and _t[0] == "Lsd":
+                    _lsd = float(_t[1])
+                elif len(_t) >= 2 and _t[0] in ("px", "PixelSize", "pxY"):
+                    _px = float(_t[1])
+            if not _lsd or not _px:
+                return format_result({"tool": "midas_integrate_series", "status": "error",
+                                      "error": "two_theta_* requires Lsd and px in the parameter file "
+                                               "to convert 2θ→radius; none found."})
+            if two_theta_min is not None:
+                r_min = (_lsd / _px) * _m.tan(_m.radians(two_theta_min))
+            if two_theta_max is not None:
+                r_max = (_lsd / _px) * _m.tan(_m.radians(two_theta_max))
+            if n_channels and r_min is not None and r_max is not None:
+                r_bin_size = (r_max - r_min) / float(n_channels)
+            tt_grid = {"two_theta_min": two_theta_min, "two_theta_max": two_theta_max,
+                       "n_channels": n_channels, "Lsd_um": _lsd, "px_um": _px,
+                       "r_min_px": r_min, "r_max_px": r_max, "r_bin_px": r_bin_size}
+
         # Announce BEFORE running (Claude-Code style: say what + where up front).
         _dscheme = (f"{dark_source}/{dark_kind}" if dark_source == "file" else dark_source)
         print(f"[integrate_series] {len(files)} file(s) → {out_root}", file=sys.stderr)
         print(f"[integrate_series] params={param_path.name}  darks={_dscheme}  "
               f"compute={plan['target']}", file=sys.stderr)
+        if tt_grid:
+            print(f"[integrate_series] 2θ grid {two_theta_min}–{two_theta_max}° / "
+                  f"{n_channels} ch → R {r_min:.1f}–{r_max:.1f}px bin {r_bin_size:.4f}px",
+                  file=sys.stderr)
 
         per_file, n_ok = [], 0
         for img in files:
@@ -3165,6 +3208,7 @@ async def midas_integrate_series(
             "subset": subset_note,
             "compute": plan,
             "output_root": str(out_root),
+            "two_theta_grid": tt_grid,
             "xye_dir": str(xye_dir) if consolidated else None,
             "fxye_dir": str(fxye_dir) if consolidated else None,
             "consolidated_count": len(consolidated),
@@ -3184,6 +3228,97 @@ async def midas_integrate_series(
         return format_result(summary)
     except Exception as e:
         return format_result({"tool": "midas_integrate_series", "status": "error", "error": str(e)})
+
+
+def _read_xy_grid(path: Path):
+    """Read a 1D pattern (.xy/.xye/.fxye/.dat): return (n_rows, x_min, x_max, x[], y[]).
+    Skips comment/header lines; takes the first two numeric columns."""
+    xs, ys = [], []
+    for ln in path.read_text().splitlines():
+        ln = ln.strip()
+        if not ln or ln[0] in "#;Bb":          # comment / BANK header
+            continue
+        t = ln.replace(",", " ").split()
+        if len(t) >= 2:
+            try:
+                xs.append(float(t[0])); ys.append(float(t[1]))
+            except ValueError:
+                continue
+    if not xs:
+        return 0, None, None, [], []
+    return len(xs), min(xs), max(xs), xs, ys
+
+
+@mcp.tool()
+async def compare_integrated_series(apexa_dir: str, reference_dir: str,
+                                    pattern: str = "*.xye",
+                                    two_theta_tol_deg: float = 0.02) -> str:
+    """Verify an APEXA integration against a reference (e.g. a colleague's) — grid,
+    count, and peak alignment — and REFUSE to claim parity unless they actually match.
+
+    Compares the 1D patterns in two per-sample directories (``apexa_dir`` vs
+    ``reference_dir``, matched by filename). Reports, per the common files:
+      • file-count agreement,
+      • x-grid (2θ) agreement: row count + min/max within ``two_theta_tol_deg``,
+      • strongest-peak position offset (a cheap alignment sanity check).
+    Returns ``grid_match``/``parity`` booleans. This is the guard against reporting
+    a benchmark as "matching" when the grids differ (the 0.1–10° / 991-row vs
+    0.5–14° / 1351-row mismatch): if ``grid_match`` is false, the integration must
+    be re-run (usually with the reference 2θ grid via midas_integrate_series
+    two_theta_min/max/n_channels) before any comparison is trustworthy.
+    """
+    try:
+        ad, rd = Path(apexa_dir).expanduser(), Path(reference_dir).expanduser()
+        if not ad.is_dir() or not rd.is_dir():
+            return format_result({"tool": "compare_integrated_series", "status": "error",
+                                  "error": f"directory not found: {ad if not ad.is_dir() else rd}"})
+        a_files = {p.name: p for p in sorted(ad.glob(pattern))}
+        r_files = {p.name: p for p in sorted(rd.glob(pattern))}
+        common = sorted(set(a_files) & set(r_files))
+        result = {
+            "tool": "compare_integrated_series", "status": "success",
+            "apexa_dir": str(ad), "reference_dir": str(rd), "pattern": pattern,
+            "apexa_count": len(a_files), "reference_count": len(r_files),
+            "common_count": len(common),
+            "count_match": len(a_files) == len(r_files) and len(a_files) > 0,
+        }
+        if not common:
+            result.update({"grid_match": False, "parity": False,
+                           "note": "no filename-matched pairs to compare"})
+            return format_result(result)
+        # Compare the grid on a representative pair (first common file).
+        probe = common[0]
+        an, amin, amax, ax, ay = _read_xy_grid(a_files[probe])
+        rn, rmin, rmax, rx, ry = _read_xy_grid(r_files[probe])
+        def _peak(xs, ys):
+            if not ys:
+                return None
+            i = max(range(len(ys)), key=lambda k: ys[k])
+            return xs[i]
+        apk, rpk = _peak(ax, ay), _peak(rx, ry)
+        grid_match = (an == rn and amin is not None and rmin is not None
+                      and abs(amin - rmin) <= two_theta_tol_deg
+                      and abs(amax - rmax) <= two_theta_tol_deg)
+        result.update({
+            "probe_file": probe,
+            "apexa_grid": {"rows": an, "x_min": amin, "x_max": amax},
+            "reference_grid": {"rows": rn, "x_min": rmin, "x_max": rmax},
+            "row_match": an == rn,
+            "range_match": (amin is not None and rmin is not None
+                            and abs(amin - rmin) <= two_theta_tol_deg
+                            and abs(amax - rmax) <= two_theta_tol_deg),
+            "grid_match": grid_match,
+            "peak_offset_deg": (round(abs(apk - rpk), 5) if (apk is not None and rpk is not None) else None),
+            "parity": bool(grid_match and result["count_match"]),
+        })
+        if not grid_match:
+            result["recommendation"] = (
+                f"Grids differ (APEXA {an} rows {amin}–{amax} vs reference {rn} rows "
+                f"{rmin}–{rmax}). Re-run midas_integrate_series with two_theta_min/max/"
+                "n_channels set to the reference grid BEFORE claiming any parity.")
+        return format_result(result)
+    except Exception as e:
+        return format_result({"tool": "compare_integrated_series", "status": "error", "error": str(e)})
 
 # Phase identification tool moved to analysis_utilities_server.py as identify_phases_basic
 # Use GSAS-II server for comprehensive phase identification

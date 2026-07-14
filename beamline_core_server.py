@@ -238,6 +238,34 @@ _SHELL_BUILTINS = {
 }
 
 
+def _split_on_unquoted_ops(command: str) -> list:
+    """Split a command into pipeline/list segments on shell operators (| || && ; &
+    and newlines) that appear OUTSIDE single/double quotes. Content inside quotes
+    (e.g. an awk/sed program) is preserved intact, so its operators and $-fields
+    are never mistaken for command separators or command names."""
+    segments, buf = [], []
+    quote = None            # None, "'", or '"'
+    i, n = 0, len(command)
+    while i < n:
+        c = command[i]
+        if quote:
+            buf.append(c)
+            if c == quote:
+                quote = None
+            i += 1
+            continue
+        if c in ("'", '"'):
+            quote = c; buf.append(c); i += 1; continue
+        # Two-char operators
+        if c in '|&' and i + 1 < n and command[i + 1] == c:   # || or &&
+            segments.append(''.join(buf)); buf = []; i += 2; continue
+        if c in '|;&\n':                                        # | ; & newline
+            segments.append(''.join(buf)); buf = []; i += 1; continue
+        buf.append(c); i += 1
+    segments.append(''.join(buf))
+    return segments
+
+
 def _validate_segments(command: str) -> tuple:
     """Split a shell command on operators and validate each executable segment.
 
@@ -271,8 +299,11 @@ def _validate_segments(command: str) -> tuple:
 
     command = _strip_heredocs(command)
     # Split on shell operators AND newlines so each real command line is checked
-    # (catches e.g. a destructive command on its own line, not just the first).
-    segments = _re.split(r'\|\||&&|[|;&\n]', command)
+    # (catches e.g. a destructive command on its own line, not just the first),
+    # but ONLY on operators that are OUTSIDE quotes. A naive regex split breaks
+    # quoted program text — e.g. awk '{print $5}' or sed 's/;/,/g' — into bogus
+    # "segments" whose first token ($5, else, s/…) is then blocked as a command.
+    segments = _split_on_unquoted_ops(command)
     for seg in segments:
         seg = seg.strip()
         if not seg:
@@ -297,6 +328,10 @@ def _validate_segments(command: str) -> tuple:
         # redirections, not executables — skip them (fixes the "Command not
         # allowed: 1" false block that stops any command using '2>&1').
         if base.isdigit() or first_word[0] in '<>':
+            continue
+        # Variable / field reference ($5, $HOME, ${x}) or brace fragment — not an
+        # executable (leftover from an awk/sed program or a $VAR at segment start).
+        if first_word[0] in '$}{':
             continue
         # Variable assignment (NAME=value or NAME=$(...)): always allowed
         if _re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', first_word):
