@@ -249,16 +249,41 @@ class ArgoProvider:
             ))
         return calls
 
+    @staticmethod
+    def _coerce_content(c) -> str:
+        """Content may be a plain string OR an Anthropic-native list of blocks
+        ([{'type':'text','text':...}]). Flatten to a string so nothing is silently
+        dropped — e.g. Argo returns gateway/auth messages (ACCESS DENIED for an
+        unauthorized user) in the block shape, which otherwise read as empty."""
+        if isinstance(c, str):
+            return c
+        if isinstance(c, list):
+            parts = []
+            for b in c:
+                if isinstance(b, dict):
+                    parts.append(b.get("text") or b.get("content") or "")
+                elif isinstance(b, str):
+                    parts.append(b)
+            return "".join(parts)
+        return "" if c is None else str(c)
+
     def _parse_response(self, data: Dict) -> AgentResponse:
         # Argo wraps response in {"response": {"content": ..., "tool_calls": [...]}}
         if "response" in data and isinstance(data["response"], dict):
             resp      = data["response"]
-            content   = resp.get("content", "") or ""
+            content   = self._coerce_content(resp.get("content", ""))
             raw_calls = resp.get("tool_calls", []) or []
         elif "choices" in data:
             msg       = data["choices"][0]["message"]
-            content   = msg.get("content", "") or ""
+            content   = self._coerce_content(msg.get("content", ""))
             raw_calls = msg.get("tool_calls", []) or []
+        elif "content" in data:
+            # Anthropic-native top-level shape: {id, type:'message', role,
+            # content:[{type:'text', text:...}]}. Argo returns gateway/auth blocks
+            # (e.g. "ACCESS DENIED — user not authorized") in this form; parse it so
+            # the real message reaches the user instead of appearing empty.
+            content   = self._coerce_content(data.get("content", ""))
+            raw_calls = data.get("tool_calls", []) or []
         else:
             content   = str(data.get("response", ""))
             raw_calls = []
