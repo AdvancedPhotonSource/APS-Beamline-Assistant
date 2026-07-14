@@ -1707,12 +1707,46 @@ class APEXAClient:
             ("ansibrightblack", "> "),
         ])
 
+        async def _read_user_input() -> str:
+            """Read one input, coalescing a pasted multi-line block into ONE query.
+
+            On terminals with bracketed paste, the whole paste arrives as a single
+            input (embedded newlines) and is used as-is. On terminals WITHOUT it
+            (many SSH/tmux/older setups), each pasted line is accepted separately —
+            which turned a pasted report into N separate queries (the wall of
+            one-line answers). Here, after the first line, we DRAIN any remaining
+            pasted lines still sitting in the OS input buffer (non-blocking) and
+            join them into one query.
+
+            Strictly safe: with nothing buffered (a normally-typed command) the
+            zero-timeout select returns instantly — no delay — and where it can't
+            apply (Windows stdin, or prompt_toolkit having already consumed the
+            bytes) it's a no-op, never worse than the per-line behavior.
+            """
+            line = await pt_session.prompt_async(prompt_text)
+            if "\n" in line:                       # bracketed paste already merged it
+                return line
+            try:
+                import select as _select
+                extra = ""
+                fd = sys.stdin.fileno()
+                while _select.select([sys.stdin], [], [], 0)[0]:
+                    chunk = os.read(fd, 65536)
+                    if not chunk:
+                        break
+                    extra += chunk.decode("utf-8", "replace")
+                if extra.strip():
+                    return "\n".join([line, *extra.splitlines()])
+            except Exception:
+                pass
+            return line
+
         history = []
 
         while True:
             try:
-                user_input = (await pt_session.prompt_async(prompt_text)).strip()
-                
+                user_input = (await _read_user_input()).strip()
+
                 if not user_input:
                     continue
                     
