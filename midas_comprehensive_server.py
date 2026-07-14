@@ -3049,6 +3049,11 @@ async def midas_integrate_series(
         out_root = (Path(result_folder).expanduser().absolute() if result_folder
                     else files[0].parent / "integration_series")
         out_root.mkdir(parents=True, exist_ok=True)
+        # Flag when output landed at the DEFAULT location (inside the raw data dir)
+        # because result_folder was not passed. Surfaced in the returned summary —
+        # not just stderr — so the agent/user notices instead of assuming it went to
+        # the intended benchmark/output folder (recurring "wrote to the wrong place").
+        _used_default_out = not result_folder
         env = get_midas_env()
 
         # Grid convention → radius grid. The integrator bins in detector RADIUS
@@ -3237,6 +3242,12 @@ async def midas_integrate_series(
             "subset": subset_note,
             "compute": plan,
             "output_root": str(out_root),
+            "output_location_warning": (
+                f"result_folder was not set — output was written to a DEFAULT location "
+                f"inside the data directory ({out_root}). If you meant it to go to a "
+                f"specific folder (e.g. an APEXA_benchmark dir), re-run with result_folder "
+                f"set; do NOT report a different location than this."
+                if _used_default_out else None),
             "grid": grid_info,
             "xye_dir": str(xye_dir) if consolidated else None,
             "fxye_dir": str(fxye_dir) if consolidated else None,
