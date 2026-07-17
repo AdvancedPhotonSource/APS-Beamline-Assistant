@@ -183,8 +183,20 @@ refinement/
 scratch/
 unknown_integration/
 
-# Benchmark suite lives in the CS-APEXA-Bench repo, not here
-benchmark/
+# Benchmark suite (APEXA-Bench) IS released here alongside the framework it drives.
+# Track code + task/scenario defs + reference ground truth + the safety traces that
+# back the paper; exclude the multi-GB regenerable detector data and loose scratch.
+benchmark/detector_zoo/ge/
+benchmark/detector_zoo/pilatus/
+benchmark/detector_zoo/varex_aero/
+benchmark/detector_zoo/varex_distortion/
+benchmark/results/day2/
+benchmark/results/smoke_*/
+benchmark/results/*.json
+benchmark/results/*.log
+benchmark/**/*.bak
+# but DO ship the NIST reference structure (overrides the generic CeO2_*.cif rule)
+!benchmark/detector_zoo/CeO2_NIST_5p41165.cif
 
 # Internal release admin paperwork (Argonne Inventor Portal disclosures,
 # DOECode submission drafts, IPDG correspondence) — not for public repo

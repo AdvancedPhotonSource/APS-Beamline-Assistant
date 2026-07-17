@@ -1,0 +1,1041 @@
+{
+  "metadata": {
+    "name": "APEXA-Bench",
+    "version": "1.0",
+    "description": "50 benchmark tasks for evaluating AI agents on synchrotron beamline operations",
+    "categories": [
+      "calibration",
+      "integration",
+      "hedm",
+      "motor",
+      "phase_id",
+      "knowledge"
+    ],
+    "difficulty_levels": [
+      "L1",
+      "L2",
+      "L3"
+    ],
+    "consequence_classes": [
+      "I",
+      "C",
+      "P_R",
+      "P_I"
+    ]
+  },
+  "tasks": [
+    {
+      "id": "cal_01",
+      "category": "calibration",
+      "difficulty": "L1",
+      "consequence": "C",
+      "query": "Auto-calibrate the detector using CeO2 calibrant data in /data/ceo2_00001.ge5",
+      "expected_tools": [
+        "midas_auto_calibrate"
+      ],
+      "expected_params": {
+        "calibrant": "CeO2"
+      },
+      "ground_truth_check": "tool_called",
+      "optimal_tool_calls": 1,
+      "description": "Single-tool CeO2 calibration"
+    },
+    {
+      "id": "cal_02",
+      "category": "calibration",
+      "difficulty": "L1",
+      "consequence": "C",
+      "query": "List the available calibrants for detector calibration",
+      "expected_tools": [
+        "list_common_calibrants"
+      ],
+      "expected_params": {},
+      "ground_truth_check": "tool_called",
+      "optimal_tool_calls": 1,
+      "description": "List calibrants"
+    },
+    {
+      "id": "cal_03",
+      "category": "calibration",
+      "difficulty": "L1",
+      "consequence": "C",
+      "query": "What calibrants are typically used for high-energy diffraction at 60 keV?",
+      "expected_tools": [
+        "list_common_calibrants"
+      ],
+      "expected_params": {},
+      "ground_truth_check": "tool_called",
+      "optimal_tool_calls": 1,
+      "description": "Calibrant selection advice"
+    },
+    {
+      "id": "cal_04",
+      "category": "calibration",
+      "difficulty": "L2",
+      "consequence": "C",
+      "query": "Check if a calibration parameter file exists at /data/params.txt, then run auto-calibration with CeO2 on /data/ceo2_00001.ge5",
+      "expected_tools": [
+        "get_file_info",
+        "midas_auto_calibrate"
+      ],
+      "expected_params": {
+        "calibrant": "CeO2"
+      },
+      "ground_truth_check": "tool_chain",
+      "optimal_tool_calls": 2,
+      "description": "Verify file then calibrate"
+    },
+    {
+      "id": "cal_05",
+      "category": "calibration",
+      "difficulty": "L2",
+      "consequence": "C",
+      "query": "List the files in /data/calibration/ and then run far-field calibration using the GE file found there",
+      "expected_tools": [
+        "list_directory",
+        "run_ff_calibration"
+      ],
+      "expected_params": {},
+      "ground_truth_check": "tool_chain",
+      "optimal_tool_calls": 2,
+      "description": "Discover data then calibrate"
+    },
+    {
+      "id": "cal_06",
+      "category": "calibration",
+      "difficulty": "L2",
+      "consequence": "C",
+      "query": "Calculate the X-ray wavelength for 71.676 keV and then auto-calibrate using CeO2 with that energy",
+      "expected_tools": [
+        "xray_calculate",
+        "midas_auto_calibrate"
+      ],
+      "expected_params": {},
+      "ground_truth_check": "tool_chain",
+      "optimal_tool_calls": 2,
+      "description": "Calculate energy then calibrate"
+    },
+    {
+      "id": "cal_07",
+      "category": "calibration",
+      "difficulty": "L3",
+      "consequence": "C",
+      "query": "Run a full calibration pipeline: list available calibrants, auto-calibrate with CeO2 on /data/ceo2_00001.ge5, then visualize the calibration results",
+      "expected_tools": [
+        "list_common_calibrants",
+        "midas_auto_calibrate",
+        "run_midas_viewer"
+      ],
+      "expected_params": {},
+      "ground_truth_check": "tool_chain",
+      "optimal_tool_calls": 3,
+      "description": "Full calibration pipeline with visualization"
+    },
+    {
+      "id": "cal_08",
+      "category": "calibration",
+      "difficulty": "L3",
+      "consequence": "C",
+      "query": "Validate the MIDAS installation, then create a parameter file for CeO2 calibration at 71.676 keV with detector distance 1000mm, then run auto-calibration",
+      "expected_tools": [
+        "validate_midas_installation",
+        "create_midas_parameter_file",
+        "midas_auto_calibrate"
+      ],
+      "expected_params": {},
+      "ground_truth_check": "tool_chain",
+      "optimal_tool_calls": 3,
+      "description": "Validate, configure, and calibrate"
+    },
+    {
+      "id": "int_01",
+      "category": "integration",
+      "difficulty": "L1",
+      "consequence": "C",
+      "query": "Integrate the 2D diffraction pattern /data/sample_00001.ge5 to 1D",
+      "expected_tools": [
+        "midas_integrate_2d_to_1d"
+      ],
+      "expected_params": {},
+      "ground_truth_check": "tool_called",
+      "optimal_tool_calls": 1,
+      "description": "Single 2D-to-1D integration"
+    },
+    {
+      "id": "int_02",
+      "category": "integration",
+      "difficulty": "L1",
+      "consequence": "C",
+      "query": "Run batch integration on all GE files in /data/sample/",
+      "expected_tools": [
+        "midas_batch_integrate"
+      ],
+      "expected_params": {},
+      "ground_truth_check": "tool_called",
+      "optimal_tool_calls": 1,
+      "description": "Batch integration"
+    },
+    {
+      "id": "int_03",
+      "category": "integration",
+      "difficulty": "L1",
+      "consequence": "C",
+      "query": "Integrate /data/test_pattern.ge5 from 2D to 1D with 2048 bins",
+      "expected_tools": [
+        "midas_integrate_2d_to_1d"
+      ],
+      "expected_params": {},
+      "ground_truth_check": "tool_called",
+      "optimal_tool_calls": 1,
+      "description": "Integration with custom bins"
+    },
+    {
+      "id": "int_04",
+      "category": "integration",
+      "difficulty": "L2",
+      "consequence": "C",
+      "query": "List the GE files in /data/sample/ and then integrate the first one to 1D",
+      "expected_tools": [
+        "list_directory",
+        "midas_integrate_2d_to_1d"
+      ],
+      "expected_params": {},
+      "ground_truth_check": "tool_chain",
+      "optimal_tool_calls": 2,
+      "description": "Discover then integrate"
+    },
+    {
+      "id": "int_05",
+      "category": "integration",
+      "difficulty": "L2",
+      "consequence": "C",
+      "query": "Check the file info for /data/sample_00001.ge5 to confirm it exists, then integrate it to 1D",
+      "expected_tools": [
+        "get_file_info",
+        "midas_integrate_2d_to_1d"
+      ],
+      "expected_params": {},
+      "ground_truth_check": "tool_chain",
+      "optimal_tool_calls": 2,
+      "description": "Verify then integrate"
+    },
+    {
+      "id": "int_06",
+      "category": "integration",
+      "difficulty": "L2",
+      "consequence": "C",
+      "query": "Integrate /data/sample_00001.ge5 to 1D and then visualize the result using the MIDAS viewer",
+      "expected_tools": [
+        "midas_integrate_2d_to_1d",
+        "run_midas_viewer"
+      ],
+      "expected_params": {},
+      "ground_truth_check": "tool_chain",
+      "optimal_tool_calls": 2,
+      "description": "Integrate then visualize"
+    },
+    {
+      "id": "int_07",
+      "category": "integration",
+      "difficulty": "L2",
+      "consequence": "C",
+      "query": "Calculate the d-spacing for the (111) reflection of CeO2 at 71.676 keV, then integrate /data/ceo2.ge5 with appropriate parameters",
+      "expected_tools": [
+        "xray_calculate",
+        "midas_integrate_2d_to_1d"
+      ],
+      "expected_params": {},
+      "ground_truth_check": "tool_chain",
+      "optimal_tool_calls": 2,
+      "description": "Calculate d-spacing then integrate"
+    },
+    {
+      "id": "int_08",
+      "category": "integration",
+      "difficulty": "L3",
+      "consequence": "C",
+      "query": "Run a complete integration pipeline: calibrate the detector with CeO2 on /data/ceo2.ge5, then batch integrate all sample files in /data/sample/, then visualize the integrated patterns",
+      "expected_tools": [
+        "midas_auto_calibrate",
+        "midas_batch_integrate",
+        "run_midas_viewer"
+      ],
+      "expected_params": {},
+      "ground_truth_check": "tool_chain",
+      "optimal_tool_calls": 3,
+      "description": "Full calibrate-integrate-visualize pipeline"
+    },
+    {
+      "id": "hedm_01",
+      "category": "hedm",
+      "difficulty": "L1",
+      "consequence": "C",
+      "query": "Get the typical HEDM parameters for a steel sample",
+      "expected_tools": [
+        "get_typical_hedm_parameters"
+      ],
+      "expected_params": {},
+      "ground_truth_check": "tool_called",
+      "optimal_tool_calls": 1,
+      "description": "Retrieve typical HEDM params"
+    },
+    {
+      "id": "hedm_02",
+      "category": "hedm",
+      "difficulty": "L1",
+      "consequence": "C",
+      "query": "Check the status of the MIDAS workflow in /data/hedm_run/",
+      "expected_tools": [
+        "get_midas_workflow_status"
+      ],
+      "expected_params": {},
+      "ground_truth_check": "tool_called",
+      "optimal_tool_calls": 1,
+      "description": "Check workflow status"
+    },
+    {
+      "id": "hedm_03",
+      "category": "hedm",
+      "difficulty": "L2",
+      "consequence": "C",
+      "query": "Create a MIDAS parameter file for FF-HEDM with steel sample at 71.676 keV and 1000mm detector distance, then run the full far-field HEDM workflow",
+      "expected_tools": [
+        "create_midas_parameter_file",
+        "run_ff_hedm_full_workflow"
+      ],
+      "expected_params": {},
+      "ground_truth_check": "tool_chain",
+      "optimal_tool_calls": 2,
+      "description": "Create params then run FF-HEDM"
+    },
+    {
+      "id": "hedm_04",
+      "category": "hedm",
+      "difficulty": "L2",
+      "consequence": "C",
+      "query": "Run the far-field HEDM workflow on /data/ff_hedm/ and then match grains across load steps",
+      "expected_tools": [
+        "run_ff_hedm_full_workflow",
+        "match_grains"
+      ],
+      "expected_params": {},
+      "ground_truth_check": "tool_chain",
+      "optimal_tool_calls": 2,
+      "description": "FF-HEDM then grain matching"
+    },
+    {
+      "id": "hedm_05",
+      "category": "hedm",
+      "difficulty": "L2",
+      "consequence": "C",
+      "query": "Estimate parameters from the diffraction image /data/sample_00001.ge5 and then create a MIDAS parameter file using those estimates",
+      "expected_tools": [
+        "estimate_parameters_from_image",
+        "create_midas_parameter_file"
+      ],
+      "expected_params": {},
+      "ground_truth_check": "tool_chain",
+      "optimal_tool_calls": 2,
+      "description": "Auto-estimate then create params"
+    },
+    {
+      "id": "hedm_06",
+      "category": "hedm",
+      "difficulty": "L2",
+      "consequence": "C",
+      "query": "Run near-field HEDM reconstruction on /data/nf_hedm/ and then convert the results to DREAM3D format",
+      "expected_tools": [
+        "run_nf_hedm_reconstruction",
+        "convert_nf_to_dream3d"
+      ],
+      "expected_params": {},
+      "ground_truth_check": "tool_chain",
+      "optimal_tool_calls": 2,
+      "description": "NF-HEDM then DREAM3D conversion"
+    },
+    {
+      "id": "hedm_07",
+      "category": "hedm",
+      "difficulty": "L3",
+      "consequence": "C",
+      "query": "Run the complete FF-HEDM pipeline on /data/ff_hedm/: first validate MIDAS, then run the full workflow, extract grain centroids, and calculate misorientations",
+      "expected_tools": [
+        "validate_midas_installation",
+        "run_ff_hedm_full_workflow",
+        "extract_grain_centroids",
+        "calculate_misorientation"
+      ],
+      "expected_params": {},
+      "ground_truth_check": "tool_chain",
+      "optimal_tool_calls": 4,
+      "description": "Full FF-HEDM pipeline with analysis"
+    },
+    {
+      "id": "hedm_08",
+      "category": "hedm",
+      "difficulty": "L3",
+      "consequence": "C",
+      "query": "Run FF-HEDM and NF-HEDM on /data/combined/ and then overlay the results",
+      "expected_tools": [
+        "run_ff_hedm_full_workflow",
+        "run_nf_hedm_reconstruction",
+        "overlay_ff_nf_results"
+      ],
+      "expected_params": {},
+      "ground_truth_check": "tool_chain",
+      "optimal_tool_calls": 3,
+      "description": "Combined FF+NF HEDM with overlay"
+    },
+    {
+      "id": "hedm_09",
+      "category": "hedm",
+      "difficulty": "L3",
+      "consequence": "C",
+      "query": "Run a forward simulation for grain validation, then match grains between two load steps in /data/step1/ and /data/step2/, and visualize the results",
+      "expected_tools": [
+        "run_forward_simulation",
+        "match_grains",
+        "run_midas_viewer"
+      ],
+      "expected_params": {},
+      "ground_truth_check": "tool_chain",
+      "optimal_tool_calls": 3,
+      "description": "Forward sim, grain tracking, visualization"
+    },
+    {
+      "id": "hedm_10",
+      "category": "hedm",
+      "difficulty": "L3",
+      "consequence": "C",
+      "query": "Run the powder HEDM workflow on /data/pf_hedm/, integrate the results, and run GSAS-II refinement to determine lattice parameters",
+      "expected_tools": [
+        "run_pf_hedm_workflow",
+        "midas_integrate_2d_to_1d",
+        "run_gsas_refinement"
+      ],
+      "expected_params": {},
+      "ground_truth_check": "tool_chain",
+      "optimal_tool_calls": 3,
+      "description": "PF-HEDM + integration + refinement pipeline"
+    },
+    {
+      "id": "mot_01",
+      "category": "motor",
+      "difficulty": "L1",
+      "consequence": "P_R",
+      "query": "What is the current position of motor samX?",
+      "expected_tools": [
+        "get_motor_position"
+      ],
+      "expected_params": {
+        "motor": "samX"
+      },
+      "ground_truth_check": "tool_called",
+      "optimal_tool_calls": 1,
+      "description": "Read motor position"
+    },
+    {
+      "id": "mot_02",
+      "category": "motor",
+      "difficulty": "L1",
+      "consequence": "P_R",
+      "query": "List all available motors",
+      "expected_tools": [
+        "list_motors"
+      ],
+      "expected_params": {},
+      "ground_truth_check": "tool_called",
+      "optimal_tool_calls": 1,
+      "description": "List motors"
+    },
+    {
+      "id": "mot_03",
+      "category": "motor",
+      "difficulty": "L1",
+      "consequence": "P_R",
+      "query": "Get the full status of motor samY including limits and velocity",
+      "expected_tools": [
+        "get_motor_status"
+      ],
+      "expected_params": {
+        "motor": "samY"
+      },
+      "ground_truth_check": "tool_called",
+      "optimal_tool_calls": 1,
+      "description": "Read motor status"
+    },
+    {
+      "id": "mot_04",
+      "category": "motor",
+      "difficulty": "L1",
+      "consequence": "P_R",
+      "query": "Get the soft limits for motor samZ",
+      "expected_tools": [
+        "get_motor_limits"
+      ],
+      "expected_params": {
+        "motor": "samZ"
+      },
+      "ground_truth_check": "tool_called",
+      "optimal_tool_calls": 1,
+      "description": "Read motor limits"
+    },
+    {
+      "id": "mot_05",
+      "category": "motor",
+      "difficulty": "L2",
+      "consequence": "P_R",
+      "query": "Check the limits of motor samX and then move it to position 5.0",
+      "expected_tools": [
+        "get_motor_limits",
+        "move_motor_absolute"
+      ],
+      "expected_params": {
+        "motor": "samX",
+        "position": 5.0
+      },
+      "ground_truth_check": "tool_chain",
+      "optimal_tool_calls": 2,
+      "description": "Check limits then move"
+    },
+    {
+      "id": "mot_06",
+      "category": "motor",
+      "difficulty": "L2",
+      "consequence": "P_R",
+      "query": "Read the current position of samX and then move it 2mm forward (positive direction)",
+      "expected_tools": [
+        "get_motor_position",
+        "move_motor_relative"
+      ],
+      "expected_params": {
+        "motor": "samX"
+      },
+      "ground_truth_check": "tool_chain",
+      "optimal_tool_calls": 2,
+      "description": "Read position then relative move"
+    },
+    {
+      "id": "mot_07",
+      "category": "motor",
+      "difficulty": "L3",
+      "consequence": "P_R",
+      "query": "Move samX to 10.0, then samY to 20.0, then samZ to 5.0 for the new sample position",
+      "expected_tools": [
+        "move_motor_absolute",
+        "move_motor_absolute",
+        "move_motor_absolute"
+      ],
+      "expected_params": {},
+      "ground_truth_check": "tool_chain",
+      "optimal_tool_calls": 3,
+      "description": "Sequential multi-axis positioning"
+    },
+    {
+      "id": "mot_08",
+      "category": "motor",
+      "difficulty": "L3",
+      "consequence": "P_R",
+      "query": "Set the velocity of samOmega to 2.0 deg/s, then jog it forward for 5 seconds, then read its final position",
+      "expected_tools": [
+        "set_motor_velocity",
+        "jog_motor",
+        "get_motor_position"
+      ],
+      "expected_params": {},
+      "ground_truth_check": "tool_chain",
+      "optimal_tool_calls": 3,
+      "description": "Set velocity, jog, verify position"
+    },
+    {
+      "id": "mot_09",
+      "category": "motor",
+      "difficulty": "L3",
+      "consequence": "P_R",
+      "query": "Get the status of all motors, identify any that are at their limits, and move them 1mm away from the limit",
+      "expected_tools": [
+        "list_motors",
+        "get_motor_status",
+        "move_motor_relative"
+      ],
+      "expected_params": {},
+      "ground_truth_check": "tool_chain",
+      "optimal_tool_calls": 3,
+      "description": "Survey, identify, and correct limit positions"
+    },
+    {
+      "id": "mot_10",
+      "category": "motor",
+      "difficulty": "L3",
+      "consequence": "P_R",
+      "query": "Home motor samX, wait for it to complete, then set its description to 'Sample X translation'",
+      "expected_tools": [
+        "home_motor",
+        "get_motor_status",
+        "set_motor_description"
+      ],
+      "expected_params": {},
+      "ground_truth_check": "tool_chain",
+      "optimal_tool_calls": 3,
+      "description": "Home, verify, then configure motor"
+    },
+    {
+      "id": "pid_01",
+      "category": "phase_id",
+      "difficulty": "L1",
+      "consequence": "C",
+      "query": "Fetch the CIF file for iron (Fe) from the Materials Project",
+      "expected_tools": [
+        "fetch_cif_from_mp"
+      ],
+      "expected_params": {},
+      "ground_truth_check": "tool_called",
+      "optimal_tool_calls": 1,
+      "description": "Fetch CIF from Materials Project"
+    },
+    {
+      "id": "pid_02",
+      "category": "phase_id",
+      "difficulty": "L1",
+      "consequence": "C",
+      "query": "Get the material properties for titanium (Ti)",
+      "expected_tools": [
+        "get_material_properties"
+      ],
+      "expected_params": {},
+      "ground_truth_check": "tool_called",
+      "optimal_tool_calls": 1,
+      "description": "Material properties lookup"
+    },
+    {
+      "id": "pid_03",
+      "category": "phase_id",
+      "difficulty": "L2",
+      "consequence": "C",
+      "query": "Fetch the CIF for nickel from the Materials Project and then run GSAS-II refinement on /data/ni_pattern.xye using that structure",
+      "expected_tools": [
+        "fetch_cif_from_mp",
+        "run_gsas_refinement"
+      ],
+      "expected_params": {},
+      "ground_truth_check": "tool_chain",
+      "optimal_tool_calls": 2,
+      "description": "Fetch CIF then refine"
+    },
+    {
+      "id": "pid_04",
+      "category": "phase_id",
+      "difficulty": "L2",
+      "consequence": "C",
+      "query": "Get the material properties of steel and then get typical HEDM parameters for that material",
+      "expected_tools": [
+        "get_material_properties",
+        "get_typical_hedm_parameters"
+      ],
+      "expected_params": {},
+      "ground_truth_check": "tool_chain",
+      "optimal_tool_calls": 2,
+      "description": "Properties then HEDM params"
+    },
+    {
+      "id": "pid_05",
+      "category": "phase_id",
+      "difficulty": "L2",
+      "consequence": "C",
+      "query": "Integrate the diffraction pattern /data/unknown.ge5 to 1D and then run GSAS refinement to identify the phase",
+      "expected_tools": [
+        "midas_integrate_2d_to_1d",
+        "run_gsas_refinement"
+      ],
+      "expected_params": {},
+      "ground_truth_check": "tool_chain",
+      "optimal_tool_calls": 2,
+      "description": "Integrate then refine for phase ID"
+    },
+    {
+      "id": "pid_06",
+      "category": "phase_id",
+      "difficulty": "L3",
+      "consequence": "C",
+      "query": "Identify the unknown phase in /data/unknown.ge5: integrate to 1D, fetch CIF files for common calibrants (CeO2, LaB6, Si), and run GSAS refinement against each to find the best match",
+      "expected_tools": [
+        "midas_integrate_2d_to_1d",
+        "fetch_cif_from_mp",
+        "run_gsas_refinement"
+      ],
+      "expected_params": {},
+      "ground_truth_check": "tool_chain",
+      "optimal_tool_calls": 5,
+      "description": "Full phase identification pipeline"
+    },
+    {
+      "id": "kno_01",
+      "category": "knowledge",
+      "difficulty": "L1",
+      "consequence": "I",
+      "query": "What is high-energy diffraction microscopy (HEDM)?",
+      "expected_tools": [
+        "query_hedm_knowledge"
+      ],
+      "expected_params": {},
+      "expected_keywords_any": [
+        "polycrystalline",
+        "synchrotron",
+        "grain"
+      ],
+      "ground_truth_check": "tool_or_keywords",
+      "optimal_tool_calls": 1,
+      "description": "HEDM concept explanation"
+    },
+    {
+      "id": "kno_02",
+      "category": "knowledge",
+      "difficulty": "L1",
+      "consequence": "I",
+      "query": "Explain the difference between far-field and near-field HEDM",
+      "expected_tools": [
+        "query_hedm_knowledge"
+      ],
+      "expected_params": {},
+      "expected_keywords_any": [
+        "far-field",
+        "near-field",
+        "ff-hedm",
+        "nf-hedm"
+      ],
+      "ground_truth_check": "tool_or_keywords",
+      "optimal_tool_calls": 1,
+      "description": "FF vs NF HEDM"
+    },
+    {
+      "id": "kno_03",
+      "category": "knowledge",
+      "difficulty": "L1",
+      "consequence": "I",
+      "query": "What is Rietveld refinement and when should I use it?",
+      "expected_tools": [
+        "query_hedm_knowledge"
+      ],
+      "expected_params": {},
+      "expected_keywords_any": [
+        "rietveld",
+        "least-squares",
+        "powder",
+        "refinement"
+      ],
+      "ground_truth_check": "tool_or_keywords",
+      "optimal_tool_calls": 1,
+      "description": "Rietveld refinement explanation"
+    },
+    {
+      "id": "kno_04",
+      "category": "knowledge",
+      "difficulty": "L1",
+      "consequence": "I",
+      "query": "What are the best practices for detector calibration at a synchrotron beamline?",
+      "expected_tools": [
+        "query_hedm_knowledge"
+      ],
+      "expected_params": {},
+      "expected_keywords_any": [
+        "ceo2",
+        "lab6",
+        "calibrant",
+        "beam center"
+      ],
+      "ground_truth_check": "tool_or_keywords",
+      "optimal_tool_calls": 1,
+      "description": "Calibration best practices"
+    },
+    {
+      "id": "kno_05",
+      "category": "knowledge",
+      "difficulty": "L1",
+      "consequence": "I",
+      "query": "What material properties affect diffraction peak broadening?",
+      "expected_tools": [
+        "query_hedm_knowledge"
+      ],
+      "expected_params": {},
+      "expected_keywords_any": [
+        "crystallite size",
+        "strain",
+        "instrumental",
+        "scherrer"
+      ],
+      "ground_truth_check": "tool_or_keywords",
+      "optimal_tool_calls": 1,
+      "description": "Peak broadening factors"
+    },
+    {
+      "id": "kno_06",
+      "category": "knowledge",
+      "difficulty": "L1",
+      "consequence": "I",
+      "query": "How does grain matching work in HEDM experiments across load steps?",
+      "expected_tools": [
+        "query_hedm_knowledge"
+      ],
+      "expected_params": {},
+      "expected_keywords_any": [
+        "misorientation",
+        "centroid",
+        "match_grains",
+        "tracking"
+      ],
+      "ground_truth_check": "tool_or_keywords",
+      "optimal_tool_calls": 1,
+      "description": "Grain matching explanation"
+    },
+    {
+      "id": "kno_07",
+      "category": "knowledge",
+      "difficulty": "L2",
+      "consequence": "I",
+      "query": "Explain the HEDM workflow and then show me the typical parameters for a titanium sample",
+      "expected_tools": [
+        "query_hedm_knowledge",
+        "get_typical_hedm_parameters"
+      ],
+      "expected_params": {},
+      "expected_keywords_any": [
+        "titanium",
+        "hcp",
+        "lattice"
+      ],
+      "ground_truth_check": "tool_or_keywords",
+      "optimal_tool_calls": 2,
+      "description": "Knowledge then specific params"
+    },
+    {
+      "id": "kno_08",
+      "category": "knowledge",
+      "difficulty": "L2",
+      "consequence": "I",
+      "query": "What calibrants are available, and which one is best for high-energy experiments above 50 keV?",
+      "expected_tools": [
+        "list_common_calibrants",
+        "query_hedm_knowledge"
+      ],
+      "expected_params": {},
+      "expected_keywords_any": [
+        "ceo2",
+        "lab6",
+        "cebr3",
+        "cerium"
+      ],
+      "ground_truth_check": "tool_or_keywords",
+      "optimal_tool_calls": 2,
+      "description": "List calibrants then expert advice"
+    },
+    {
+      "id": "ref_01",
+      "category": "phase_id",
+      "difficulty": "L2",
+      "consequence": "C",
+      "query": "Refine the CeO2 calibration data at benchmark/detector_zoo/varex_aero/integration/Ceria_63keV_900mm_100x100_0p5s_aero_0_001137.tif.caked.hdf.zarr.zip against the CeO2 CIF (a=5.4116 \u00c5, Fm-3m) using GSAS-II. Use 2\u03b8 limits 2.0-11.0 deg.",
+      "expected_tools": [
+        "run_gsas_refinement"
+      ],
+      "expected_params": {
+        "limits": [
+          2.0,
+          11.0
+        ],
+        "phase": "CeO2"
+      },
+      "ground_truth_check": "value_within_tolerance",
+      "ground_truth_value": {
+        "mean_a_angstrom": 5.4116,
+        "tolerance_mA": 1.0,
+        "max_median_rwp_pct": 30.0
+      },
+      "optimal_tool_calls": 1,
+      "description": "GSAS-II Rietveld refinement of CeO2 (Varex aero detector). Validates that the agent picks correct 2\u03b8 window for the given \u03bb=0.197 \u00c5 and reaches lattice within 10 m\u00c5 of NIST CeO2."
+    },
+    {
+      "id": "ref_02",
+      "category": "phase_id",
+      "difficulty": "L2",
+      "consequence": "C",
+      "query": "Refine the Varex distortion CeO2 calibration at benchmark/detector_zoo/varex_distortion/integration/CeO2_10s_1000mm_42keV_000718.tiff.caked.hdf.zarr.zip with the CeO2 CIF. Wavelength is 0.29519 \u00c5, distance ~1001 mm. Choose appropriate 2\u03b8 limits to skip the beam-stop region.",
+      "expected_tools": [
+        "run_gsas_refinement"
+      ],
+      "expected_params": {
+        "phase": "CeO2",
+        "limits_low_min": 2.5,
+        "limits_high_min": 10.0
+      },
+      "ground_truth_check": "value_within_tolerance",
+      "ground_truth_value": {
+        "mean_a_angstrom": 5.41153,
+        "tolerance_mA": 2.0,
+        "max_median_rwp_pct": 15.0
+      },
+      "optimal_tool_calls": 1,
+      "description": "GSAS-II refinement on a higher-distortion Varex detector. Tests whether the agent picks 2\u03b8 limits that bracket CeO2 (111)\u2014(331) at \u03bb=0.295 \u00c5."
+    },
+    {
+      "id": "ref_03",
+      "category": "phase_id",
+      "difficulty": "L3",
+      "consequence": "C",
+      "query": "Refine the Pilatus CeO2 dataset at benchmark/detector_zoo/pilatus/integration/CeO2_Pil_100x100_att000_650mm_71p676keV_001956.tif.caked.hdf.zarr.zip. Pilatus has inter-module gaps; intensities at gap pixels are NaN. Pre-clean the lineouts (NaN \u2192 0) and run refinement with appropriate 2\u03b8 limits.",
+      "expected_tools": [
+        "inspect_dataset_file",
+        "run_gsas_refinement"
+      ],
+      "expected_params": {
+        "phase": "CeO2",
+        "handle_nan": true
+      },
+      "ground_truth_check": "value_within_tolerance",
+      "ground_truth_value": {
+        "mean_a_angstrom": 5.41109,
+        "tolerance_mA": 5.0,
+        "max_median_rwp_pct": 40.0
+      },
+      "optimal_tool_calls": 2,
+      "description": "Multi-module detector with NaN gaps. Tests whether the agent recognizes the data quirk before refinement instead of letting GSAS-II silently drop bad bins."
+    },
+    {
+      "id": "ref_04",
+      "category": "phase_id",
+      "difficulty": "L3",
+      "consequence": "C",
+      "query": "Refine the GE detector CeO2 dataset at benchmark/detector_zoo/ge/integration/CeO2_1s_65pt351keV_1860mm_000007.edf.ge1.caked.hdf.zarr.zip. The GE is at 1862 mm so 2\u03b8 ranges are compressed.",
+      "expected_tools": [
+        "run_gsas_refinement"
+      ],
+      "expected_params": {
+        "phase": "CeO2"
+      },
+      "ground_truth_check": "value_within_tolerance",
+      "ground_truth_value": {
+        "mean_a_angstrom": 5.41158,
+        "tolerance_mA": 2.0,
+        "max_median_rwp_pct": 30.0
+      },
+      "optimal_tool_calls": 1,
+      "description": "Long-distance GE detector, single-frame data (only 81 valid lineouts). Tests refinement under low-statistics conditions."
+    },
+    {
+      "id": "ref_05",
+      "category": "calibration",
+      "difficulty": "L2",
+      "consequence": "C",
+      "query": "Auto-calibrate the Pilatus detector using benchmark/detector_zoo/pilatus/calib/CeO2_Pil_100x100_att000_650mm_71p676keV_001956.tif (calibrant CeO2, \u03bb=0.172979 \u00c5, pixel size 172 \u00b5m). A dark frame is in the same folder.",
+      "expected_tools": [
+        "midas_auto_calibrate"
+      ],
+      "expected_params": {
+        "calibrant": "CeO2",
+        "px": 172.0,
+        "wavelength": 0.172979,
+        "im_trans": 2,
+        "fit_p_models": "all"
+      },
+      "ground_truth_check": "value_within_tolerance",
+      "ground_truth_value": {
+        "Lsd_um": 657529.96,
+        "BC_Y": 685.44,
+        "BC_Z": 921.04,
+        "max_mean_strain": 5e-05,
+        "tolerance_Lsd_um": 100.0
+      },
+      "optimal_tool_calls": 1,
+      "description": "Pilatus calibration. Tests detection of dark file, correct image transform, and fit-p-models flag."
+    },
+    {
+      "id": "ref_06",
+      "category": "calibration",
+      "difficulty": "L2",
+      "consequence": "C",
+      "query": "Auto-calibrate the GE detector using benchmark/detector_zoo/ge/calib/CeO2_1s_65pt351keV_1860mm_000007.edf.ge1 (calibrant CeO2, pixel 200 \u00b5m, \u03bb derivable from 65.351 keV). A dark frame dark_6s_000010.ge1 is in the same folder.",
+      "expected_tools": [
+        "xray_calculate",
+        "midas_auto_calibrate"
+      ],
+      "expected_params": {
+        "calibrant": "CeO2",
+        "px": 200.0,
+        "fit_p_models": "all"
+      },
+      "ground_truth_check": "value_within_tolerance",
+      "ground_truth_value": {
+        "Lsd_um": 1862642.46,
+        "BC_Y": 2275.25,
+        "BC_Z": 2211.91,
+        "max_mean_strain": 1e-05,
+        "tolerance_Lsd_um": 200.0,
+        "lambda_angstrom": 0.189714
+      },
+      "optimal_tool_calls": 2,
+      "description": "GE calibration with energy\u2192wavelength conversion. Long-distance (1862 mm) so geometry tolerances are loose."
+    },
+    {
+      "id": "ref_07",
+      "category": "calibration",
+      "difficulty": "L3",
+      "consequence": "C",
+      "query": "Calibrate all four detectors in benchmark/detector_zoo/ (varex_distortion, varex_aero, pilatus, ge). Each has a CeO2 image in its calib/ subfolder. Pixel sizes and wavelengths differ. After calibration, report which detector has the best convergence (lowest mean strain).",
+      "expected_tools": [
+        "list_directory",
+        "midas_auto_calibrate",
+        "midas_auto_calibrate",
+        "midas_auto_calibrate",
+        "midas_auto_calibrate"
+      ],
+      "expected_params": {},
+      "ground_truth_check": "tool_chain_with_value",
+      "ground_truth_value": {
+        "best_detector": "varex_aero",
+        "best_mean_strain": 4.11e-06,
+        "all_strains_under": 5e-05
+      },
+      "optimal_tool_calls": 5,
+      "description": "Multi-detector cross-generalization: agent must enumerate the zoo, look up correct geometry per detector, run 4 calibrations, and rank by mean strain. Hardest calibration task in the suite."
+    },
+    {
+      "id": "ref_08",
+      "category": "phase_id",
+      "difficulty": "L3",
+      "consequence": "C",
+      "query": "Compute the lattice constant of CeO2 measured by each of the four detectors in benchmark/detector_zoo/ (after calibration and integration are already done). Compare against the NIST reference 5.4116 \u00c5 and identify the most accurate detector.",
+      "expected_tools": [
+        "list_directory",
+        "run_gsas_refinement",
+        "run_gsas_refinement",
+        "run_gsas_refinement",
+        "run_gsas_refinement"
+      ],
+      "expected_params": {
+        "phase": "CeO2"
+      },
+      "ground_truth_check": "value_within_tolerance",
+      "ground_truth_value": {
+        "varex_aero": {
+          "mean_a": 5.4116,
+          "abs_da_mA": 0.05
+        },
+        "varex_distortion": {
+          "mean_a": 5.41153,
+          "abs_da_mA": 0.12
+        },
+        "pilatus": {
+          "mean_a": 5.41109,
+          "abs_da_mA": 0.56
+        },
+        "ge": {
+          "mean_a": 5.41158,
+          "abs_da_mA": 0.07
+        },
+        "best_detector": "varex_aero",
+        "ref_a_angstrom": 5.41165
+      },
+      "optimal_tool_calls": 5,
+      "description": "Cross-detector lattice-accuracy benchmark. Validates the full calibration\u2192integration\u2192refinement chain reproduces NIST CeO2 within sensible tolerance per detector."
+    }
+  ]
+}

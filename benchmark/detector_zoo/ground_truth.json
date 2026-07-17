@@ -1,0 +1,186 @@
+{
+  "schema_version": "2.0",
+  "generated": "2026-05-04",
+  "description": "Ground truth manifest for cross-detector calibration + refinement benchmark tasks (ref_01..ref_08). Built from MIDAS Example calibration data (CeO2) on four detector geometries: Varex with distortion, Varex aero, Pilatus, and GE.",
+  "v2_notes": "Refinement upgraded from v1 to v2 on 2026-05-04. Two pipeline bugs fixed: (1) NaN-safe extraction — gsas_ii_refine.py did no isfinite filter so Pilatus module-gap NaN bins biased the residual; (2) starting CIF — Materials Project mp-20194 has DFT-relaxed a=5.4674 Å (~55 mÅ above NIST) and the per-slice landscape did not pull the cell that far for low-statistics detectors. V2 uses a NIST-cell CIF (a=5.41165) and skips Atom refinement (which destabilized low-count single-frame data). All four detectors now achieve sub-mÅ accuracy.",
+  "calibrant": {
+    "phase": "CeO2",
+    "space_group": "Fm-3m",
+    "a_ref_A": 5.41165,
+    "source": "NIST SRM 674b certified value at room temperature",
+    "starting_cif": "benchmark/detector_zoo/CeO2_NIST_5p41165.cif"
+  },
+  "recipe": {
+    "calibration": "MIDAS AutoCalibrateZarr.py (4-stage geometry/distortion/spline/evaluate)",
+    "integration": "MIDAS .caked.hdf -> kerchunk-style zarr.zip via midas2zip.Hdf5ToZarr (bypasses integrator.py _enrich_zarr_with_metadata div-by-zero bug)",
+    "refinement": "GSAS-II scriptable via benchmark/detector_zoo/refine_v2.py — NaN-safe per-slice extraction (mask = (area>0) & isfinite(intensity)), NIST starting CIF, stages: Background+Scale → Cell → U,V,W → X,Y,SH/L (NO Atom refinement). Per-detector .instprm auto-generated from zarr InstrumentParameters group.",
+    "convergence_filter": "Lattice accepted only if 4.5 < a < 6.5 A (rejects diverged refinements; in v2 all 4 detectors have 100% acceptance)"
+  },
+  "detectors": {
+    "varex_distortion": {
+      "task_ids": ["ref_02"],
+      "source_image": "MIDAS/FF_HEDM/Example/Calibration/CeO2_10s_1000mm_42keV_000718.tiff",
+      "image_format": "TIFF",
+      "wavelength_A": 0.29519,
+      "energy_keV": 42.0,
+      "pixel_size_um": 150.0,
+      "calibration": {
+        "Lsd_um": 1001740.122868,
+        "BC_px": [1435.889192, 1334.088073],
+        "tx_deg": 0.0,
+        "ty_deg": -0.392407,
+        "tz_deg": -0.236011,
+        "mean_strain": 3.2508511e-05,
+        "std_strain": 2.8450172e-05
+      },
+      "refinement_recipe": {
+        "tth_limits_deg": [3.0, 13.5],
+        "n_eta_slices": 360,
+        "refine_atoms": false
+      },
+      "ground_truth_v1": {
+        "n_ok": 265, "n_total": 360,
+        "median_Rwp_pct": 19.92, "mean_Rwp_pct": 33.26,
+        "mean_a_A": 5.40208, "std_a_A": 0.23515, "abs_da_mA": 9.52
+      },
+      "ground_truth": {
+        "n_ok": 360, "n_total": 360,
+        "median_Rwp_pct": 6.21, "mean_Rwp_pct": 16.78,
+        "mean_a_A": 5.41153, "median_a_A": 5.41155, "std_a_A": 0.000260, "abs_da_mA": 0.12
+      }
+    },
+    "varex_aero": {
+      "task_ids": ["ref_01"],
+      "source_image": "MIDAS/FF_HEDM/Example/Calibration/Ceria_63keV_900mm_100x100_0p5s_aero_0_001137.tif",
+      "image_format": "TIFF",
+      "wavelength_A": 0.196793,
+      "energy_keV": 63.0,
+      "pixel_size_um": 150.0,
+      "calibration": {
+        "Lsd_um": 895931.183588,
+        "BC_px": [1446.973936, 1468.910466],
+        "tx_deg": 0.0,
+        "ty_deg": -0.308404,
+        "tz_deg": 0.389465,
+        "mean_strain": 4.110508e-06,
+        "std_strain": 3.595464e-06
+      },
+      "refinement_recipe": {
+        "tth_limits_deg": [2.0, 11.0],
+        "n_eta_slices": 360,
+        "refine_atoms": false
+      },
+      "ground_truth_v1": {
+        "n_ok": 360, "n_total": 360,
+        "median_Rwp_pct": 56.30, "mean_Rwp_pct": 53.66,
+        "mean_a_A": 5.41541, "std_a_A": 0.00244, "abs_da_mA": 3.81
+      },
+      "ground_truth": {
+        "n_ok": 360, "n_total": 360,
+        "median_Rwp_pct": 18.44, "mean_Rwp_pct": 18.55,
+        "mean_a_A": 5.41160, "median_a_A": 5.41161, "std_a_A": 0.0000450, "abs_da_mA": 0.05
+      }
+    },
+    "pilatus": {
+      "task_ids": ["ref_03", "ref_05"],
+      "source_image": "MIDAS/FF_HEDM/Example/Calibration/CeO2_Pil_100x100_att000_650mm_71p676keV_001956.tif",
+      "dark_image": "MIDAS/FF_HEDM/Example/Calibration/dark_CeO2_Pil_100x100_att000_650mm_71p676keV_001975.tif",
+      "image_format": "TIFF",
+      "wavelength_A": 0.172979,
+      "energy_keV": 71.676,
+      "pixel_size_um": 172.0,
+      "notes": "Module gaps produce NaN-bins in the lineout. V2 NaN-safe extraction recovers all 360 slices.",
+      "calibration": {
+        "Lsd_um": 657529.964013,
+        "BC_px": [685.442634, 921.042306],
+        "tx_deg": 0.0,
+        "ty_deg": 0.219637,
+        "tz_deg": 0.506568,
+        "mean_strain": 1.6855408e-05,
+        "std_strain": 1.2085308e-05
+      },
+      "refinement_recipe": {
+        "tth_limits_deg": [2.0, 12.0],
+        "n_eta_slices": 360,
+        "refine_atoms": false
+      },
+      "ground_truth_v1": {
+        "n_ok": 334, "n_total": 360,
+        "median_Rwp_pct": 73.07, "mean_Rwp_pct": 74.11,
+        "mean_a_A": 5.34834, "std_a_A": 0.22553, "abs_da_mA": 63.26
+      },
+      "ground_truth": {
+        "n_ok": 360, "n_total": 360,
+        "median_Rwp_pct": 26.52, "mean_Rwp_pct": 35.28,
+        "mean_a_A": 5.41109, "median_a_A": 5.41146, "std_a_A": 0.001534, "abs_da_mA": 0.56
+      }
+    },
+    "ge": {
+      "task_ids": ["ref_04", "ref_06"],
+      "source_image": "MIDAS/FF_HEDM/Example/Calibration/CeO2_1s_65pt351keV_1860mm_000007.edf.ge1",
+      "dark_image": "MIDAS/FF_HEDM/Example/Calibration/dark_6s_000010.ge1",
+      "image_format": "GE1 (raw, single frame)",
+      "wavelength_A": 0.189714,
+      "energy_keV": 65.351,
+      "pixel_size_um": 200.0,
+      "notes": "Single-frame data limits statistics to 81 azimuthal slices. Energy must be converted to wavelength via Planck relation: lambda(A) = 12.39842 / E(keV). V2 tighter window [2.5, 11.5] avoids low-2theta junk that biased v1.",
+      "calibration": {
+        "Lsd_um": 1862642.458496,
+        "BC_px": [2275.254707, 2211.906519],
+        "tx_deg": 0.0,
+        "ty_deg": -0.097355,
+        "tz_deg": 0.338733,
+        "mean_strain": 7.426751e-06,
+        "std_strain": 6.748245e-06
+      },
+      "refinement_recipe": {
+        "tth_limits_deg": [2.5, 11.5],
+        "n_eta_slices": 81,
+        "refine_atoms": false
+      },
+      "ground_truth_v1": {
+        "n_ok": 70, "n_total": 81,
+        "median_Rwp_pct": 92.18, "mean_Rwp_pct": 91.39,
+        "mean_a_A": 5.47690, "std_a_A": 0.07652, "abs_da_mA": 65.30
+      },
+      "ground_truth": {
+        "n_ok": 81, "n_total": 81,
+        "median_Rwp_pct": 18.67, "mean_Rwp_pct": 15.55,
+        "mean_a_A": 5.41158, "median_a_A": 5.41159, "std_a_A": 0.000101, "abs_da_mA": 0.07
+      }
+    }
+  },
+  "cross_detector_rankings": {
+    "ref_07_calibration_quality": {
+      "metric": "mean_strain (lower = better)",
+      "ranking": [
+        {"detector": "varex_aero", "mean_strain": 4.110508e-06},
+        {"detector": "ge", "mean_strain": 7.426751e-06},
+        {"detector": "pilatus", "mean_strain": 1.6855408e-05},
+        {"detector": "varex_distortion", "mean_strain": 3.2508511e-05}
+      ],
+      "best": "varex_aero"
+    },
+    "ref_08_lattice_accuracy_v2": {
+      "metric": "abs(mean_a - a_ref) in milliangstroms (lower = better)",
+      "a_ref_A": 5.41165,
+      "ranking": [
+        {"detector": "varex_aero", "abs_da_mA": 0.05},
+        {"detector": "ge", "abs_da_mA": 0.07},
+        {"detector": "varex_distortion", "abs_da_mA": 0.12},
+        {"detector": "pilatus", "abs_da_mA": 0.56}
+      ],
+      "best": "varex_aero"
+    }
+  },
+  "task_to_detector_map": {
+    "ref_01": "varex_aero",
+    "ref_02": "varex_distortion",
+    "ref_03": "pilatus",
+    "ref_04": "ge",
+    "ref_05": "pilatus",
+    "ref_06": "ge",
+    "ref_07": "ALL (multi-detector ranking)",
+    "ref_08": "ALL (multi-detector ranking)"
+  }
+}
