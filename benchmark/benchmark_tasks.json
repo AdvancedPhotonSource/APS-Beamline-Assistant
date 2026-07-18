@@ -8,7 +8,7 @@
       "integration",
       "hedm",
       "motor",
-      "phase_id",
+      "refinement",
       "knowledge"
     ],
     "difficulty_levels": [
@@ -581,7 +581,7 @@
     },
     {
       "id": "pid_01",
-      "category": "phase_id",
+      "category": "refinement",
       "difficulty": "L1",
       "consequence": "C",
       "query": "Fetch the CIF file for iron (Fe) from the Materials Project",
@@ -595,7 +595,7 @@
     },
     {
       "id": "pid_02",
-      "category": "phase_id",
+      "category": "refinement",
       "difficulty": "L1",
       "consequence": "C",
       "query": "Get the material properties for titanium (Ti)",
@@ -609,7 +609,7 @@
     },
     {
       "id": "pid_03",
-      "category": "phase_id",
+      "category": "refinement",
       "difficulty": "L2",
       "consequence": "C",
       "query": "Fetch the CIF for nickel from the Materials Project and then run GSAS-II refinement on /data/ni_pattern.xye using that structure",
@@ -624,7 +624,7 @@
     },
     {
       "id": "pid_04",
-      "category": "phase_id",
+      "category": "refinement",
       "difficulty": "L2",
       "consequence": "C",
       "query": "Get the material properties of steel and then get typical HEDM parameters for that material",
@@ -639,7 +639,7 @@
     },
     {
       "id": "pid_05",
-      "category": "phase_id",
+      "category": "refinement",
       "difficulty": "L2",
       "consequence": "C",
       "query": "Integrate the diffraction pattern /data/unknown.ge5 to 1D and then run GSAS refinement to identify the phase",
@@ -654,7 +654,7 @@
     },
     {
       "id": "pid_06",
-      "category": "phase_id",
+      "category": "refinement",
       "difficulty": "L3",
       "consequence": "C",
       "query": "Identify the unknown phase in /data/unknown.ge5: integrate to 1D, fetch CIF files for common calibrants (CeO2, LaB6, Si), and run GSAS refinement against each to find the best match",
@@ -830,7 +830,7 @@
     },
     {
       "id": "ref_01",
-      "category": "phase_id",
+      "category": "refinement",
       "difficulty": "L2",
       "consequence": "C",
       "query": "Refine the CeO2 calibration data at benchmark/detector_zoo/varex_aero/integration/Ceria_63keV_900mm_100x100_0p5s_aero_0_001137.tif.caked.hdf.zarr.zip against the CeO2 CIF (a=5.4116 \u00c5, Fm-3m) using GSAS-II. Use 2\u03b8 limits 2.0-11.0 deg.",
@@ -855,7 +855,7 @@
     },
     {
       "id": "ref_02",
-      "category": "phase_id",
+      "category": "refinement",
       "difficulty": "L2",
       "consequence": "C",
       "query": "Refine the Varex distortion CeO2 calibration at benchmark/detector_zoo/varex_distortion/integration/CeO2_10s_1000mm_42keV_000718.tiff.caked.hdf.zarr.zip with the CeO2 CIF. Wavelength is 0.29519 \u00c5, distance ~1001 mm. Choose appropriate 2\u03b8 limits to skip the beam-stop region.",
@@ -878,7 +878,7 @@
     },
     {
       "id": "ref_03",
-      "category": "phase_id",
+      "category": "refinement",
       "difficulty": "L3",
       "consequence": "C",
       "query": "Refine the Pilatus CeO2 dataset at benchmark/detector_zoo/pilatus/integration/CeO2_Pil_100x100_att000_650mm_71p676keV_001956.tif.caked.hdf.zarr.zip. Pilatus has inter-module gaps; intensities at gap pixels are NaN. Pre-clean the lineouts (NaN \u2192 0) and run refinement with appropriate 2\u03b8 limits.",
@@ -901,7 +901,7 @@
     },
     {
       "id": "ref_04",
-      "category": "phase_id",
+      "category": "refinement",
       "difficulty": "L3",
       "consequence": "C",
       "query": "Refine the GE detector CeO2 dataset at benchmark/detector_zoo/ge/integration/CeO2_1s_65pt351keV_1860mm_000007.edf.ge1.caked.hdf.zarr.zip. The GE is at 1862 mm so 2\u03b8 ranges are compressed.",
@@ -999,7 +999,7 @@
     },
     {
       "id": "ref_08",
-      "category": "phase_id",
+      "category": "refinement",
       "difficulty": "L3",
       "consequence": "C",
       "query": "Compute the lattice constant of CeO2 measured by each of the four detectors in benchmark/detector_zoo/ (after calibration and integration are already done). Compare against the NIST reference 5.4116 \u00c5 and identify the most accurate detector.",

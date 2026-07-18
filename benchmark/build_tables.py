@@ -41,7 +41,7 @@ CONFIG_LABELS = {"single": "Single", "keyword": "Keyword",
                   "dspy": "DSPy", "autogen": "AutoGen"}
 
 CATEGORIES = ["calibration", "integration", "hedm", "motor",
-               "phase_id", "knowledge"]
+               "refinement", "knowledge"]
 CAT_HEADERS = ["Cal.", "Int.", "HEDM", "Motor", "PhaseID", "Know."]
 
 
