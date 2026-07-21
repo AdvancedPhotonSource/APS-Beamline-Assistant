@@ -38,6 +38,10 @@ import httpx
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional, Callable, Awaitable
 from interaction_logger import InteractionLogger, InteractionEntry
+from apexa_timing import (
+    log_llm_call, count_message_tokens, count_tokens,
+    record_llm_call, current_query_id,
+)
 
 # ── Compact directory listing ───────────────────────────────────────────────
 
@@ -225,7 +229,11 @@ class ArgoProvider:
 
     # ── Response parsing ────────────────────────────────────────────────────
 
-    def _parse_tool_calls(self, raw: List[Dict]) -> List[ToolCall]:
+    @staticmethod
+    def _parse_tool_calls(raw: List[Dict]) -> List[ToolCall]:
+        """Normalise per-provider native tool-call shapes into ToolCall. Static
+        so both ArgoProvider (blocking /chat/) and StreamingAnthropicProvider
+        (streaming /messages/) can share the parser."""
         calls: List[ToolCall] = []
         for i, tc in enumerate(raw):
             if "function" in tc:               # OpenAI format
@@ -304,26 +312,43 @@ class ArgoProvider:
             debug_payload = {k: v for k, v in payload.items() if k != "messages"}
             print(f"  [debug] Argo payload: {debug_payload}", file=sys.stderr)
 
+        # Prompt token estimate is call-wide; response tokens are per-attempt.
+        prompt_tok = count_message_tokens(payload.get("messages", []), self.model)
+        n_messages = len(payload.get("messages", []))
+
         retries = 3
         for attempt in range(retries):
+            t0 = time.monotonic()
+            status: int = 0
+            error: str  = ""
+            data: Dict[str, Any] = {}
+            parsed: Optional[AgentResponse] = None
             try:
-                t0 = time.monotonic()
                 response = await self._client.post(
                     self.url, json=payload,
                     headers={"Content-Type": "application/json"},
                 )
                 elapsed = time.monotonic() - t0
+                status  = response.status_code
                 if os.environ.get("APEXA_SHOW_TIMING"):
                     print(f"  \033[2m⏱ {self.model} responded in {elapsed:.1f}s\033[0m", flush=True)
-                if response.status_code in (502, 503, 429):
+                if status in (502, 503, 429):
                     wait = 2 ** attempt
-                    print(f"  \033[33m⚠ Argo {response.status_code}, retrying in {wait}s ({attempt+1}/{retries})\033[0m")
+                    print(f"  \033[33m⚠ Argo {status}, retrying in {wait}s ({attempt+1}/{retries})\033[0m")
+                    log_llm_call(self._timing_record(
+                        attempt=attempt, status=status, elapsed=elapsed,
+                        prompt_tok=prompt_tok, n_messages=n_messages,
+                        temperature=temperature, error=f"retry_{status}"))
                     await asyncio.sleep(wait)
                     continue
-                if response.status_code != 200:
-                    print(f"  Argo API error ({response.status_code}): {response.text[:500]}", file=sys.stderr)
+                if status != 200:
+                    print(f"  Argo API error ({status}): {response.text[:500]}", file=sys.stderr)
+                    log_llm_call(self._timing_record(
+                        attempt=attempt, status=status, elapsed=elapsed,
+                        prompt_tok=prompt_tok, n_messages=n_messages,
+                        temperature=temperature, error=f"http_{status}"))
                     response.raise_for_status()
-                data = response.json()
+                data   = response.json()
                 parsed = self._parse_response(data)
                 # Diagnostic: a 200 with NO content and NO tool calls is the
                 # degenerate case that surfaced as the "Hi I'm APEXA" greeting.
@@ -338,8 +363,18 @@ class ArgoProvider:
                     print(f"  \033[33m⚠ Argo returned an EMPTY completion\033[0m "
                           f"(model={self.model}, user={self.username!r}). Raw: {_raw}",
                           file=sys.stderr)
+                log_llm_call(self._timing_record(
+                    attempt=attempt, status=status, elapsed=elapsed,
+                    prompt_tok=prompt_tok, n_messages=n_messages,
+                    temperature=temperature, parsed=parsed,
+                    empty=not (parsed.content or parsed.tool_calls)))
                 return parsed
             except httpx.TimeoutException:
+                elapsed = time.monotonic() - t0
+                log_llm_call(self._timing_record(
+                    attempt=attempt, status=0, elapsed=elapsed,
+                    prompt_tok=prompt_tok, n_messages=n_messages,
+                    temperature=temperature, error="timeout"))
                 if attempt < retries - 1:
                     wait = 2 ** attempt
                     print(f"  \033[33m⚠ Argo timeout, retrying in {wait}s ({attempt+1}/{retries})\033[0m")
@@ -349,8 +384,299 @@ class ArgoProvider:
         response.raise_for_status()
         return self._parse_response(response.json())
 
+    def _timing_record(self, *, attempt: int, status: int, elapsed: float,
+                       prompt_tok: int, n_messages: int,
+                       temperature: float,
+                       parsed: Optional[AgentResponse] = None,
+                       empty: bool = False,
+                       error: str = "") -> Dict[str, Any]:
+        """Build one JSONL row for the timing log. Kept out of the hot path so
+        the retry loop stays readable. Also feeds Tier-2 aggregation via
+        ``record_llm_call`` when a call actually landed (200)."""
+        resp_tok = 0
+        n_tool_calls = 0
+        if parsed is not None:
+            resp_tok = count_tokens(parsed.content or "", self.model)
+            n_tool_calls = len(parsed.tool_calls)
+        gen_tps = (resp_tok / elapsed) if (elapsed > 0 and resp_tok) else 0.0
+        # Only count "real" completed calls into per-query totals — a retried
+        # 502/503 or timeout would otherwise double-count wall-clock. Successful
+        # 200s and terminal HTTP errors (raise_for_status about to fire) both
+        # represent real time spent, so include them; skip only mid-loop retries.
+        if not error.startswith("retry_"):
+            record_llm_call(elapsed_s=elapsed,
+                            prompt_tok=prompt_tok,
+                            response_tok=resp_tok)
+        return {
+            "endpoint":     "argo-chat",
+            "query_id":     current_query_id() or "",
+            "model":        self.model,
+            "attempt":      attempt,
+            "http_status":  status,
+            "elapsed_s":    round(elapsed, 3),
+            "prompt_tok":   prompt_tok,
+            "response_tok": resp_tok,
+            "gen_tps":      round(gen_tps, 2),
+            "n_messages":   n_messages,
+            "n_tool_calls": n_tool_calls,
+            "temperature":  temperature,
+            "empty":        empty,
+            "error":        error,
+        }
+
     async def close(self):
         await self._client.aclose()
+
+
+# ── Streaming Anthropic-native provider (Tier 3 instrumentation) ────────────
+
+class StreamingAnthropicProvider:
+    """Streaming provider for the Anthropic-native ``/messages/`` endpoint
+    exposed by Argo Gateway (per CLAUDE.md).
+
+    Purpose is instrumentation: unlike Argo ``/chat/`` (blocking, returns a
+    single JSON blob), this endpoint streams SSE, so we can measure real
+    **TTFT** (time-to-first-token) and **TPOT** (time-per-output-token) — the
+    metrics NVIDIA reports in DGX Spark agentic benchmarks.
+
+    Only valid for ``claude*`` models. Opt in via ``APEXA_PROVIDER=streaming``.
+    """
+
+    URL_PATH = "/v1/messages"
+    _BASE    = "https://apps.inside.anl.gov/argoapi"
+
+    def __init__(self, username: str, model: str):
+        self.username = username
+        self.model    = model
+        self.url      = f"{self._BASE}{self.URL_PATH}"
+        self._client  = httpx.AsyncClient(timeout=180.0)
+
+    @staticmethod
+    def _split_system(messages: List[Dict]) -> tuple:
+        """Anthropic native takes ``system`` as a top-level string, not a role
+        in the messages array. Extract system turns and coerce content to str."""
+        sys_parts: List[str] = []
+        others:    List[Dict] = []
+        for m in messages:
+            role = m.get("role", "user")
+            c    = m.get("content", "")
+            if c is None:
+                c = ""
+            elif not isinstance(c, str):
+                try:
+                    c = json.dumps(c)
+                except Exception:
+                    c = str(c)
+            if role == "system":
+                if c:
+                    sys_parts.append(c)
+            else:
+                others.append({"role": role, "content": c})
+        return "\n\n".join(sys_parts), others
+
+    def _build_payload(self, messages: List[Dict], temperature: float) -> Dict:
+        system_str, msgs = self._split_system(messages)
+        payload: Dict[str, Any] = {
+            "model":      self.model,
+            "messages":   msgs,
+            "max_tokens": 21000,
+            "stream":     True,
+        }
+        if system_str:
+            payload["system"] = system_str
+        # Opus 4.7/4.8 silently drop temperature; other Claude models accept it.
+        if self.model not in ("claudeopus48", "claudeopus47"):
+            payload["temperature"] = temperature
+        return payload
+
+    async def chat(self, messages: List[Dict],
+                   temperature: float = 0.7) -> AgentResponse:
+        payload    = self._build_payload(messages, temperature)
+        prompt_est = count_message_tokens(payload.get("messages", []), self.model)
+        n_messages = len(payload.get("messages", []))
+        headers = {
+            "x-api-key":         self.username,
+            "anthropic-version": "2023-06-01",
+            "content-type":      "application/json",
+        }
+
+        t0            = time.monotonic()
+        t_first_token: Optional[float] = None
+        content_parts: List[str]  = []
+        tool_raw:      List[Dict] = []
+        input_tokens  = 0
+        output_tokens = 0
+        current_tool: Optional[Dict[str, Any]] = None
+        stream_error  = ""
+        status        = 0
+
+        try:
+            async with self._client.stream("POST", self.url,
+                                           json=payload, headers=headers) as resp:
+                status = resp.status_code
+                if status != 200:
+                    body = (await resp.aread())[:400]
+                    stream_error = f"http_{status}"
+                    self._log_row(t0=t0, status=status, prompt_tok=prompt_est,
+                                  n_messages=n_messages, temperature=temperature,
+                                  content="", tool_calls_n=0,
+                                  t_first_token=None, input_tokens=prompt_est,
+                                  output_tokens=0, error=stream_error)
+                    resp.raise_for_status()
+
+                async for line in resp.aiter_lines():
+                    if not line or not line.startswith("data:"):
+                        continue
+                    raw = line[5:].strip()
+                    if raw == "[DONE]":
+                        break
+                    try:
+                        ev = json.loads(raw)
+                    except json.JSONDecodeError:
+                        continue
+                    typ = ev.get("type", "")
+                    if typ == "message_start":
+                        usage = ev.get("message", {}).get("usage", {})
+                        input_tokens = usage.get("input_tokens", 0) or input_tokens
+                    elif typ == "content_block_start":
+                        block = ev.get("content_block", {})
+                        if block.get("type") == "tool_use":
+                            current_tool = {
+                                "id":         block.get("id", ""),
+                                "name":       block.get("name", ""),
+                                "input_json": "",
+                            }
+                    elif typ == "content_block_delta":
+                        delta = ev.get("delta", {})
+                        dtype = delta.get("type", "")
+                        if dtype == "text_delta":
+                            txt = delta.get("text", "")
+                            if txt and t_first_token is None:
+                                t_first_token = time.monotonic()
+                            content_parts.append(txt)
+                        elif dtype == "input_json_delta" and current_tool is not None:
+                            current_tool["input_json"] += delta.get("partial_json", "")
+                    elif typ == "content_block_stop":
+                        if current_tool is not None:
+                            try:
+                                current_tool["input"] = json.loads(
+                                    current_tool.get("input_json") or "{}")
+                            except json.JSONDecodeError:
+                                current_tool["input"] = {}
+                            tool_raw.append({
+                                "id":    current_tool["id"],
+                                "name":  current_tool["name"],
+                                "input": current_tool["input"],
+                            })
+                            current_tool = None
+                    elif typ == "message_delta":
+                        usage = ev.get("usage", {})
+                        output_tokens = usage.get("output_tokens", 0) or output_tokens
+                    elif typ == "error":
+                        err_body = ev.get("error", {})
+                        stream_error = f"stream_error:{err_body.get('type','?')}"
+        except httpx.HTTPStatusError:
+            raise
+        except Exception as e:
+            stream_error = f"exception:{type(e).__name__}"
+            # Emit the log row before re-raising so partial timing survives.
+            self._log_row(t0=t0, status=status or 0, prompt_tok=prompt_est,
+                          n_messages=n_messages, temperature=temperature,
+                          content="".join(content_parts),
+                          tool_calls_n=len(tool_raw),
+                          t_first_token=t_first_token,
+                          input_tokens=input_tokens or prompt_est,
+                          output_tokens=output_tokens,
+                          error=stream_error)
+            raise
+
+        # Fallbacks when the stream ended without usage events (older gateways
+        # or non-conforming proxies) — tiktoken guess is better than 0.
+        content = "".join(content_parts)
+        if not output_tokens:
+            output_tokens = count_tokens(content, self.model)
+        if not input_tokens:
+            input_tokens = prompt_est
+
+        tool_calls = ArgoProvider._parse_tool_calls(tool_raw)
+        parsed = AgentResponse(
+            content=content,
+            tool_calls=tool_calls,
+            stop_reason="tool_use" if tool_calls else "end_turn",
+        )
+        self._log_row(t0=t0, status=status, prompt_tok=prompt_est,
+                      n_messages=n_messages, temperature=temperature,
+                      content=content, tool_calls_n=len(tool_calls),
+                      t_first_token=t_first_token,
+                      input_tokens=input_tokens,
+                      output_tokens=output_tokens,
+                      error=stream_error)
+        return parsed
+
+    def _log_row(self, *, t0: float, status: int, prompt_tok: int,
+                 n_messages: int, temperature: float,
+                 content: str, tool_calls_n: int,
+                 t_first_token: Optional[float],
+                 input_tokens: int, output_tokens: int,
+                 error: str) -> None:
+        """Emit the streaming JSONL row and update Tier-2 aggregation.
+
+        TPOT is defined as (total - TTFT) / (output_tokens - 1) so single-token
+        replies don't blow up the divisor. Streaming gives us these metrics for
+        real; the blocking /chat/ provider can only report combined elapsed."""
+        elapsed = time.monotonic() - t0
+        ttft_s  = (t_first_token - t0) if t_first_token else None
+        tpot_ms = None
+        gen_tps = 0.0
+        if ttft_s is not None and output_tokens > 1 and elapsed > ttft_s:
+            tpot_ms = ((elapsed - ttft_s) / (output_tokens - 1)) * 1000.0
+            gen_tps = (output_tokens - 1) / (elapsed - ttft_s)
+        empty = not (content or tool_calls_n)
+        temp_reported = (temperature
+                         if self.model not in ("claudeopus48", "claudeopus47")
+                         else None)
+        if not error:
+            record_llm_call(elapsed_s=elapsed,
+                            prompt_tok=input_tokens,
+                            response_tok=output_tokens)
+        log_llm_call({
+            "endpoint":     "argo-messages",
+            "query_id":     current_query_id() or "",
+            "model":        self.model,
+            "attempt":      0,
+            "http_status":  status,
+            "elapsed_s":    round(elapsed, 3),
+            "ttft_s":       round(ttft_s, 3) if ttft_s is not None else None,
+            "tpot_ms":      round(tpot_ms, 2) if tpot_ms is not None else None,
+            "prompt_tok":   input_tokens,
+            "response_tok": output_tokens,
+            "gen_tps":      round(gen_tps, 2),
+            "n_messages":   n_messages,
+            "n_tool_calls": tool_calls_n,
+            "temperature":  temp_reported,
+            "empty":        empty,
+            "error":        error,
+        })
+
+    async def close(self):
+        await self._client.aclose()
+
+
+def select_provider(username: str, model: str):
+    """Pick a provider based on ``APEXA_PROVIDER`` and model family.
+
+    - ``APEXA_PROVIDER=streaming`` + a ``claude*`` model  → StreamingAnthropicProvider
+    - anything else                                        → ArgoProvider
+
+    Non-Claude models under ``streaming`` fall back to Argo /chat/ with a
+    one-line stderr note (Anthropic native only speaks Claude)."""
+    prov = (os.environ.get("APEXA_PROVIDER") or "").lower()
+    if prov == "streaming":
+        if model.startswith("claude"):
+            return StreamingAnthropicProvider(username, model)
+        print(f"  \033[33m⚠ APEXA_PROVIDER=streaming ignored — model {model!r} "
+              f"is not a Claude model; using Argo /chat/\033[0m", file=sys.stderr)
+    return ArgoProvider(username, model)
 
 
 # ── Agent Definition ─────────────────────────────────────────────────────────
@@ -763,6 +1089,20 @@ experiments at APS. You have ONE persistent conversation with the scientist:
 prior tool calls and their results are in the transcript above — that is your
 memory. Reason over it, then act.
 
+## Operating style — work like a senior colleague, not a report generator
+- BE TERSE AND ACT. Reason in a few words, then DO the thing. Default to the shortest
+  reply that moves the task forward. Prefer doing over describing.
+- When the user has already told you what to do — named the action, its inputs, and/or
+  the output, or said "go / do it / run / perform / proceed", or approved this step —
+  EXECUTE NOW: at most one line of what you're doing, then the tool call. Do NOT
+  re-explain, re-plan, re-list options, or ask again.
+- Do NOT reprint files, parameters, plans, or results the transcript already shows —
+  refer to them in a phrase ("the RBin0p5 param file"). No boxed multi-section essays,
+  no headers for a single answer, minimal formatting.
+- Answer questions in 1–3 sentences; expand only when asked. If a tool already handles
+  something (e.g. midas_integrate_series writes xye/ and fxye/), say so in a line — don't
+  describe how you'd hand-roll it.
+
 ## Core behaviour
 - SMALL TALK & META: for a greeting ("hi", "hello", "hey"), a thanks, or a
   question about what you are or what you can do, just reply in 1–2 friendly
@@ -780,13 +1120,13 @@ memory. Reason over it, then act.
 - Read-only / lookup tools (list_directory, read_file, get_file_info,
   inspect_dataset_file, xray_calculate, query_hedm_knowledge, get_motor_position,
   validate/diagnose, viewers) — just run them, no confirmation.
-- CONSULT-AND-CONFIRM before a HEAVY or irreversible action (calibration,
-  integration, reconstruction, refinement, batch jobs, file writes/deletion,
-  motor moves): do NOT execute immediately. Present a run plan, then WAIT. Emit
-  the TOOL_CALL only after the user approves ("go" / "proceed" / "yes"). Put NO
-  TOOL_CALL in the plan message itself. Scale the plan to how specified the
-  request is (be PROPORTIONAL — don't over-discuss a fully-pinned request, don't
-  under-discuss an ambiguous one):
+- ACT ON CLEAR REQUESTS; confirm only when truly needed. If the action and its key
+  inputs/output are specified — or the user said "go/do it/run/perform", or already
+  approved this step — EXECUTE NOW: one line of what you're doing, then the TOOL_CALL.
+  Do NOT re-present a plan, re-list options, or wait again for something already asked
+  for. Present-a-plan-then-WAIT (no TOOL_CALL in the plan message; wait for "go")
+  applies ONLY to: (a) a genuinely AMBIGUOUS request, (b) a DESTRUCTIVE op (deleting or
+  overwriting existing data), or (c) a MOTOR/hardware command. For those:
     • AMBIGUOUS or consequential → DISCUSS OPTIONS. Ground it first with
       recommend_workflow on the input path, then present, compactly:
         (1) recommended settings + WHY, and 1–2 alternatives with their trade-offs
