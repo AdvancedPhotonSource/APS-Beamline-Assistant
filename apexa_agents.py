@@ -1102,6 +1102,13 @@ memory. Reason over it, then act.
 - Answer questions in 1–3 sentences; expand only when asked. If a tool already handles
   something (e.g. midas_integrate_series writes xye/ and fxye/), say so in a line — don't
   describe how you'd hand-roll it.
+- MULTI-STEP TASKS: when a request chains steps ("remove the old files, then compare, then
+  update the report"), do them IN ORDER, ONE clear action at a time, and USE each result
+  to decide the next. Batch where a single call covers it: delete many files with ONE
+  command (a glob/`rm -rf dir`), compare two directories with ONE compare call — don't fire
+  a call per file or re-issue a call whose result you already have. When you have the data
+  the step needs, MOVE ON; when all steps are done, STOP and write the answer. Never re-run
+  a comparison or listing "to be sure" — the first successful result stands.
 
 ## Core behaviour
 - SMALL TALK & META: for a greeting ("hi", "hello", "hey"), a thanks, or a
@@ -2491,6 +2498,30 @@ class AgentRunner:
                         messages.append({"role": "user", "content": _fanout_redirect})
                         continue
 
+                # Single-mode thrash floor. The consecutive-identical guard (above)
+                # only catches back-to-back same-args repeats; it misses the real
+                # pathology — the same tool called many times across the turn with
+                # slightly varying args that never converge (e.g. compare_integrated_series
+                # ×6 interleaved with run_command, burning the whole budget). If a tool
+                # has been called this many times, the model has enough data: tell it to
+                # stop and write the answer rather than let it run to the iteration cap.
+                _SINGLE_THRASH = 5
+                if single_mode and _cum_count >= _SINGLE_THRASH:
+                    _unique_args = len(_turn_tool_args.get(_cum_top, set()))
+                    # Genuinely arg-diverse work (read_file over N distinct files) is fine.
+                    if not (_cum_top in _MULTI_ARG_OK_TOOLS and _unique_args >= _cum_count):
+                        print(f"  \033[33m⚠ thrash floor:\033[0m {_cum_count}× {_cum_top} — forcing answer")
+                        messages.append({
+                            "role": "user",
+                            "content": (
+                                f"You have called `{_cum_top}` {_cum_count} times this turn. "
+                                "You already have the results you need above. Do NOT call it "
+                                "again. Write the final answer for the user now, reporting only "
+                                "what actually executed."
+                            ),
+                        })
+                        continue
+
                 _once_per_response = set()
                 _ONCE_TOOLS = {"run_midas_viewer"}
 
@@ -3566,11 +3597,21 @@ class OrchestratorAgent:
         else:
             transcript = [{"role": "user", "content": query}]
 
+        # Single-loop tasks are genuinely multi-step (e.g. "delete old files →
+        # compare xye + fxye → verify → report" is 6-8 legitimate calls). The
+        # legacy default of 10 leaves no margin for one wrong turn and forces a
+        # premature finalize. Give the reasoning loop real headroom; override
+        # with APEXA_MAX_ITERATIONS if a task needs more.
+        try:
+            _single_cap = int(os.environ.get("APEXA_MAX_ITERATIONS", "24"))
+        except ValueError:
+            _single_cap = 24
+
         result = await self.runner.run(
             agent, query, provider, self.all_tools,
             history=None, log_entry=log_entry, on_tool_result=_capture,
             history_summary=self.running_summary if use_history else "",
-            transcript=transcript, single_mode=True,
+            transcript=transcript, single_mode=True, max_iterations=_single_cap,
         )
 
         n_calls = len(log_entry.tool_calls)
