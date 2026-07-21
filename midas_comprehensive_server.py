@@ -2871,6 +2871,56 @@ def _nearest_dark(image_path, dark_files):
     return min(pool, key=lambda d: abs(_num(d) - n))
 
 
+def _probe_dark_dataset(h5_path, explicit=None, data_location=None):
+    """Pick the HDF5 dataset in a dark file that actually holds nonzero frames.
+
+    A fixed default path is wrong across layouts: some `.h5` darks store their
+    frame at ``exchange/data`` (with ``exchange/data_dark`` absent), while others
+    (e.g. the `dark_after_*.vrx.h5` files here) store the real counts at
+    ``exchange/data_dark`` and leave ``exchange/data`` as a zero placeholder.
+    Reading the wrong one yields ``darkMean 0.0`` — a silent no-op subtraction.
+
+    Strategy: try candidates in order and return the FIRST that exists with a
+    nonzero-mean first frame. An ``explicit`` path is tried first but is NOT
+    trusted blindly — if it reads as all-zero we fall through to auto-detection
+    (that is exactly the failure this guards against). Returns ``(path, mean)``
+    where ``path`` is the chosen dataset (or the best-available fallback), and
+    ``mean`` is its first-frame mean (None if nothing could be read).
+    """
+    cands = []
+    for c in (explicit, "exchange/data_dark", data_location, "exchange/data", "exchange/dark"):
+        if c and c.strip("/") not in {x.strip("/") for x in cands}:
+            cands.append(c)
+    try:
+        import h5py
+        import numpy as _np
+    except Exception:
+        return (explicit or data_location or "exchange/data", None)
+
+    best_zero = None   # first existing-but-zero dataset, used only as last resort
+    try:
+        with h5py.File(str(Path(h5_path).expanduser()), "r") as h:
+            for c in cands:
+                key = c.strip("/")
+                if key not in h:
+                    continue
+                dset = h[key]
+                try:
+                    frame = dset[0] if getattr(dset, "ndim", 2) == 3 else dset[()]
+                    mean = float(_np.asarray(frame).mean())
+                except Exception:
+                    continue
+                if mean != 0.0:
+                    return ("/" + key, mean)
+                if best_zero is None:
+                    best_zero = ("/" + key, mean)
+    except Exception:
+        return (explicit or data_location or "exchange/data", None)
+    if best_zero is not None:
+        return best_zero
+    return (explicit or data_location or "exchange/data", None)
+
+
 @mcp.tool()
 async def midas_integrate_series(
     parameter_file: str,
@@ -3122,6 +3172,8 @@ async def midas_integrate_series(
                   f"bin {r_bin_size:.4f}px", file=sys.stderr)
 
         per_file, n_ok = [], 0
+        _dkloc_resolved = None   # probe the dark dataset once; layout is uniform
+        _dmean = None            # first-frame mean of the chosen dark dataset
         for img in files:
             out_dir = out_root / img.stem
             out_dir.mkdir(parents=True, exist_ok=True)
@@ -3152,15 +3204,23 @@ async def midas_integrate_series(
                 cmd += ["-dataLoc", data_location]
             if this_dark and this_dark.exists():
                 cmd += ["-darkFN", str(this_dark)]
-                # A separate .h5 dark's frame lives at the same HDF5 path as the
-                # data (integrator's default -darkLoc exchange/dark is wrong for
-                # these files); an embedded dark lives at its own path (e.g.
-                # exchange/data_dark). Both overridable via dark_location.
-                if dark_source == "embedded":
-                    dkloc = dark_location or "exchange/data_dark"
-                else:
-                    dkloc = dark_location or data_location or "exchange/data"
-                cmd += ["-darkLoc", dkloc]
+                # The correct HDF5 dark dataset varies by layout: separate .h5 darks
+                # may store the frame at exchange/data OR exchange/data_dark (with the
+                # other path a zero placeholder → silent no-op subtraction). Probe the
+                # actual file once and pick the dataset that holds nonzero frames,
+                # preferring dark_location (embedded → exchange/data_dark) if given.
+                if _dkloc_resolved is None:
+                    _explicit = dark_location or (
+                        "exchange/data_dark" if dark_source == "embedded" else None)
+                    _dkloc_resolved, _dmean = _probe_dark_dataset(
+                        this_dark, explicit=_explicit, data_location=data_location)
+                    print(f"[integrate_series] dark dataset: {_dkloc_resolved} "
+                          f"(first-frame mean={_dmean})", file=sys.stderr)
+                    if _dmean == 0.0:
+                        print("[integrate_series] ⚠ dark reads as all-zero at every "
+                              "candidate path — subtraction will be a no-op; check the "
+                              "dark file/path (dark_location=...)", file=sys.stderr)
+                cmd += ["-darkLoc", _dkloc_resolved]
             for key, val in (("RMin", r_min), ("RMax", r_max), ("RBinSize", r_bin_size),
                              ("EtaMin", eta_min), ("EtaMax", eta_max), ("EtaBinSize", eta_bin_size)):
                 if val is not None:
@@ -3236,6 +3296,13 @@ async def midas_integrate_series(
             "parameter_file": str(param_path),
             "matched_files": n_matched,
             "darks_excluded": n_darks_excluded,
+            "dark_scheme": _dscheme,
+            # Provenance the "did you grab the dark?" question needs: the dataset
+            # actually read and its first-frame mean. mean==0.0 ⇒ subtraction was a
+            # no-op (wrong path / zero placeholder), even though a dark was "found".
+            "dark_dataset": _dkloc_resolved,
+            "dark_first_frame_mean": _dmean,
+            "dark_applied": bool(_dkloc_resolved and _dmean not in (None, 0.0)),
             "processed_files": len(per_file),
             "succeeded": n_ok,
             "failed": n_fail,
