@@ -3292,15 +3292,25 @@ def _read_xy_grid(path: Path):
 @mcp.tool()
 async def compare_integrated_series(apexa_dir: str, reference_dir: str,
                                     pattern: str = "*.xye",
-                                    x_tol: float = 0.02) -> str:
+                                    x_tol: float = 0.02,
+                                    bin_frac: float = 0.25) -> str:
     """Verify one set of integrated 1D patterns against a reference — grid, count,
     and peak alignment — and REFUSE to claim parity unless they actually match.
 
     Convention-agnostic: it compares whatever x-axis the files use (radius, 2θ, Q,
     or d) by reading the first two numeric columns — it does not assume degrees.
     ``pattern`` selects the format to compare (``*.xye``, ``*.xy``, ``*.fxye``,
-    ``*.dat``, ``*.chi``, …); compare like-for-like. ``x_tol`` is the allowed
-    difference in x-min/x-max in the files' own x units.
+    ``*.dat``, ``*.chi``, …); compare like-for-like.
+
+    Grid tolerance is judged **relative to the bin width**, because an absolute
+    threshold cannot serve every x-unit at once: 0.02 is generous in 2θ-degrees but
+    punishing in radius-pixels, so the SAME physical grid would pass as .xye and
+    fail as .fxye. Two grids count as the same when the row counts are equal AND
+    each endpoint agrees within ``max(x_tol, bin_frac × bin_width)`` — i.e. a small
+    fraction of one bin. ``x_tol`` is the absolute floor (files' own x units);
+    ``bin_frac`` is the scale-relative allowance (default 0.25 bin). Sub-bin float /
+    rounding drift on an otherwise identical grid therefore reads as parity, as it
+    should — every sample lands within a fraction of a bin of its counterpart.
 
     Compares two per-sample directories (``apexa_dir`` vs ``reference_dir``, matched
     by filename) and reports, over the common files:
@@ -3341,17 +3351,29 @@ async def compare_integrated_series(apexa_dir: str, reference_dir: str,
             i = max(range(len(ys)), key=lambda k: ys[k])
             return xs[i]
         apk, rpk = _peak(ax, ay), _peak(rx, ry)
-        grid_match = (an == rn and amin is not None and rmin is not None
-                      and abs(amin - rmin) <= x_tol
-                      and abs(amax - rmax) <= x_tol)
+        # Scale-relative tolerance: a fraction of one bin, floored by the absolute
+        # x_tol. Bin width is taken from the reference grid (rows-1 intervals).
+        have_range = (amin is not None and rmin is not None
+                      and amax is not None and rmax is not None)
+        bin_w = (abs(rmax - rmin) / (rn - 1)) if (rn and rn > 1 and have_range) else None
+        eff_tol = max(x_tol, bin_frac * bin_w) if bin_w else x_tol
+        d_min = abs(amin - rmin) if have_range else None
+        d_max = abs(amax - rmax) if have_range else None
+        range_match = bool(have_range and d_min <= eff_tol and d_max <= eff_tol)
+        grid_match = bool(an == rn and range_match)
         result.update({
             "probe_file": probe,
             "apexa_grid": {"rows": an, "x_min": amin, "x_max": amax},
             "reference_grid": {"rows": rn, "x_min": rmin, "x_max": rmax},
             "row_match": an == rn,
-            "range_match": (amin is not None and rmin is not None
-                            and abs(amin - rmin) <= x_tol
-                            and abs(amax - rmax) <= x_tol),
+            "bin_width": (round(bin_w, 6) if bin_w else None),
+            "eff_tol": round(eff_tol, 6),
+            # Endpoint offsets in bin-width units — the scale-free "how far off" that
+            # reads the same across 2θ / radius / Q (≲0.25 bin ⇒ same grid).
+            "endpoint_offset_bins": (
+                [round(d_min / bin_w, 3), round(d_max / bin_w, 3)]
+                if (bin_w and d_min is not None) else None),
+            "range_match": range_match,
             "grid_match": grid_match,
             "peak_offset": (round(abs(apk - rpk), 5) if (apk is not None and rpk is not None) else None),
             "parity": bool(grid_match and result["count_match"]),
@@ -3359,9 +3381,10 @@ async def compare_integrated_series(apexa_dir: str, reference_dir: str,
         if not grid_match:
             result["recommendation"] = (
                 f"Grids differ (dir-A {an} rows {amin}–{amax} vs reference {rn} rows "
-                f"{rmin}–{rmax}, in the files' own x units). Re-run the integration on "
-                "the reference grid (midas_integrate_series takes the grid in radius, "
-                "2θ, or Q) BEFORE claiming any parity.")
+                f"{rmin}–{rmax}, in the files' own x units; endpoints off by "
+                f"{result['endpoint_offset_bins']} bin(s), tol {round(eff_tol,6)}). "
+                "Re-run the integration on the reference grid (midas_integrate_series "
+                "takes the grid in radius, 2θ, or Q) BEFORE claiming any parity.")
         return format_result(result)
     except Exception as e:
         return format_result({"tool": "compare_integrated_series", "status": "error", "error": str(e)})
