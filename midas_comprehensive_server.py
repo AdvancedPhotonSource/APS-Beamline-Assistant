@@ -3177,6 +3177,21 @@ async def midas_integrate_series(
         # placeholder). Probe a representative dark up front so a wrong/zero dark
         # fails LOUDLY here — never after silently integrating 192 zero-subtracted
         # frames and reporting plain "success" (the exact trap that bit JL_0Nb).
+        # Reject bogus dark_source values (e.g. a model passing "paired_dark_after"
+        # by conflating dark_source with dark_kind) rather than silently falling
+        # through every branch and matching NO dark.
+        _VALID_DARK_SOURCES = {"file", "embedded", "none"}
+        if dark_source not in _VALID_DARK_SOURCES:
+            return format_result({
+                "tool": "midas_integrate_series", "status": "error",
+                "error": (
+                    f"Unknown dark_source={dark_source!r}. Valid values: "
+                    f"'file' (separate dark file per frame; set dark_dir/dark_file and "
+                    f"dark_kind='after'|'before'), 'embedded' (dark inside each frame's "
+                    f"own file; set dark_location), or 'none'. For paired dark-after "
+                    f"files use dark_source='file', dark_kind='after'."),
+            })
+
         _dkloc_resolved = None    # chosen dark dataset (uniform layout → resolve once)
         _dmean = None             # first-frame mean of the chosen dark dataset
         if dark_source != "none" and files:
@@ -3187,6 +3202,22 @@ async def midas_integrate_series(
             else:
                 _nd = _nearest_dark(files[0], dark_files)
                 _rep_dark, _explicit = (Path(_nd) if _nd else None), dark_location
+            # Dark requested but none could be matched → abort. Integrating without a
+            # dark must be an explicit choice (dark_source='none'), never an accident
+            # of an empty dark_dir or a naming mismatch.
+            if not (_rep_dark and Path(_rep_dark).exists()):
+                return format_result({
+                    "tool": "midas_integrate_series", "status": "error",
+                    "error": (
+                        f"dark_source={dark_source!r} requested but NO dark file was "
+                        f"matched (dark_dir/dark_file empty or filename pattern didn't "
+                        f"pair). Aborting before integrating {len(files)} frames with no "
+                        f"dark. Fix: set dark_dir to the folder holding the dark files "
+                        f"(e.g. *_dark_after_*.h5) with dark_kind='after', or pass "
+                        f"dark_source='none' to integrate without a dark on purpose."),
+                    "dark_file": None, "dark_dataset": None,
+                    "dark_first_frame_mean": None, "dark_applied": False,
+                })
             if _rep_dark and Path(_rep_dark).exists():
                 _dkloc_resolved, _dmean = _probe_dark_dataset(
                     _rep_dark, explicit=_explicit, data_location=data_location)
