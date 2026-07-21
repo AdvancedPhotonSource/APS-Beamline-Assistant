@@ -3171,9 +3171,45 @@ async def midas_integrate_series(
                   f"{grid_info['convention']} / {n_channels} ch → R {r_min:.1f}–{r_max:.1f}px "
                   f"bin {r_bin_size:.4f}px", file=sys.stderr)
 
+        # ── Pre-flight: resolve the dark dataset ONCE and abort on a zero dark ──
+        # The correct HDF5 dark dataset varies by layout (some store the frame at
+        # exchange/data, others at exchange/data_dark with exchange/data a zero
+        # placeholder). Probe a representative dark up front so a wrong/zero dark
+        # fails LOUDLY here — never after silently integrating 192 zero-subtracted
+        # frames and reporting plain "success" (the exact trap that bit JL_0Nb).
+        _dkloc_resolved = None    # chosen dark dataset (uniform layout → resolve once)
+        _dmean = None             # first-frame mean of the chosen dark dataset
+        if dark_source != "none" and files:
+            if dark_source == "embedded":
+                _rep_dark, _explicit = files[0], (dark_location or "exchange/data_dark")
+            elif dark_file:
+                _rep_dark, _explicit = Path(dark_file).expanduser().absolute(), dark_location
+            else:
+                _nd = _nearest_dark(files[0], dark_files)
+                _rep_dark, _explicit = (Path(_nd) if _nd else None), dark_location
+            if _rep_dark and Path(_rep_dark).exists():
+                _dkloc_resolved, _dmean = _probe_dark_dataset(
+                    _rep_dark, explicit=_explicit, data_location=data_location)
+                print(f"[integrate_series] dark dataset: {_dkloc_resolved} "
+                      f"(first-frame mean={_dmean}) from {Path(_rep_dark).name}",
+                      file=sys.stderr)
+                if _dmean == 0.0:
+                    return format_result({
+                        "tool": "midas_integrate_series", "status": "error",
+                        "error": (
+                            f"Dark subtraction would be a NO-OP: the dark dataset "
+                            f"{_dkloc_resolved} reads all-zero (first-frame mean 0.0) in "
+                            f"{Path(_rep_dark).name}. Aborting BEFORE integrating "
+                            f"{len(files)} frames with an effectively absent dark. Fix: "
+                            f"set dark_location to the dataset holding real dark counts "
+                            f"(e.g. 'exchange/data_dark'), or pass dark_source='none' to "
+                            f"integrate without a dark on purpose."),
+                        "dark_file": str(_rep_dark),
+                        "dark_dataset": _dkloc_resolved,
+                        "dark_first_frame_mean": _dmean,
+                    })
+
         per_file, n_ok = [], 0
-        _dkloc_resolved = None   # probe the dark dataset once; layout is uniform
-        _dmean = None            # first-frame mean of the chosen dark dataset
         for img in files:
             out_dir = out_root / img.stem
             out_dir.mkdir(parents=True, exist_ok=True)
@@ -3204,23 +3240,13 @@ async def midas_integrate_series(
                 cmd += ["-dataLoc", data_location]
             if this_dark and this_dark.exists():
                 cmd += ["-darkFN", str(this_dark)]
-                # The correct HDF5 dark dataset varies by layout: separate .h5 darks
-                # may store the frame at exchange/data OR exchange/data_dark (with the
-                # other path a zero placeholder → silent no-op subtraction). Probe the
-                # actual file once and pick the dataset that holds nonzero frames,
-                # preferring dark_location (embedded → exchange/data_dark) if given.
-                if _dkloc_resolved is None:
-                    _explicit = dark_location or (
-                        "exchange/data_dark" if dark_source == "embedded" else None)
-                    _dkloc_resolved, _dmean = _probe_dark_dataset(
-                        this_dark, explicit=_explicit, data_location=data_location)
-                    print(f"[integrate_series] dark dataset: {_dkloc_resolved} "
-                          f"(first-frame mean={_dmean})", file=sys.stderr)
-                    if _dmean == 0.0:
-                        print("[integrate_series] ⚠ dark reads as all-zero at every "
-                              "candidate path — subtraction will be a no-op; check the "
-                              "dark file/path (dark_location=...)", file=sys.stderr)
-                cmd += ["-darkLoc", _dkloc_resolved]
+                # Dark dataset was resolved (and zero-dark aborted) in the pre-flight
+                # above; fall back to the layout default only if the probe returned
+                # nothing (e.g. h5py unavailable).
+                dkloc = _dkloc_resolved or dark_location or (
+                    "exchange/data_dark" if dark_source == "embedded"
+                    else (data_location or "exchange/data"))
+                cmd += ["-darkLoc", dkloc]
             for key, val in (("RMin", r_min), ("RMax", r_max), ("RBinSize", r_bin_size),
                              ("EtaMin", eta_min), ("EtaMax", eta_max), ("EtaBinSize", eta_bin_size)):
                 if val is not None:
