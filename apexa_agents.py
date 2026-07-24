@@ -3100,6 +3100,76 @@ class OrchestratorAgent:
         self._last_agent = None
         self._last_turn_had_tool_error = False
 
+    # ── Poison-resistant context ─────────────────────────────────────────────
+    _TOOL_RESULT_RE = re.compile(r'^\[Tool Result for ([^\]]+)\]', re.S)
+
+    def _prune_failed_tool_repeats(self) -> int:
+        """Drop REPEATED identical failed tool exchanges from history, keeping
+        only the most recent copy of each distinct (tool, args) failure.
+
+        A single-loop transcript that keeps re-emitting the same broken tool call
+        (e.g. dark_source='paired_dark_after' failing over and over) piles those
+        failures into the recent-verbatim window AND bakes them into the compacted
+        summary — so the model keeps copying its own mistake even after the code is
+        fixed. This is what made a resumed session un-recoverable short of
+        `session new`. Removing the duplicates (but retaining the latest failure,
+        so the model still knows it failed and why) breaks that feedback loop
+        without discarding successes or any non-tool prose. Returns pairs removed.
+        """
+        hist = self.conversation_history
+        n = len(hist)
+        # Collect failed exchanges: assistant TOOL_CALL turn + next [Tool Result] error.
+        occ: Dict[tuple, List[tuple]] = {}
+        for i in range(n - 1):
+            a, r = hist[i], hist[i + 1]
+            if a.get("role") != "assistant" or r.get("role") != "user":
+                continue
+            ac, rc = a.get("content") or "", r.get("content") or ""
+            if "TOOL_CALL:" not in ac:
+                continue
+            m = self._TOOL_RESULT_RE.match(rc)
+            if not m:
+                continue
+            tool = m.group(1).strip()
+            body = rc[m.end():]
+            failed = ("error" in body.lower()[:120]) or ('"status": "error"' in body.lower())
+            if not failed:
+                continue
+            am = re.search(r'ARGUMENTS:\s*(\{.*)', ac, re.S)
+            if am:
+                blob = am.group(1).strip()
+                try:
+                    args_fp = json.dumps(json.loads(blob), sort_keys=True)
+                except Exception:
+                    args_fp = blob[:200]
+            else:
+                args_fp = body[:120]
+            occ.setdefault((tool, args_fp), []).append((i, i + 1))
+        drop: set = set()
+        for pairs in occ.values():
+            if len(pairs) > 1:
+                for a_idx, r_idx in pairs[:-1]:   # keep the latest failure only
+                    drop.add(a_idx); drop.add(r_idx)
+        if not drop:
+            return 0
+        self.conversation_history = [m for k, m in enumerate(hist) if k not in drop]
+        return len(drop) // 2
+
+    def clear_tool_history(self) -> int:
+        """Strip ALL tool-call turns and their results from history, keeping the
+        user↔assistant prose. Escape hatch for a context poisoned by repeated bad
+        tool calls, short of a full `session new`. Returns messages removed."""
+        kept, removed = [], 0
+        for m in self.conversation_history:
+            c, role = (m.get("content") or ""), m.get("role")
+            if (role == "assistant" and "TOOL_CALL:" in c) or \
+               (role == "user" and c.startswith("[Tool Result for ")):
+                removed += 1
+                continue
+            kept.append(m)
+        self.conversation_history = kept
+        return removed
+
     def export_history(self) -> List[Dict]:
         """Return the conversation history for session persistence.
 
@@ -3149,6 +3219,10 @@ class OrchestratorAgent:
         summarization call fails, fall back to a hard trim so memory stays
         bounded and the turn still completes.
         """
+        # Prune repeated failed tool calls first, so poison is never folded into
+        # the running summary (where it would persist even after the recent window
+        # rolls over).
+        self._prune_failed_tool_repeats()
         if len(self.conversation_history) <= self._COMPACT_TRIGGER:
             return
         keep = self.conversation_history[-self._KEEP_RECENT:]
@@ -3603,6 +3677,13 @@ class OrchestratorAgent:
         # the runner append this turn's clean tool exchanges + final answer in
         # place (single_mode=True). No separate {user}/{assistant} bookkeeping.
         if use_history:
+            # Drop repeated identical failed tool calls BEFORE building this turn's
+            # payload so the model isn't handed (and tempted to copy) its own
+            # accumulated mistakes.
+            _pruned = self._prune_failed_tool_repeats()
+            if _pruned:
+                print(f"[context] pruned {_pruned} repeated failed tool call(s)",
+                      file=sys.stderr)
             self.conversation_history.append({"role": "user", "content": query})
             transcript = self.conversation_history
         else:

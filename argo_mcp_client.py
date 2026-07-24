@@ -35,7 +35,9 @@ from prompt_toolkit.formatted_text import FormattedText
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from dotenv import load_dotenv
-from apexa_agents import ArgoProvider, OrchestratorAgent, DEV_ONLY_MODELS
+from apexa_agents import ArgoProvider, OrchestratorAgent, DEV_ONLY_MODELS, select_provider
+from apexa_timing import query_scope, record_tool_call
+import time as _time
 
 load_dotenv()
 
@@ -269,6 +271,7 @@ def _print_help():
     _cmd("session switch <name>", "Switch active session (resume + continue)")
     _cmd("session resume", "Resume last session (autosaved on exit)")
     _cmd("session list | summary", "Manage sessions")
+    _cmd("clear tools | forget tools", "Drop tool-call history (keep prose) — un-poison context")
 
     _sec("Configuration")
     _cmd("models", "Show available AI models")
@@ -1592,6 +1595,7 @@ class APEXAClient:
                         print(f"  Path resolved: {val} -> {resolved}", file=sys.stderr)
                     arguments[key] = resolved
 
+        _t0 = _time.monotonic()
         try:
             session = self.sessions[server_name]
             result = await session.call_tool(tool_name, arguments)
@@ -1609,20 +1613,41 @@ class APEXAClient:
             if suggestion:
                 result_text += f"\n\n{suggestion}"
 
+            record_tool_call(_time.monotonic() - _t0)
             return result_text
         except Exception as e:
+            record_tool_call(_time.monotonic() - _t0)
             error_msg = f"Error: {str(e)}"
             print(f"✗ {error_msg}")
             return error_msg
 
     async def run_query(self, query: str, use_history: bool = True,
                         on_tool_result=None) -> str:
-        """Route query through the multi-agent orchestrator (Phase 2 entry point)."""
+        """Route query through the multi-agent orchestrator (Phase 2 entry point).
+
+        Wrapped in ``query_scope`` so Tier-2 instrumentation emits one summary
+        JSONL row per user query (round-trip count, LLM time, tool time,
+        wall-clock). See docs/INSTRUMENTATION.md.
+        """
         if not self.orchestrator:
             return "Error: Not connected to any MCP servers."
-        provider = ArgoProvider(self.anl_username, self.selected_model)
-        return await self.orchestrator.process(query, provider, use_history,
-                                               on_tool_result=on_tool_result)
+        # APEXA_PROVIDER=streaming + a Claude model → Anthropic-native streaming
+        # for real TTFT/TPOT metrics; otherwise Argo /chat/ blocking.
+        provider = select_provider(self.anl_username, self.selected_model)
+        with query_scope(query=query) as _qctx:
+            result = await self.orchestrator.process(
+                query, provider, use_history,
+                on_tool_result=on_tool_result,
+            )
+            # Late-bind the agent name — the orchestrator only knows which
+            # specialist it routed to after process() returns.
+            try:
+                last = getattr(self.orchestrator, "_last_agent", None)
+                if last is not None:
+                    _qctx.agent = getattr(last, "name", "") or ""
+            except Exception:
+                pass
+            return result
 
     def _autosave_session(self):
         """Persist the live conversation to the _autosave slot.
@@ -1760,6 +1785,10 @@ class APEXAClient:
                     if self.orchestrator:
                         self.orchestrator.clear_history()
                     print(f"  {C.GREEN}✓{C.RESET} Conversation history cleared")
+                elif user_input.lower() in ('clear tools', 'forget tools'):
+                    n = self.orchestrator.clear_tool_history() if self.orchestrator else 0
+                    print(f"  {C.GREEN}✓{C.RESET} Cleared {n} tool-call turn(s); "
+                          f"conversation prose kept")
                 elif user_input.lower() == 'models':
                     self.show_available_models()
                 elif user_input.lower() == 'servers':
