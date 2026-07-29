@@ -2855,34 +2855,26 @@ async def midas_integrate_2d_to_1d(
         return format_result({"tool": "midas_integrate_2d_to_1d", "status": "error", "error": str(e)})
 
 
-# Detector/container tokens that appear as a leftover extension when a raw image
-# had a DOUBLE extension (e.g. JL_0Nb_002603.vrx.h5 → .stem is
-# "JL_0Nb_002603.vrx"). Integrated outputs must not carry these — the standard
-# convention is "<frame>.xye", not "<frame>.vrx.xye". Used both to write clean
-# consolidated names and to normalize filenames for reference comparison so a
-# spurious token never causes a false "0 common files / parity=false".
-_CONTAINER_TOKENS = {
-    "vrx", "h5", "hdf5", "hdf", "nxs", "zarr",
-    "ge", "ge1", "ge2", "ge3", "ge4", "ge5",
-    "tif", "tiff", "cbf", "edf", "raw", "mar", "img",
-}
-
-
-def _strip_container_token(stem: str) -> str:
-    """Drop ONE trailing container token from a stem, if present.
-    'JL_0Nb_002603.vrx' → 'JL_0Nb_002603';  'JL_0Nb_002603' → unchanged."""
-    root, dot, last = stem.rpartition(".")
-    return root if (dot and last.lower() in _CONTAINER_TOKENS) else stem
-
-
-def _norm_compare_key(fname: str, fmt_ext: str) -> str:
-    """Normalize an integrated-pattern filename for reference matching: strip the
-    format extension (.xye/.fxye/…) then a trailing container token. So
-    'JL_0Nb_002603.vrx.xye' and 'JL_0Nb_002603.xye' both key to 'JL_0Nb_002603'."""
-    s = fname
-    if fmt_ext and s.lower().endswith(fmt_ext.lower()):
-        s = s[: -len(fmt_ext)]
-    return _strip_container_token(s)
+def _strip_all_suffixes(name: str) -> str:
+    """Reduce a filename to its base frame id by removing ALL dotted suffixes —
+    general, with no detector/format whitelist to maintain. A raw double
+    extension and a single one collapse to the same base:
+      'JL_0Nb_002603.vrx.h5'  → 'JL_0Nb_002603'
+      'JL_0Nb_002603.vrx.xye' → 'JL_0Nb_002603'
+      'JL_0Nb_002603.xye'     → 'JL_0Nb_002603'
+      'scan_00042.ge3'        → 'scan_00042'
+    This is what makes an APEXA output name match a reference name that used a
+    different container extension, without assuming which extension either used.
+    (Beamline frame ids use '_' separators, not bare dots, so this never eats a
+    meaningful name part in practice; callers that key on this guard against the
+    pathological collision by falling back to exact-name matching.)"""
+    base = name
+    while "." in base:
+        stem = base.rsplit(".", 1)[0]
+        if not stem:            # leading-dot / dotfile — leave it alone
+            break
+        base = stem
+    return base
 
 
 def _nearest_dark(image_path, dark_files):
@@ -3417,11 +3409,12 @@ async def midas_integrate_series(
         consolidated = []
         for rec in per_file:
             if rec.get("status") == "success" and rec.get("lineout_xy"):
-                # Clean stem: strip .h5 AND a trailing container token (.vrx etc.)
-                # so consolidated files are '<frame>.xye', matching the standard /
-                # reference convention — NOT '<frame>.vrx.xye', whose spurious token
-                # made filename-matched comparison find 0 common files.
-                stem = _strip_container_token(Path(rec["input_image"]).stem)
+                # Clean base name: strip ALL extensions (.h5 AND any container
+                # token like .vrx) so consolidated files are '<frame>.xye',
+                # matching the standard reference convention — NOT '<frame>.vrx.xye',
+                # whose spurious token made filename-matched comparison find 0
+                # common files. General: no per-format token list.
+                stem = _strip_all_suffixes(Path(rec["input_image"]).name)
                 try:
                     tth, inten = _read_lineout_xy(rec["lineout_xy"])
                     if not tth:
@@ -3541,24 +3534,42 @@ async def compare_integrated_series(apexa_dir: str, reference_dir: str,
         if not ad.is_dir() or not rd.is_dir():
             return format_result({"tool": "compare_integrated_series", "status": "error",
                                   "error": f"directory not found: {ad if not ad.is_dir() else rd}"})
-        # Match on a NORMALIZED key (frame id with the format ext + any trailing
-        # container token stripped), not the raw filename — so APEXA's
-        # 'JL_0Nb_002603.vrx.xye' pairs with the reference's 'JL_0Nb_002603.xye'
-        # instead of yielding 0 common files (the .vrx double-extension false
-        # negative that forced a manual rename/copy detour).
-        _fmt_ext = "." + pattern.rsplit(".", 1)[-1] if "." in pattern else ""
-        a_files = {_norm_compare_key(p.name, _fmt_ext): p for p in sorted(ad.glob(pattern))}
-        r_files = {_norm_compare_key(p.name, _fmt_ext): p for p in sorted(rd.glob(pattern))}
+        a_paths = sorted(ad.glob(pattern))
+        r_paths = sorted(rd.glob(pattern))
+        # Match on a NORMALIZED key (base frame id, all extensions stripped), not
+        # the raw filename — so APEXA's 'JL_0Nb_002603.vrx.xye' pairs with the
+        # reference's 'JL_0Nb_002603.xye' instead of yielding 0 common files (the
+        # double-extension false negative that forced a manual rename/copy detour).
+        # General: no per-format token list. If stripping suffixes collapses two
+        # distinct files to one key (bare dots in a frame name), that side is
+        # ambiguous — fall back to exact-name matching so we never mis-pair.
+        def _keyed(paths):
+            keyed, collided = {}, False
+            for p in paths:
+                k = _strip_all_suffixes(p.name)
+                if k in keyed:
+                    collided = True
+                keyed[k] = p
+            return keyed, collided
+        _a_norm, _a_coll = _keyed(a_paths)
+        _r_norm, _r_coll = _keyed(r_paths)
+        if _a_coll or _r_coll:
+            a_files = {p.name: p for p in a_paths}
+            r_files = {p.name: p for p in r_paths}
+            matched_by = "exact-name (normalized keys collided)"
+        else:
+            a_files, r_files = _a_norm, _r_norm
+            _raw_common = {p.name for p in a_paths} & {p.name for p in r_paths}
+            matched_by = ("normalized-stem"
+                          if len(set(a_files) & set(r_files)) > len(_raw_common)
+                          else "exact-name")
         common = sorted(set(a_files) & set(r_files))
-        # Was normalization load-bearing? (raw names would not have matched)
-        _raw_common = {p.name for p in ad.glob(pattern)} & {p.name for p in rd.glob(pattern)}
         result = {
             "tool": "compare_integrated_series", "status": "success",
             "apexa_dir": str(ad), "reference_dir": str(rd), "pattern": pattern,
             "apexa_count": len(a_files), "reference_count": len(r_files),
             "common_count": len(common),
-            "matched_by": ("normalized-stem" if len(common) > len(_raw_common)
-                           else "exact-name"),
+            "matched_by": matched_by,
             "count_match": len(a_files) == len(r_files) and len(a_files) > 0,
         }
         if not common:
