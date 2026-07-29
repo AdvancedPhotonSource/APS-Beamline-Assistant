@@ -2938,6 +2938,7 @@ async def midas_integrate_series(
     max_files: int = None,
     result_folder: str = None,
     n_cpus: int = 8,
+    n_parallel: int = None,
     compute_target: str = "auto",
     convert_files: bool = True,
     short_names: bool = True,
@@ -2985,6 +2986,14 @@ async def midas_integrate_series(
         ``exclude_substring`` — e.g. darks — are skipped).
       • ``max_files``: cap to a representative, evenly-spaced subset (e.g. 3 →
         start/middle/end). Omit to integrate every matched file.
+
+    Performance:
+      • ``n_parallel``: how many files integrate CONCURRENTLY (they're independent).
+        Default (omit) auto-fills the host without oversubscribing:
+        ``cores // n_cpus`` workers, capped at 16. This is the main speed lever for
+        a large CPU series — the old path ran strictly one file at a time. Pass
+        ``n_parallel=1`` to force serial (e.g. to leave cores free during live
+        acquisition). ``n_cpus`` stays the per-file thread count.
 
     Dark handling (generalizes across data layouts — not every beamtime is
     structured the same):
@@ -3161,11 +3170,25 @@ async def midas_integrate_series(
                          "wavelength_A": _wl, "r_min_px": r_min, "r_max_px": r_max,
                          "r_bin_px": r_bin_size}
 
+        # Resolve file-level parallelism. Separate input files are INDEPENDENT
+        # (own out_root/<stem>/ dir, read-only shared darks), so the series is
+        # embarrassingly parallel. Default (None) fills the box WITHOUT
+        # oversubscribing: cores // n_cpus workers (each worker still uses n_cpus
+        # threads inside the integrator), capped at 16 and at the file count. This
+        # replaces the old strictly-serial loop that spawned one cold integrator.py
+        # process per file back-to-back and left most cores idle. Pass n_parallel=1
+        # to force the old serial behavior (e.g. during live acquisition).
+        _cores = os.cpu_count() or 8
+        if n_parallel is None or n_parallel < 1:
+            n_parallel = max(1, min(16, _cores // max(1, n_cpus)))
+        n_parallel = max(1, min(n_parallel, len(files)))
+
         # Announce BEFORE running (Claude-Code style: say what + where up front).
         _dscheme = (f"{dark_source}/{dark_kind}" if dark_source == "file" else dark_source)
         print(f"[integrate_series] {len(files)} file(s) → {out_root}", file=sys.stderr)
         print(f"[integrate_series] params={param_path.name}  darks={_dscheme}  "
-              f"compute={plan['target']}", file=sys.stderr)
+              f"compute={plan['target']}  parallel={n_parallel}×{n_cpus}cpu "
+              f"({_cores} cores)", file=sys.stderr)
         if grid_info:
             print(f"[integrate_series] grid {grid_info['min']}–{grid_info['max']} "
                   f"{grid_info['convention']} / {n_channels} ch → R {r_min:.1f}–{r_max:.1f}px "
@@ -3240,8 +3263,11 @@ async def midas_integrate_series(
                         "dark_first_frame_mean": _dmean,
                     })
 
-        per_file, n_ok = [], 0
-        for img in files:
+        # Integrate ONE file → its result record. Pulled out of the loop so it can
+        # run in a worker thread: each call only blocks on subprocess.run (the work
+        # is in the child integrator.py process, which releases the GIL), so a thread
+        # pool yields full process-level parallelism with no pickling.
+        def _integrate_one(img):
             out_dir = out_root / img.stem
             out_dir.mkdir(parents=True, exist_ok=True)
             if dark_source == "none":
@@ -3290,7 +3316,6 @@ async def midas_integrate_series(
                 if res.returncode == 0 and lineout:
                     rec["status"] = "success"
                     rec["lineout_xy"] = str(lineout[0])
-                    n_ok += 1
                 else:
                     rec["status"] = "error"
                     rec["error"] = (f"integrator.py exit {res.returncode}"
@@ -3300,8 +3325,38 @@ async def midas_integrate_series(
                 rec["status"] = "error"; rec["error"] = "timeout (>10 min)"
             except Exception as _e:
                 rec["status"] = "error"; rec["error"] = str(_e)
-            per_file.append(rec)
-            print(f"  [{rec['status']:7s}] {img.name}", file=sys.stderr)
+            return rec
+
+        # Run the series: serial when n_parallel==1 (deterministic, matches the old
+        # path), else a bounded thread pool of n_parallel concurrent files. Manifest
+        # order is restored to input order afterwards (as_completed finishes out of
+        # order), so results/xye/fxye stay deterministic regardless of scheduling.
+        _rec_by_img, _done = {}, 0
+        if n_parallel == 1:
+            for img in files:
+                rec = _integrate_one(img)
+                _rec_by_img[str(img)] = rec
+                _done += 1
+                print(f"  [{rec['status']:7s}] ({_done}/{len(files)}) {img.name}",
+                      file=sys.stderr)
+        else:
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            with ThreadPoolExecutor(max_workers=n_parallel) as _ex:
+                _futs = {_ex.submit(_integrate_one, img): img for img in files}
+                for _fut in as_completed(_futs):
+                    img = _futs[_fut]
+                    try:
+                        rec = _fut.result()
+                    except Exception as _e:   # worker crash: record, never abort the batch
+                        rec = {"input_image": str(img),
+                               "result_folder": str(out_root / img.stem),
+                               "status": "error", "error": f"worker crashed: {_e}"}
+                    _rec_by_img[str(img)] = rec
+                    _done += 1
+                    print(f"  [{rec['status']:7s}] ({_done}/{len(files)}) {img.name}",
+                          file=sys.stderr)
+        per_file = [_rec_by_img[str(img)] for img in files]     # deterministic order
+        n_ok = sum(1 for r in per_file if r.get("status") == "success")
 
         n_fail = len(per_file) - n_ok
         # Consolidate into the expert's per-sample layout at result_folder:
@@ -3365,6 +3420,7 @@ async def midas_integrate_series(
             "failed": n_fail,
             "subset": subset_note,
             "compute": plan,
+            "n_parallel": n_parallel,
             "output_root": str(out_root),
             "output_location_warning": (
                 f"result_folder was not set — output was written to a DEFAULT location "
