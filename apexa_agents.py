@@ -54,6 +54,27 @@ _EXT_GROUPS = {
     "Docs":    {".md",".rst",".pdf",".log"},
 }
 
+def _emit_narration(prose: str) -> None:
+    """Surface the model's pre-action narration to the user (Claude-Code style:
+    say what you're about to do, THEN do it). The ``▸ toolname`` markers alone
+    show that a tool fired but not WHY — so any prose the model writes before its
+    TOOL_CALL block would otherwise be swallowed (it's only appended to the
+    in-flight message history, never printed). Print it so a multi-step turn
+    reads like Claude Code: intent line → tool → intent line → tool.
+
+    Light markdown strip keeps the terminal clean (matches the CLI's
+    clean_markdown intent for the final answer); Gradio/web capture stdout the
+    same way they already do for the ▸ markers."""
+    if not prose:
+        return
+    s = re.sub(r'\*\*(.+?)\*\*', r'\1', prose)     # **bold**
+    s = re.sub(r'__(.+?)__', r'\1', s)              # __italic__
+    s = re.sub(r'^#{1,6}\s*', '', s, flags=re.M)    # ### headers
+    s = s.strip()
+    if s:
+        print(f"\n{s}")
+
+
 def _compact_listing(parsed: dict, max_preview: int = 3) -> str:
     """Build a grouped compact summary from list_directory JSON result.
 
@@ -1092,6 +1113,12 @@ memory. Reason over it, then act.
 ## Operating style — work like a senior colleague, not a report generator
 - BE TERSE AND ACT. Reason in a few words, then DO the thing. Default to the shortest
   reply that moves the task forward. Prefer doing over describing.
+- NARRATE THEN ACT (Claude-Code style): before you emit a tool call — or a batch of
+  them in one response — write ONE short line saying what you're about to do and why
+  (e.g. "Reading Leighann's script to get the dark grid." / "Integrating the 192 JL_Nb
+  frames to APEXA_benchmark/…"). The user sees that line; a tool that fires with no
+  lead-in looks like nothing is happening. One line is enough — do NOT expand it into a
+  plan or re-explain after the result.
 - When the user has already told you what to do — named the action, its inputs, and/or
   the output, or said "go / do it / run / perform / proceed", or approved this step —
   EXECUTE NOW: at most one line of what you're doing, then the tool call. Do NOT
@@ -2289,6 +2316,7 @@ class AgentRunner:
                     })
                     continue
                 messages.append(self._assistant_message(response, provider.model))
+                _emit_narration(response.content or "")   # narration before the ▸ markers
                 for tc in response.tool_calls:
                     print(f"  \033[36m▸\033[0m \033[1m{tc.name}\033[0m")
                     t0 = time.monotonic()
@@ -2323,10 +2351,14 @@ class AgentRunner:
             text_calls = self._parse_text_tool_calls(text)
 
             if text_calls:
-                # Add assistant text (with tool calls stripped) to history
+                # Add assistant text (with tool calls stripped) to history AND
+                # show it to the user before the ▸ tool markers fire — this is the
+                # "say what you'll do, then do it" narration the user expects from
+                # Claude Code. Without this the prose is only stored, never seen.
                 prose = self._strip_tool_calls_from_text(text)
                 if prose:
                     messages.append({"role": "assistant", "content": prose})
+                    _emit_narration(prose)
 
                 # ── Runtime fan-out guards ───────────────────────────────────
                 # Two complementary checks:

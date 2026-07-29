@@ -3104,6 +3104,7 @@ async def midas_integrate_series(
         # matched to a WY5/JL_Nb dark or the wrong before/after set in a directory
         # that interleaves many samples and both dark kinds.
         dark_files = []
+        dark_scope = "n/a"
         if not dark_file and dark_source == "file":
             import os as _os
             base = (Path(dark_dir).expanduser().absolute() if dark_dir
@@ -3114,12 +3115,31 @@ async def midas_integrate_series(
             cand = sorted(base.glob(dark_pattern))
             def _same_sample(p):
                 return (not sample_tok) or p.name.startswith(prefix) or sample_tok in p.name.lower()
+            def _of_kind(pool):
+                # Filter to the requested before/after set; fall back to any-kind
+                # if the directory doesn't tag darks that way.
+                if kind in ("after", "before"):
+                    k = [p for p in pool if f"dark_{kind}" in p.name.lower()]
+                    return k or pool
+                return pool
             scoped = [p for p in cand if _same_sample(p)]
-            if kind in ("after", "before"):
-                kinded = [p for p in scoped if f"dark_{kind}" in p.name.lower()]
-                dark_files = kinded or scoped   # fall back to any-kind if none of that kind
+            if scoped:
+                # This sample has darks under its OWN prefix — use only those, so a
+                # directory interleaving many samples (each with its own darks) never
+                # cross-matches. This is the common per-sample-dark case.
+                dark_files = _of_kind(scoped)
+                dark_scope = "sample-prefix"
             else:
-                dark_files = scoped
+                # No dark under this sample's prefix → the darks are SHARED across
+                # samples: collected per-LOOP (e.g. one before/after set bracketing a
+                # whole set of cells cycled in turn), and therefore named for a
+                # different sample than the one being integrated. Fall back to ALL
+                # darks of the requested kind in the directory and let _nearest_dark
+                # pick the right loop's dark by frame number. General, not
+                # dataset-specific: this branch only runs when the sample has no dark
+                # of its own, so it can't steal a sample's dedicated darks.
+                dark_files = _of_kind(cand)
+                dark_scope = "shared/per-loop (no sample-prefix dark)"
         # 4) integrator setup (CPU subprocess engine — the batch-scale path)
         integrator_script = MIDAS_ROOT / "FF_HEDM" / "workflows" / "integrator.py"
         if not integrator_script.exists():
@@ -3207,6 +3227,8 @@ async def midas_integrate_series(
 
         # Announce BEFORE running (Claude-Code style: say what + where up front).
         _dscheme = (f"{dark_source}/{dark_kind}" if dark_source == "file" else dark_source)
+        if dark_source == "file" and not dark_file and dark_scope != "n/a":
+            _dscheme += f" [{dark_scope}]"   # flag shared/per-loop cross-prefix matching
         print(f"[integrate_series] {len(files)} file(s) → {out_root}", file=sys.stderr)
         print(f"[integrate_series] params={param_path.name}  darks={_dscheme}  "
               f"compute={plan['target']}  parallel={n_parallel}×{n_cpus}cpu "
@@ -3255,11 +3277,15 @@ async def midas_integrate_series(
                     "tool": "midas_integrate_series", "status": "error",
                     "error": (
                         f"dark_source={dark_source!r} requested but NO dark file was "
-                        f"matched (dark_dir/dark_file empty or filename pattern didn't "
-                        f"pair). Aborting before integrating {len(files)} frames with no "
-                        f"dark. Fix: set dark_dir to the folder holding the dark files "
-                        f"(e.g. *_dark_after_*.h5) with dark_kind='after', or pass "
-                        f"dark_source='none' to integrate without a dark on purpose."),
+                        f"matched (dark_scope={dark_scope}; dark_dir/dark_file empty or "
+                        f"no *_dark_{dark_kind}_* files in the directory). Aborting before "
+                        f"integrating {len(files)} frames with no dark. Shared/per-loop "
+                        f"darks under a different sample prefix ARE matched automatically "
+                        f"when the sample has none of its own, so this means the directory "
+                        f"holds no matching dark at all. Fix: set dark_dir to the folder "
+                        f"holding the dark files (e.g. *_dark_after_*.h5) with "
+                        f"dark_kind='after', or pass dark_source='none' to integrate "
+                        f"without a dark on purpose."),
                     "dark_file": None, "dark_dataset": None,
                     "dark_first_frame_mean": None, "dark_applied": False,
                 })
@@ -3436,6 +3462,7 @@ async def midas_integrate_series(
             "matched_files": n_matched,
             "darks_excluded": n_darks_excluded,
             "dark_scheme": _dscheme,
+            "dark_scope": dark_scope,   # sample-prefix vs shared/per-loop (cross-prefix)
             # Provenance the "did you grab the dark?" question needs: the dataset
             # actually read and its first-frame mean. mean==0.0 ⇒ subtraction was a
             # no-op (wrong path / zero placeholder), even though a dark was "found".
