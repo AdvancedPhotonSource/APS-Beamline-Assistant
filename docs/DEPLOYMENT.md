@@ -1,0 +1,144 @@
+# Running APEXA as an always-on service
+
+Goal: one persistent APEXA **web service** on a beamline machine (e.g. chiltepin /
+chutoro), reachable in a browser on the APS network — so users don't launch it
+per session. This is a deployment decision, not new code: `web_server.py` already
+binds `0.0.0.0:8001`, ships a prebuilt frontend (no Node needed), and spawns the
+`core` / `midas` / `motor` MCP servers itself.
+
+---
+
+## Recommendation
+
+**Run it as a systemd *user* service.** Rationale:
+
+- **No root required** — beamline accounts rarely have sudo. A user unit lives in
+  `~/.config/systemd/user/` and is managed entirely by the owning account.
+- **Survives logout and reboot** once linger is enabled (`loginctl enable-linger`).
+- **Auto-restart on crash** (`Restart=on-failure`) + real logs via `journalctl`.
+
+Use a **system** service instead only if it must start at boot with *no* user ever
+logged in, or run under a shared service account — that needs sudo (see below).
+
+Use **tmux** only for a quick, throwaway "keep it up for the afternoon" — it dies
+on reboot and won't auto-restart. Documented last as a fallback.
+
+---
+
+## Prerequisites (once, in the repo on the target machine)
+
+```bash
+cd /path/to/APEXA-APS-Beamline-Assistant
+git pull                 # get the latest
+uv sync                  # create/refresh .venv (~1s)
+./setup_user.sh          # writes .env (ANL_USERNAME, ARGO_MODEL, MIDAS_PATH)
+test -f frontend/dist/index.html && echo "frontend OK"   # prebuilt, shipped
+```
+
+Smoke-test in the foreground before daemonizing:
+
+```bash
+.venv/bin/python3 web_server.py
+# → open http://<machine>:8001 in a browser, run one query, Ctrl+C
+```
+
+---
+
+## Install — systemd user service (recommended)
+
+```bash
+cd /path/to/APEXA-APS-Beamline-Assistant
+mkdir -p ~/.config/systemd/user
+sed "s#__APEXA_DIR__#$PWD#g" deploy/apexa-web.service \
+    > ~/.config/systemd/user/apexa-web.service
+
+systemctl --user daemon-reload
+systemctl --user enable --now apexa-web      # start now + on login
+loginctl enable-linger "$USER"               # keep running when logged out / after reboot
+
+systemctl --user status apexa-web            # should read "active (running)"
+```
+
+Browse to `http://<machine-hostname>:8001`.
+
+### Day-to-day operations
+
+```bash
+systemctl --user restart apexa-web           # after a config change
+systemctl --user stop apexa-web
+journalctl --user -u apexa-web -f            # live logs
+journalctl --user -u apexa-web --since "1 hour ago"
+```
+
+### Updating to a new version
+
+```bash
+cd /path/to/APEXA-APS-Beamline-Assistant
+git pull && uv sync
+systemctl --user restart apexa-web
+```
+
+---
+
+## System service variant (boot without a logged-in user; needs sudo)
+
+```bash
+sudo sed "s#__APEXA_DIR__#/path/to/APEXA-APS-Beamline-Assistant#g" \
+    deploy/apexa-web.service | sudo tee /etc/systemd/system/apexa-web.service
+```
+
+Then edit `/etc/systemd/system/apexa-web.service`:
+
+- Uncomment `User=` / `Group=` (a dedicated account that owns the repo and `.venv` —
+  **not** root).
+- Change `WantedBy=default.target` → `WantedBy=multi-user.target`.
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now apexa-web
+sudo systemctl status apexa-web
+sudo journalctl -u apexa-web -f
+```
+
+---
+
+## Fallback — tmux (quick, non-persistent)
+
+```bash
+tmux new -s apexa
+cd /path/to/APEXA-APS-Beamline-Assistant && .venv/bin/python3 web_server.py
+# detach: Ctrl-b then d      reattach: tmux attach -t apexa
+```
+
+Dies on reboot, no auto-restart — use only for short-lived hosting.
+
+---
+
+## Decisions to settle with the beamline / supervisors
+
+1. **Argo identity (the real policy call).** Argo Gateway authenticates with
+   `ANL_USERNAME` from `.env`. A single shared service = **all traffic under one
+   username** (a service account). That's fine for a shared console/demo, but if
+   per-user attribution or quota matters you need a login layer that swaps the
+   username per session. Raise this explicitly — it's policy, not code.
+
+2. **Network exposure.** `0.0.0.0:8001` is reachable by anything that can route to
+   the host. Confirm `:8001` is open on the beamline subnet / behind the APS
+   firewall, or front it with a reverse proxy (nginx) for TLS + a friendly
+   hostname. Change host/port via `APEXA_WEB_HOST` / `APEXA_WEB_PORT` in the unit.
+
+3. **Security surface.** APEXA can run shell commands and drive motors via its MCP
+   tools. Keep the service on the internal network only; if it's reachable more
+   widely, add authentication (reverse-proxy basic auth at minimum) before going
+   live. The destructive-command block and motor-confirmation prompts are a floor,
+   not a substitute for network isolation.
+
+---
+
+## Health check
+
+```bash
+curl -sS http://localhost:8001/ >/dev/null && echo "APEXA web up"
+```
+
+Wire this into a monitoring check or a `systemd` timer if you want alerting.

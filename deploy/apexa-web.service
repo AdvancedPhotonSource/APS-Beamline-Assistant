@@ -1,0 +1,57 @@
+# APEXA — Advanced Photon EXperiment Assistant (always-on web service)
+# ----------------------------------------------------------------------------
+# Systemd unit template. Replace the three __APEXA_DIR__ placeholders with the
+# absolute path to the cloned repo (e.g. /home/s1iduser/APEXA-APS-Beamline-Assistant).
+#
+# RECOMMENDED — per-user service (no root needed; survives logout & reboot):
+#   mkdir -p ~/.config/systemd/user
+#   sed "s#__APEXA_DIR__#$PWD#g" deploy/apexa-web.service \
+#       > ~/.config/systemd/user/apexa-web.service
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now apexa-web
+#   loginctl enable-linger "$USER"          # keep running when logged out
+#   systemctl --user status apexa-web
+#   journalctl --user -u apexa-web -f       # live logs
+#
+# SYSTEM service variant (starts at boot without any user logged in; needs sudo):
+#   copy to /etc/systemd/system/apexa-web.service, uncomment User=/Group= below,
+#   change WantedBy to multi-user.target, then: sudo systemctl enable --now apexa-web
+#   (see docs/DEPLOYMENT.md).
+
+[Unit]
+Description=APEXA beamline assistant (FastAPI web UI + MCP servers)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# --- system-service only: run as a dedicated account, not root ---
+# User=s1iduser
+# Group=s1iduser
+
+# Absolute path to the cloned repo:
+WorkingDirectory=__APEXA_DIR__
+
+# .env holds ANL_USERNAME / ARGO_MODEL / MIDAS_PATH. systemd reads plain
+# KEY=VALUE lines (the format setup_user.sh writes); comment lines are ignored.
+EnvironmentFile=__APEXA_DIR__/.env
+
+# Network binding — change host/port here without touching code:
+Environment=APEXA_WEB_HOST=0.0.0.0
+Environment=APEXA_WEB_PORT=8001
+Environment=NUMEXPR_MAX_THREADS=10
+
+# Run via the uv-managed venv Python directly: no PATH dependence, no npm build
+# at boot (frontend/dist is prebuilt and shipped). web_server.py spawns the MCP
+# servers itself, so no server args are needed (matches start_web_viewer.sh).
+ExecStart=__APEXA_DIR__/.venv/bin/python3 web_server.py
+
+Restart=on-failure
+RestartSec=5
+# Let an in-flight integration/calibration subprocess exit cleanly on stop:
+TimeoutStopSec=30
+KillMode=mixed
+
+[Install]
+# per-user service → default.target ; system service → multi-user.target
+WantedBy=default.target
