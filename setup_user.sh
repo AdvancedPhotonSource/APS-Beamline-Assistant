@@ -31,21 +31,34 @@ fi
 # Step 2: AI Model
 echo ""
 echo "  2. Default AI Model"
-echo "     1) gpt4o       - GPT-4o (fastest, recommended)"
-echo "     2) gpt41mini   - GPT-4.1 Mini (1M context, fast)"
-echo "     3) gpt54       - GPT-5.4 (1M context, most capable)"
-echo "     4) claudesonnet45 - Claude Sonnet 4.5"
-echo "     5) gemini25pro - Gemini 2.5 Pro (1M context)"
+echo "     1) gpt55        - GPT-5.5 (1M context, DEFAULT, most reliable tool calls)"
+echo "     2) gpt54        - GPT-5.4 (1M context, strong all-round, lower cost)"
+echo "     3) claudeopus48 - Claude Opus 4.8 (1M context, best planning)"
+echo "     4) gpt4o        - GPT-4o (fastest, cheapest)"
+echo "     5) gemini35flash - Gemini 3.5 Flash"
+echo ""
+echo "     Enter a number, or type any model name directly (e.g. gpt51, claudesonnet46)."
 read -p "     Select [1]: " model_choice
 model_choice=${model_choice:-1}
 
 case $model_choice in
-    1) ARGO_MODEL="gpt4o" ;;
-    2) ARGO_MODEL="gpt41mini" ;;
-    3) ARGO_MODEL="gpt54" ;;
-    4) ARGO_MODEL="claudesonnet45" ;;
-    5) ARGO_MODEL="gemini25pro" ;;
-    *) ARGO_MODEL="gpt4o" ;;
+    1) ARGO_MODEL="gpt55" ;;
+    2) ARGO_MODEL="gpt54" ;;
+    3) ARGO_MODEL="claudeopus48" ;;
+    4) ARGO_MODEL="gpt4o" ;;
+    5) ARGO_MODEL="gemini35flash" ;;
+    ""|*[!a-zA-Z0-9]*)
+        # empty or contains punctuation → not a valid model token; fall back
+        echo "     Unrecognized selection '$model_choice' — using default gpt55"
+        ARGO_MODEL="gpt55" ;;
+    *)
+        # any other bare alphanumeric token → treat as a typed model name
+        ARGO_MODEL="$model_choice"
+        _KNOWN_MODELS=" gpt4o gpt41 gpt41mini gpt41nano gpto3mini gpto4mini gpt5 gpt5mini gpt5nano gpt51 gpt52 gpt54 gpt55 claudeopus48 claudeopus47 claudeopus46 claudeopus45 claudeopus41 claudesonnet46 claudesonnet45 claudehaiku45 gemini35flash gemini31flashlite gemini25pro gemini25flash "
+        if [[ "$_KNOWN_MODELS" != *" $ARGO_MODEL "* ]]; then
+            echo "     Note: '$ARGO_MODEL' is not in the known model list — saving it anyway."
+        fi
+        ;;
 esac
 
 # Step 3: MIDAS path (optional)
