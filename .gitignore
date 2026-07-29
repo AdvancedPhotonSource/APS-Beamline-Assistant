@@ -208,3 +208,9 @@ tutorials-demo/apexa_architecture_diagrams.py
 tutorials-demo/APEXA_APS_Presentation.pptx
 tutorials-demo/APEXA_Architecture_Detailed.pptx
 tutorials-demo/APEXA_Architecture_HighLevel.pptx
+# OSF upload staging (data mirror; not tracked)
+osf_bundle/
+
+# OSF API token (never commit) — inline comments break .gitignore patterns,
+# so the comment MUST stay on its own line above the pattern
+.osfcli.config
