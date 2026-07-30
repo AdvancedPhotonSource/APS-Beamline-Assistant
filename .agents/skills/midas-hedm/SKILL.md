@@ -1,7 +1,7 @@
 ---
 name: midas-hedm
 description: Run full HEDM (High Energy Diffraction Microscopy) analysis pipelines using MIDAS v11. Use when the user asks for FF-HEDM, NF-HEDM, PF-HEDM, grain indexing, grain matching, strain mapping, microstructure reconstruction, or orientation mapping.
-compatibility: Requires MIDAS v11 + midas-suite (midas-pipeline ≥0.4.9, midas-nf-pipeline ≥0.1.1). Install via pip install midas-suite. Calibrated detector parameters required.
+compatibility: Requires MIDAS v11 + midas-suite ≥0.4.0 (midas-pipeline ≥0.6.1, midas-nf-pipeline ≥0.1.1). Install via pip install midas-suite. Calibrated detector parameters required.
 metadata:
   author: pawan-tripathi
   version: "2.0"

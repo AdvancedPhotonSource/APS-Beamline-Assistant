@@ -351,6 +351,7 @@ MIDAS_FF_V7 = MIDAS_ROOT / "FF_HEDM" / "v7"
 MIDAS_NF_V7 = MIDAS_ROOT / "NF_HEDM" / "v7"
 MIDAS_UTILS = MIDAS_ROOT / "utils"
 STRESS_RUNNER_SCRIPT = Path(__file__).parent / "_stress_runner.py"
+CAPABILITY_RUNNER_SCRIPT = Path(__file__).parent / "_capability_runner.py"
 
 _autocal_script = MIDAS_UTILS / "AutoCalibrateZarr.py"
 if not _autocal_script.exists():
@@ -4508,9 +4509,30 @@ async def midas_auto_calibrate(
             _v2_out = (Path(output_dir).expanduser().absolute()
                        if output_dir else image_path.parent)
             _v2_out.mkdir(parents=True, exist_ok=True)
+            # v2 built-in calibrant set. _detect_calibrant_from_name returns a
+            # material only when its token is in the filename (else defaults to
+            # CeO2). If it detected a real calibrant the v2 engine can't handle
+            # (Au/Ni/Al), do NOT silently run CeO2 against a differently-named
+            # image — that fabricates a wrong-material calibration. Fail honestly.
+            _V2_CALIBRANTS = ("CeO2", "LaB6", "Si", "Al2O3")
             _calib_v2 = _detect_calibrant_from_name(original_stem)
-            if _calib_v2 not in ("CeO2", "LaB6", "Si", "Al2O3"):
-                _calib_v2 = "CeO2"   # v2 CALIBRANTS set
+            if _calib_v2 not in _V2_CALIBRANTS:
+                _hint = ("Au is a single-crystal / NF beam-position standard, not an "
+                         "FF powder calibrant — use a powder standard for v2 geometry."
+                         if _calib_v2 == "Au" else
+                         f"{_calib_v2} is not a supported v2 powder calibrant.")
+                return format_result({
+                    "tool": "midas_auto_calibrate", "status": "error",
+                    "engine": "v2:midas_calibrate_v2",
+                    "error": (f"filename '{original_stem}' looks like a {_calib_v2} "
+                              f"calibrant, which the v2 engine does not support "
+                              f"(built-ins: {', '.join(_V2_CALIBRANTS)})."),
+                    "detected_calibrant": _calib_v2,
+                    "supported_calibrants": list(_V2_CALIBRANTS),
+                    "hint": (_hint + " To calibrate with a powder standard, pass a "
+                             "CeO2/LaB6/Si/Al2O3 image, or run calibration_engine='v1' "
+                             "(material-agnostic via LatticeConstant+SpaceGroup)."),
+                })
             _ny2, _nz2, _px2 = _detector_shape_and_px(image_path)
             _lsd_um2 = (float(lsd_guess) if lsd_guess < 1_000_000
                         else (float(lsd_from_filename) if lsd_match else 1_000_000.0))
@@ -7932,6 +7954,81 @@ _CAPABILITY_GROUPS = {
 }
 
 
+# Map a recommended tool → the Agent Skill (.agents/skills/<name>/SKILL.md) that
+# documents its exact v11 flags/paths/outputs. recommend_workflow attaches the
+# right skill to every recommendation so the agent loads the canonical procedure
+# (not just the tool) when the user exposes data. First token of the tool string
+# is matched, so "read_grains_summary / compute_grain_stress" resolves on the head.
+_SKILL_FOR_TOOL = {
+    # calibration
+    "midas_auto_calibrate": "midas-calibrate",
+    "run_ff_calibration": "midas-calibrate",
+    "estimate_parameters_from_image": "midas-calibrate",
+    # integration
+    "midas_integrate_series": "midas-integrate",
+    "midas_batch_integrate": "midas-integrate",
+    "midas_integrate_2d_to_1d": "midas-integrate",
+    # FF-HEDM
+    "run_ff_hedm_full_workflow": "midas-ff-hedm",
+    "run_ff_pipeline": "midas-ffpipeline",
+    "refine_grain_lattice": "midas-ffpipeline",
+    # NF / PF / general HEDM
+    "run_nf_hedm_reconstruction": "midas-hedm",
+    "convert_nf_to_dream3d": "midas-hedm",
+    "extract_grain_centroids": "midas-hedm",
+    "preprocess_nf_data": "midas-hedm",
+    "run_pf_hedm_workflow": "midas-hedm",
+    "run_forward_simulation": "midas-hedm",
+    "match_grains": "midas-hedm",
+    "calculate_misorientation": "midas-hedm",
+    "read_grains_summary": "midas-hedm",
+    "compute_grain_stress": "midas-hedm",
+    "analyze_slip_systems": "midas-hedm",
+    # phase / refinement
+    "run_gsas_refinement": "midas-gsasii",
+    # inspect / validate
+    "recommend_workflow": "midas-validate",
+    "inspect_dataset_file": "midas-validate",
+    "validate_parameter_file": "midas-validate",
+    "diagnose_parameter_file": "midas-validate",
+    # visualize
+    "run_midas_viewer": "midas-visualize",
+}
+
+
+# One-line index of the Agent Skills, returned in the capability summary so the
+# agent knows which procedure doc to load for each task class.
+_SKILL_INDEX = {
+    "midas-calibrate": "Detector-geometry calibration (Lsd, beam center, in-plane/out-of-plane tilts tx/ty/tz) from a CeO2/LaB6/Si calibrant",
+    "midas-integrate": "2D→1D azimuthal integration / caking (single image, frame range, or a whole series)",
+    "midas-ff-hedm": "Far-field HEDM grain reconstruction via the unified midas-pipeline (→ Grains.csv)",
+    "midas-ffpipeline": "Differentiable PyTorch FF-HEDM pipeline + per-grain lattice refinement (checkpoint/resume, multi-GPU)",
+    "midas-hedm": "Full HEDM umbrella — FF/NF/PF reconstruction, grain matching, misorientation, forward simulation, stress/slip",
+    "midas-gsasii": "GSAS-II peak fitting / Rietveld & lattice refinement on integrated patterns + a CIF",
+    "midas-validate": "Validate/diagnose MIDAS parameter files & datasets; inspect geometry before a heavy run",
+    "midas-visualize": "Caked heatmaps, lineouts, calibrant/peak overlays, HEDM grain maps",
+    "motor-control": "EPICS motor control (position, move, jog, tweak, home) at APS beamlines",
+}
+
+
+def _skill_for(tool: str) -> str:
+    """Resolve the Agent Skill for a recommendation's tool string (first token)."""
+    if not tool:
+        return None
+    head = tool.strip().split()[0].split("/")[0].strip()
+    return _SKILL_FOR_TOOL.get(head)
+
+
+def _attach_skills(recs: list) -> list:
+    """Annotate each recommendation dict with its 'skill' (in place, then return)."""
+    for r in recs:
+        if isinstance(r, dict) and "skill" not in r:
+            sk = _skill_for(r.get("tool", ""))
+            if sk:
+                r["skill"] = sk
+    return recs
+
+
 @mcp.tool()
 async def recommend_workflow(path: str = "", goal: str = "") -> str:
     """Inspect input data and recommend the APEXA tool + parameters to run next.
@@ -7955,8 +8052,10 @@ async def recommend_workflow(path: str = "", goal: str = "") -> str:
                 "tool": "recommend_workflow", "status": "success",
                 "mode": "capability_summary",
                 "capabilities": _CAPABILITY_GROUPS,
+                "skills": _SKILL_INDEX,
                 "hint": "Call recommend_workflow with a path to a file or directory "
-                        "for a data-specific recommendation.",
+                        "for a data-specific recommendation. Each capability maps to "
+                        "an Agent Skill (see 'skills') carrying the exact v11 procedure.",
             })
         p = Path(path).expanduser().absolute()
         info = _classify_input(p)
@@ -7997,6 +8096,53 @@ async def recommend_workflow(path: str = "", goal: str = "") -> str:
             if info["grains_csv"]:
                 recs.append({"tool": "read_grains_summary / compute_grain_stress",
                              "why": f"grains file(s) present: {', '.join(info['grains_csv'])}"})
+                recs.append({
+                    "tool": "midas-joint-ff-calibrate grain-tx",
+                    "why": "single-crystal spots in Grains.csv make the IN-PLANE tilt tx "
+                           "refinable — it is invisible to powder calibration",
+                    "note": "in-plane tx (rotation about the beam) is NOT observable from "
+                            "Debye-Scherrer rings; refine it post-reconstruction from these "
+                            "grains (angular loss, >=50 grains). MIDAS CLI — not yet wrapped "
+                            "as an APEXA @mcp.tool (tracked gap).",
+                    "manual_step": True,
+                })
+            # FF/NF/PF-HEDM: many rotation frames + a MIDAS parameter file → grain
+            # reconstruction is on the table (same raw frames the integrator reads).
+            # Integration vs HEDM is goal-driven — rank grains first only when asked.
+            if info.get("param_files") and ns >= 1:
+                wants_grains = any(k in g for k in (
+                    "hedm", "ff", "grain", "index", "reconstruct", "orientation", "refine"))
+                pf = info["param_files"][0]
+                if any(k in g for k in ("nf", "near-field", "near field")):
+                    hedm_rec = {
+                        "tool": "run_nf_hedm_reconstruction",
+                        "why": f"near-field goal + parameter file ({pf}) → spatial grain-map",
+                        "params": {"param_file": f"<{pf}>",
+                                   "result_folder": "<where to write Grains.mic>"},
+                        "output": "Grains.mic (voxel grain map) → convert_nf_to_dream3d",
+                        "alternative": "run_ff_hedm_full_workflow for far-field grain centroids",
+                    }
+                elif "pf" in g or "point-focus" in g or "scanning" in g:
+                    hedm_rec = {
+                        "tool": "run_pf_hedm_workflow",
+                        "why": f"point-focus/scanning goal + parameter file ({pf})",
+                        "params": {"param_file": f"<{pf}>",
+                                   "result_dir": "<where to write per-layer Grains.csv>"},
+                        "output": "LayerNr_*/Grains.csv",
+                    }
+                else:
+                    hedm_rec = {
+                        "tool": "run_ff_hedm_full_workflow",
+                        "why": f"MIDAS parameter file present ({pf}) + {ns} rotation frame(s) "
+                               f"→ full FF-HEDM grain reconstruction",
+                        "params": {"param_file": f"<{pf}>",
+                                   "result_dir": "<where to write Grains.csv>",
+                                   "refine_backend": "c-omp (for Grains.csv) | python"},
+                        "output": "Grains.csv (grain centroid / orientation / strain)",
+                        "alternative": "run_nf_hedm_reconstruction (near-field grain map) | "
+                                       "run_pf_hedm_workflow (point-focus scanning)",
+                    }
+                recs.insert(0, hedm_rec) if wants_grains else recs.append(hedm_rec)
         elif kind == "hdf5_image":
             dl = info.get("data_location_guess")
             dsrc = "embedded" if info.get("embedded_dark") else "file"
@@ -8010,19 +8156,45 @@ async def recommend_workflow(path: str = "", goal: str = "") -> str:
                               if dsrc == "embedded" else {})},
                 "note": f"HDF5 datasets: {[d['path'] for d in info.get('hdf5_datasets', [])]}",
             })
-            if info.get("calibrant") in ("CeO2", "LaB6", "Si", "Al2O3"):
-                recs.insert(0, {"tool": "midas_auto_calibrate",
-                                "why": f"filename looks like a {info['calibrant']} calibrant"})
+            if info.get("calibrant"):
+                _cal = info["calibrant"]
+                _powder = _cal in ("CeO2", "LaB6", "Si", "Al2O3")
+                recs.insert(0, {
+                    "tool": "midas_auto_calibrate",
+                    "why": f"filename looks like a {_cal} calibrant",
+                    "note": (f"{_cal} is a standard powder calibrant → refines Lsd/BC "
+                             "+ OUT-OF-PLANE tilts ty/tz (in-plane tx is not powder-"
+                             "observable; see the tx note below)." if _powder else
+                             f"{_cal} is a single-crystal standard → used for NF "
+                             "beam-position calibration (gui/nf_qt.py), not FF powder "
+                             "geometry. For FF powder use CeO2/LaB6/Si."),
+                })
         elif kind in ("tiff_image", "ge_image"):
-            if info.get("calibrant") in ("CeO2", "LaB6", "Si", "Al2O3"):
-                recs.append({"tool": "midas_auto_calibrate",
-                             "why": f"{info['calibrant']} calibrant image"})
+            if info.get("calibrant"):
+                _cal = info["calibrant"]
+                _powder = _cal in ("CeO2", "LaB6", "Si", "Al2O3")
+                recs.append({
+                    "tool": "midas_auto_calibrate",
+                    "why": f"{_cal} calibrant image",
+                    "note": ("powder standard → Lsd/BC + out-of-plane ty/tz" if _powder
+                             else f"{_cal} single-crystal standard → NF beam-position "
+                                  "calibration, not FF powder geometry"),
+                })
             recs.append({"tool": "midas_integrate_2d_to_1d",
                          "why": "single 2D image → 1D pattern",
                          "alternative": "batch_convert_ge_to_tiff first if downstream needs TIFF"})
         elif kind == "grains_csv":
             recs.append({"tool": "read_grains_summary",
                          "why": "grain table → summary, then compute_grain_stress / analyze_slip_systems"})
+            recs.append({
+                "tool": "midas-joint-ff-calibrate grain-tx",
+                "why": "refine the IN-PLANE tilt tx from these single-crystal grains "
+                       "(powder calibration cannot see tx)",
+                "note": "in-plane tx (about the beam axis) is invisible to Debye-Scherrer "
+                        "rings; it is refined from grain spots via angular loss (>=50 grains). "
+                        "MIDAS CLI — not yet an APEXA @mcp.tool (tracked gap).",
+                "manual_step": True,
+            })
         elif kind == "mic":
             recs.append({"tool": "extract_grain_centroids / convert_nf_to_dream3d",
                          "why": "NF .mic reconstruction output"})
@@ -8040,15 +8212,20 @@ async def recommend_workflow(path: str = "", goal: str = "") -> str:
             recs.append({"tool": "inspect_dataset_file",
                          "why": "unrecognized type — inspect to extract geometry/metadata first"})
 
+        _attach_skills(recs)
+        skills_used = sorted({r["skill"] for r in recs if isinstance(r, dict) and r.get("skill")})
         return format_result({
             "tool": "recommend_workflow", "status": "success",
             "mode": "recommendation",
             "input": info,
             "goal": goal or None,
             "recommendations": recs,
-            "note": "Advisory only — nothing was run. Confirm parameters + output "
-                    "location, then call the recommended tool with result_folder/"
-                    "output_dir set to where you want the output.",
+            "skills": skills_used,
+            "note": "Advisory only — nothing was run. Each recommendation names the "
+                    "Agent Skill (.agents/skills/<name>) with the exact v11 flags, "
+                    "paths, and outputs — load it before running. Confirm parameters "
+                    "+ output location, then call the recommended tool with "
+                    "result_folder/output_dir set to where you want the output.",
         })
     except Exception as e:
         return format_result({"tool": "recommend_workflow", "status": "error", "error": str(e)})
@@ -8149,6 +8326,358 @@ def _run_stress_runner(subcommand_args: list, timeout: int = 120) -> dict:
     if result.stdout.strip():
         return json.loads(result.stdout)
     raise RuntimeError(result.stderr or "_stress_runner.py produced no output")
+
+
+def _run_capability_runner(subcommand_args: list, timeout: int = 1800) -> dict:
+    """Run a _capability_runner.py subcommand and return parsed JSON.
+
+    Regime 3 (see CLAUDE.md): the 8 new MIDAS capability packages install their
+    torch stack into the APEXA .venv, so run under THIS interpreter
+    (sys.executable) with a CLEAN env (no get_midas_env C++ DYLD/LD injection —
+    that triggers an h5py/libhdf5 symbol mismatch for the pip torch stack).
+    Mirrors the calibrate-v2 call site, NOT _run_stress_runner (conda + injected
+    env). The runner keeps stdout clean (JSON only); chatter goes to stderr.
+    """
+    cmd = [sys.executable, str(CAPABILITY_RUNNER_SCRIPT)] + subcommand_args
+    result = subprocess.run(
+        cmd, capture_output=True, text=True,
+        timeout=timeout, env=dict(os.environ),
+    )
+    if result.stdout.strip():
+        return json.loads(result.stdout)
+    raise RuntimeError(result.stderr.strip().splitlines()[-1]
+                       if result.stderr.strip()
+                       else "_capability_runner.py produced no output")
+
+
+@mcp.tool()
+async def compute_pair_distribution(
+    pattern_file: str,
+    composition: str,
+    wavelength: float,
+    x_is_two_theta: bool = False,
+    q_max: float = 0.0,
+    window: str = "lorch",
+    r_min: float = 0.0,
+    r_max: float = 20.0,
+    n_r: int = 500,
+    output_file: str = "",
+) -> str:
+    """Compute a pair distribution function G(r) from an integrated 1D pattern.
+
+    REAL-DATA tool (midas-pdf 0.1.0). Takes an integrate-v2 / integrated 1D
+    pattern (2 columns: Q in Å⁻¹ or 2θ in deg, then intensity) plus the sample
+    composition, and returns the Faber-Ziman S(Q) → G(r) via a windowed Fourier
+    sine transform, with a propagated 1σ band. Use after midas_integrate_series /
+    midas_integrate_2d_to_1d to get local structure (nearest-neighbour distances)
+    from total scattering.
+
+    Args:
+        pattern_file: 1D pattern (.xy/.xye/.dat/.csv/.txt), 2 numeric columns.
+        composition: element:fraction list, e.g. "Ni:1" or "Ce:1,O:2".
+        wavelength: X-ray wavelength in Å (also converts 2θ→Q when needed).
+        x_is_two_theta: True if column 1 is 2θ (deg) rather than Q (Å⁻¹).
+        q_max: truncate the transform at this Q (Å⁻¹); 0 = use all data.
+        window: FT window — "lorch" (default) or "none".
+        r_min, r_max, n_r: output r-grid (Å) range and sample count.
+        output_file: optional path to write a 2-column r, G(r) table.
+
+    Returns:
+        JSON with G(r)/S(Q) statistics and the first-peak r (nearest neighbour).
+    """
+    try:
+        valid, ppath = validate_file(pattern_file)
+        if not valid:
+            return format_result({"tool": "compute_pair_distribution",
+                                  "status": "error", "error": ppath})
+        cargs = ["pdf", "--pattern", ppath, "--composition", composition,
+                 "--wavelength", str(wavelength), "--window", window,
+                 "--r-min", str(r_min), "--r-max", str(r_max), "--n-r", str(n_r)]
+        if x_is_two_theta:
+            cargs.append("--x-is-two-theta")
+        if q_max:
+            cargs += ["--q-max", str(q_max)]
+        if output_file:
+            cargs += ["--out", output_file]
+        out = _run_capability_runner(cargs, timeout=600)
+        return format_result({"tool": "compute_pair_distribution", **out})
+    except Exception as e:
+        return format_result({"tool": "compute_pair_distribution",
+                              "status": "error", "error": str(e)})
+
+
+@mcp.tool()
+async def analyze_grain_defects(
+    voxels_file: str,
+    mode: str = "rods",
+    out_dir: str = "",
+    grains_file: str = "",
+    no_html: bool = False,
+) -> str:
+    """Analyze crystal defects from FF-HEDM diffuse scattering (midas-defect).
+
+    REAL-DATA tool (midas-defect 0.1.0). Runs the midas_defect pipeline on a
+    q-space voxel cloud (NPZ from FF-HEDM diffuse scattering) to detect
+    dislocation ⟨111⟩ rods, asterism, or stacking-fault polytypes; the
+    "inventory" mode reproduces the full defect budget (needs the indexed
+    Grains.csv too). Requires a real voxel NPZ — there is no synthetic demo.
+
+    Args:
+        voxels_file: q-space voxel NPZ (indices/values) from diffuse scattering.
+        mode: "rods" (dislocation rods) | "asterism" | "polytype" | "inventory".
+        out_dir: directory for HTML/report artifacts (rods/asterism/polytype).
+        grains_file: MIDAS Grains.csv — required only for mode="inventory".
+        no_html: skip HTML report generation (faster).
+
+    Returns:
+        JSON with the CLI status, return code, and stdout/stderr tails.
+    """
+    try:
+        valid, vpath = validate_file(voxels_file)
+        if not valid:
+            return format_result({"tool": "analyze_grain_defects",
+                                  "status": "error", "error": vpath})
+        odir = out_dir or str(Path(vpath).parent / "defect_out")
+        cargs = ["defect", "--voxels", vpath, "--mode", mode, "--out-dir", odir]
+        if grains_file:
+            gvalid, gpath = validate_file(grains_file)
+            if not gvalid:
+                return format_result({"tool": "analyze_grain_defects",
+                                      "status": "error", "error": gpath})
+            cargs += ["--grains", gpath]
+        if no_html:
+            cargs.append("--no-html")
+        out = _run_capability_runner(cargs, timeout=3600)
+        return format_result({"tool": "analyze_grain_defects", **out})
+    except Exception as e:
+        return format_result({"tool": "analyze_grain_defects",
+                              "status": "error", "error": str(e)})
+
+
+@mcp.tool()
+async def fit_grain_odf(
+    geometry_file: str,
+    grains_file: str,
+    spots_file: str,
+    frames_file: str,
+    output_file: str = "grain_odf.h5",
+    odf_type: str = "bingham",
+) -> str:
+    """Fit a per-grain orientation distribution function from FF-HEDM data.
+
+    REAL-DATA tool (midas-grain-odf 0.1.0). Inverts each grain's intra-grain
+    orientation spread (ODF) from FF-HEDM spot patches via the differentiable
+    midas_grain_odf model. Needs the detector geometry, the indexed grains,
+    the extracted spots, and the raw frame stack.
+
+    Args:
+        geometry_file: JSON with detector geometry + lattice.
+        grains_file: grains.csv path.
+        spots_file: spots.csv path.
+        frames_file: frame stack (.npy / .npz / .h5).
+        output_file: output .h5 path for the fitted ODFs.
+        odf_type: "particle" | "bingham" (default) | "voxel".
+
+    Returns:
+        JSON with the CLI status, return code, and stdout/stderr tails.
+    """
+    try:
+        for f in (geometry_file, grains_file, spots_file, frames_file):
+            v, msg = validate_file(f)
+            if not v:
+                return format_result({"tool": "fit_grain_odf",
+                                      "status": "error", "error": msg})
+        cargs = ["grain_odf", "--geometry", geometry_file, "--grains", grains_file,
+                 "--spots", spots_file, "--frames", frames_file,
+                 "--out", output_file, "--odf-type", odf_type]
+        out = _run_capability_runner(cargs, timeout=7200)
+        return format_result({"tool": "fit_grain_odf", **out})
+    except Exception as e:
+        return format_result({"tool": "fit_grain_odf",
+                              "status": "error", "error": str(e)})
+
+
+@mcp.tool()
+async def simulate_2d_diffraction(
+    out_dir: str,
+    tutorial: str = "tutorial_coherent_rsm",
+    seed: int = 0,
+) -> str:
+    """Forward-model 2D / ultrafast coherent diffraction (midas-2d).
+
+    SYNTHETIC demonstration (midas-2d 0.1.0; real-data ingestion deferred
+    upstream). Runs one of the midas_2d shipped tutorials — coherent RSM,
+    nanoplatelet thickness fringes, transient MD disorder, depth-strain, etc. —
+    writing figures/arrays to out_dir. Use to demonstrate the coherent /
+    few-layer / ultrafast forward models.
+
+    Args:
+        out_dir: directory to write the tutorial's artifacts.
+        tutorial: one of tutorial_coherent_rsm (default), tutorial_npl_fringes,
+                  tutorial_depth_strain, tutorial_md_transient_disorder,
+                  tutorial_ml_and_detector, tutorial_stiffness_and_phonon,
+                  tutorial_transport_and_md, tutorial_frontier.
+        seed: RNG seed (ignored by tutorials that take none).
+
+    Returns:
+        JSON with the artifacts written and honest mode/real_data flags.
+    """
+    try:
+        cargs = ["twod", "--tutorial", tutorial, "--out-dir", out_dir,
+                 "--seed", str(seed)]
+        out = _run_capability_runner(cargs, timeout=1800)
+        return format_result({"tool": "simulate_2d_diffraction", **out})
+    except Exception as e:
+        return format_result({"tool": "simulate_2d_diffraction",
+                              "status": "error", "error": str(e)})
+
+
+@mcp.tool()
+async def design_xaf_experiment(
+    energy_kev: float = 80.0,
+    opening_deg: float = 15.0,
+    n_grains: int = 50,
+    n_mountings: int = 2,
+    material: str = "zirconia_monoclinic",
+    sample_radius_um: float = 50.0,
+    seed: int = 0,
+) -> str:
+    """Design / simulate a Cross-Axis Faceted (anvil-cell) HEDM experiment.
+
+    SYNTHETIC design tool (midas-xaf 0.1.0; real-data ingestion deferred
+    upstream). Builds a synthetic grain population for a limited-opening
+    anvil-cell geometry and runs the XAF forward + indexing pipeline to report
+    coverage / determinability — for planning cross-axis mounting strategies
+    before beamtime.
+
+    Args:
+        energy_kev: beam energy (keV).
+        opening_deg: full angular opening of the pressure cell (deg).
+        n_grains: number of grains in the synthetic sample.
+        n_mountings: number of cross-axis remountings.
+        material: material key (e.g. "zirconia_monoclinic").
+        sample_radius_um: sample radius (µm).
+        seed: RNG seed.
+
+    Returns:
+        JSON with the config, pipeline summary, and coverage fraction.
+    """
+    try:
+        cargs = ["xaf", "--energy-keV", str(energy_kev),
+                 "--opening-deg", str(opening_deg), "--n-grains", str(n_grains),
+                 "--n-mountings", str(n_mountings), "--material", material,
+                 "--sample-radius-um", str(sample_radius_um), "--seed", str(seed)]
+        out = _run_capability_runner(cargs, timeout=1800)
+        return format_result({"tool": "design_xaf_experiment", **out})
+    except Exception as e:
+        return format_result({"tool": "design_xaf_experiment",
+                              "status": "error", "error": str(e)})
+
+
+@mcp.tool()
+async def simulate_dfxm_image(
+    grid: int = 64,
+    strain: float = 0.001,
+    hkl: str = "1,1,1",
+    two_theta_deg: float = 10.0,
+    d_spacing_a: float = 2.0,
+    output_file: str = "",
+) -> str:
+    """Forward-model a Dark-Field X-ray Microscopy (DFXM) image (midas-dfxm).
+
+    SYNTHETIC forward model (midas-dfxm 0.1.0; real strain/orientation-field
+    ingestion deferred upstream). Builds a uniform-strain deformation field on a
+    grid and renders the DFXM image through the resolution function + objective
+    optics — a demonstration of the imaging forward operator.
+
+    Args:
+        grid: image grid size (grid × grid).
+        strain: uniform εxx applied to the synthetic field.
+        hkl: reflection as "h,k,l".
+        two_theta_deg: scattering angle (deg).
+        d_spacing_a: reflection d-spacing (Å) for the nominal Q.
+        output_file: optional .npy path to save the rendered image.
+
+    Returns:
+        JSON with image shape/statistics and honest mode/real_data flags.
+    """
+    try:
+        cargs = ["dfxm", "--grid", str(grid), "--strain", str(strain),
+                 "--hkl", hkl, "--two-theta-deg", str(two_theta_deg),
+                 "--d-spacing-A", str(d_spacing_a)]
+        if output_file:
+            cargs += ["--out", output_file]
+        out = _run_capability_runner(cargs, timeout=1800)
+        return format_result({"tool": "simulate_dfxm_image", **out})
+    except Exception as e:
+        return format_result({"tool": "simulate_dfxm_image",
+                              "status": "error", "error": str(e)})
+
+
+@mcp.tool()
+async def invert_pf_grain_odf(
+    layer_dir: str = "",
+    grain_id: int = -1,
+    n_pixels_y: int = 2048,
+    n_pixels_z: int = 2048,
+) -> str:
+    """Joint per-grain peak-shape ODF inversion for pf-HEDM (midas-pf-odf).
+
+    DEFERRED capability (midas-pf-odf 0.1.0): the differentiable joint
+    peak-shape / ODF inversion is present, but a turnkey synthetic self-test is
+    not shipped upstream and the real-data reader is still being finalized. With
+    no arguments this confirms the capability and lists what a real run needs;
+    given a pf-HEDM layer dir + grain id it attempts to load the grain dataset.
+
+    Args:
+        layer_dir: pf-HEDM layer directory (Grains.csv + frames), optional.
+        grain_id: grain id to load (>=0 to attempt a real load).
+        n_pixels_y, n_pixels_z: detector dimensions for the loader.
+
+    Returns:
+        JSON describing the capability, required inputs, and any load attempt.
+    """
+    try:
+        cargs = ["pf_odf", "--n-pixels-y", str(n_pixels_y),
+                 "--n-pixels-z", str(n_pixels_z)]
+        if layer_dir:
+            cargs += ["--layer-dir", layer_dir]
+        if grain_id >= 0:
+            cargs += ["--grain-id", str(grain_id)]
+        out = _run_capability_runner(cargs, timeout=1800)
+        return format_result({"tool": "invert_pf_grain_odf", **out})
+    except Exception as e:
+        return format_result({"tool": "invert_pf_grain_odf",
+                              "status": "error", "error": str(e)})
+
+
+@mcp.tool()
+async def invert_pink_beam(
+    energy_kev: float = 55.0,
+    half_bw: float = 0.02,
+) -> str:
+    """Pink-beam spectrum-aware differentiable grain-state inversion (midas-pink).
+
+    DEFERRED capability (midas-pink 0.1.0): the spectrum-aware differentiable
+    inversion (build_pink_bank → recover_grain_state / recover_two_stage) is
+    present, but a turnkey synthetic self-test is not shipped upstream and real
+    pink-beam ROI ingestion is deferred. This confirms the capability and
+    exercises spectrum construction as a smoke test.
+
+    Args:
+        energy_kev: central beam energy (keV).
+        half_bw: spectral half-bandwidth (relative).
+
+    Returns:
+        JSON describing the capability, required inputs, and the spectrum smoke test.
+    """
+    try:
+        cargs = ["pink", "--energy-keV", str(energy_kev), "--half-bw", str(half_bw)]
+        out = _run_capability_runner(cargs, timeout=600)
+        return format_result({"tool": "invert_pink_beam", **out})
+    except Exception as e:
+        return format_result({"tool": "invert_pink_beam",
+                              "status": "error", "error": str(e)})
 
 
 @mcp.tool()
@@ -8402,6 +8931,13 @@ async def run_ff_pipeline(
     of the FF-HEDM workflow with checkpoint/resume, multi-GPU sharding, and
     swappable solvers/losses. Drop-in replacement for legacy ``ff_MIDAS.py``.
 
+    NOTE: ``midas-ff-pipeline`` is DEPRECATED as of MIDAS 0.4.0 (removed in 1.0.0);
+    the FF path is now the same code under the unified ``midas-pipeline run
+    --scan-mode ff`` CLI exposed by ``run_ff_hedm_full_workflow`` — prefer that
+    tool. This wrapper still works (the deprecated CLI keeps its own ``--loss
+    pixel`` choice; the unified CLI renamed it to ``--refine-loss full3d``) and is
+    kept for its lower-level flags (``--pg-mode``, ``--raw-dir``, ``--batch``).
+
     Args:
         params: Path to Parameters.txt (required).
         result: Result directory for this run (required).
@@ -8460,7 +8996,7 @@ async def refine_grain_lattice(
     num_procs: int = 0,
     solver: str = "lbfgs",
     mode: str = None,
-    loss: str = "pixel",
+    loss: str = "full3d",
     device: str = None,
     dtype: str = None,
     max_iter: int = 200,
@@ -8483,7 +9019,8 @@ async def refine_grain_lattice(
         num_procs: CPU thread count for torch.set_num_threads (0 = auto).
         solver: "lbfgs" | "adam" | "lm" | "nelder_mead" | "lm_batched".
         mode: "iterative" | "all_at_once" (default: iterative if FitAllAtOnce=0).
-        loss: "pixel" (C parity) | "angular" | "internal_angle".
+        loss: "full3d" (C parity, renamed from "pixel" in fit-grain 0.5.x) |
+              "angular" | "internal_angle".
         device: Override MIDAS_FIT_GRAIN_DEVICE ("cuda"|"mps"|"cpu").
         dtype: Override MIDAS_FIT_GRAIN_DTYPE ("float32"|"float64").
         max_iter: Outer-iteration cap per phase.

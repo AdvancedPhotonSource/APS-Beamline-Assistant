@@ -1,7 +1,7 @@
 ---
 name: midas-validate
 description: Validate MIDAS parameter files and datasets before running calibration, integration, or HEDM. Use when the user asks to validate/check a parameter file, diagnose why a param file is wrong, inspect a dataset (zarr/HDF5/GE), enumerate expected Bragg rings, or verify the MIDAS installation. Run this FIRST in any MIDAS workflow.
-compatibility: Requires MIDAS v11 + midas-suite (midas-params ≥0.3.4). All checks run through pip-package CLIs — no compiled binaries needed.
+compatibility: Requires MIDAS v11 + midas-suite ≥0.4.0 (midas-params ≥0.3.5). All checks run through pip-package CLIs — no compiled binaries needed.
 metadata:
   author: pawan-tripathi
   version: "1.0"

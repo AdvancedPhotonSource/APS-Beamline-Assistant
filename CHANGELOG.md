@@ -7,6 +7,30 @@ versioning. Until v1.0.0, breaking changes may land in minor versions.
 
 ## [Unreleased]
 
+### Added — MIDAS Mar-2026 package release integration
+- Bumped the MIDAS pin to `midas-suite[ff,pdf,defect,dfxm,xaf,ultrafast,grain-odf,pf-odf,pink]>=0.4.0`
+  (unified `midas-pipeline` 0.6.1, `midas-calibrate-v2` 0.5.2, and the full v2/aux stack).
+- **8 new MCP tools** wiring MIDAS's brand-new v0.1.0 capability packages
+  (MIDAS server 42→50 tools):
+  - `compute_pair_distribution` — midas-pdf, **real**: integrated I(Q)→G(r) Faber-Ziman PDF.
+  - `analyze_grain_defects` — midas-defect, **real**: dislocation rods / asterism /
+    polytype / defect inventory from FF-HEDM diffuse scattering.
+  - `fit_grain_odf` — midas-grain-odf, **real**: per-grain orientation distribution fit.
+  - `simulate_2d_diffraction` — midas-2d, synthetic coherent/ultrafast forward model.
+  - `design_xaf_experiment` — midas-xaf, synthetic anvil-cell (cross-axis) design.
+  - `simulate_dfxm_image` — midas-dfxm, synthetic DFXM forward image.
+  - `invert_pf_grain_odf` — midas-pf-odf, capability present (real I/O deferred upstream).
+  - `invert_pink_beam` — midas-pink, capability present (real I/O deferred upstream).
+- New `_capability_runner.py` sidecar runs all 8 under the `.venv` interpreter with a
+  clean env (the pip torch stack breaks under C++ DYLD/LD injection); synthetic/deferred
+  tools carry `"mode"` + `"real_data_supported"` flags and never fabricate real results.
+- `recommend_workflow` now maps exposed data → the correct FF/NF/PF workflow, cites the
+  relevant Agent Skill, distinguishes powder vs single-crystal calibrants (Au → NF
+  beam-position, not FF powder geometry), and surfaces the in-plane `tx` post-reconstruction
+  calibration step.
+- `midas_auto_calibrate` (v2 engine) now returns an honest error for unsupported
+  calibrants instead of silently substituting CeO2.
+
 ### Experimental
 - Native MIDAS dispatch (`apexa_midas_native.py`) behind
   `APEXA_USE_NATIVE_MIDAS=1`; the subprocess path remains the default.

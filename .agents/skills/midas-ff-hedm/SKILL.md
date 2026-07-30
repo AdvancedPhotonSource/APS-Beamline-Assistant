@@ -1,7 +1,7 @@
 ---
 name: midas-ff-hedm
 description: Run the MIDAS v11 FF-HEDM grain reconstruction pipeline via APEXA. Use when the user asks to run far-field HEDM, reconstruct grain orientations, index grains, or analyze diffraction data from a polycrystalline sample. Wraps midas-pipeline run --scan-mode ff.
-compatibility: Requires MIDAS v11 + midas-suite (midas-pipeline ≥0.4.9, midas-nf-pipeline ≥0.1.1). Install via pip install midas-suite.
+compatibility: Requires MIDAS v11 + midas-suite ≥0.4.0 (midas-pipeline ≥0.6.1, midas-nf-pipeline ≥0.1.1). Install via pip install midas-suite.
 metadata:
   author: pawan-tripathi
   version: "1.1"
@@ -149,7 +149,7 @@ print(f"{n_grains} grains solved, best nMatches={best_match}")
 | `indexer=c-omp, refiner=c-omp` | ✅ Yes | Fast CPU | Requires compiled `midas_indexer` + `midas_fitgrain` binaries |
 | `indexer=python, refiner=c-omp` | ❌ No | — | Mixed — c-omp refiner cannot read python indexer output format |
 
-**Known bug (midas-process-grains 0.4.6):** python refiner writes `OrientPosFit.bin` to the layer root, but midas-process-grains expects it in `Results/` subdirectory → process_grains + consolidation are auto-skipped when python refiner is used. APEXA reads `IndexBest.bin` directly for grain count.
+**Known bug (first seen midas-process-grains 0.4.6; workaround still gated as of 0.6.0):** python refiner writes `OrientPosFit.bin` to the layer root, but midas-process-grains expects it in `Results/` subdirectory → process_grains + consolidation are auto-skipped when python refiner is used. APEXA reads `IndexBest.bin` directly for grain count. The auto-skip workaround remains active on the 0.6.0 pin pending a beamline refine soak that confirms 0.6.0 fixes the `OrientPosFit.bin` layout — do not remove it until then (deferred to Hemant).
 
 To get `Grains.csv`, set both `indexer_backend="c-omp"` and `refine_backend="c-omp"`. This requires compiled MIDAS binaries — check with `validate_midas_installation`.
 
@@ -253,7 +253,7 @@ Do NOT skip this. The gate is enforced by APEXA's Analysis agent (`use_planning=
 |---|---|---|
 | `KeyError: RawFolder` during validation | validate_parameter_file called with zarr input | Skip validate_parameter_file when data_file is a zarr; midas-pipeline uses --skip-validation |
 | `Cannot access local variable 're'` on import | Stale .pyc cache from older midas_comprehensive_server.py | `find . -name "*.pyc" -delete && pkill -f midas_comprehensive_server && restart` |
-| `process_grains` fails silently | midas-process-grains 0.4.6 bug with python refiner | Expected — read IndexBest.bin instead; or use c-omp backend pair |
+| `process_grains` fails silently | midas-process-grains `OrientPosFit.bin` layout bug (0.4.6; workaround still gated on 0.6.0) | Expected — read IndexBest.bin instead; or use c-omp backend pair |
 | Model hallucinates `~/opt/MIDAS` path | Model uses training-data path not actual MIDAS_PATH | Anti-hallucination guard in run_ff_hedm_full_workflow blocks this; actual path from MIDAS_PATH env var |
 | `Grains.csv not found` after run | python refiner used | Normal — use IndexBest.bin for grain count |
 

@@ -1,7 +1,9 @@
 """Native-Python MIDAS engine wrappers (pure-Python pip packages).
 
-MIDAS v11.x ships its analysis pipeline as ~18 pip-installable, pure-Python
-(PyTorch-based) packages under `MIDAS/packages/*`. This module wraps the
+MIDAS v11.x ships its analysis pipeline as ~34 pip-installable, pure-Python
+(PyTorch-based) packages under `MIDAS/packages/*` (the core analysis stack,
+the v2 calibrate/integrate engines, and the 8 new v0.1.0 capability packages —
+pdf, defect, dfxm, xaf, 2d, grain-odf, pf-odf, pink). This module wraps the
 subset that APEXA's MCP tools currently shell out to via subprocess. Each
 wrapper:
 
@@ -73,12 +75,20 @@ def native_engine_status() -> Dict[str, Any]:
     raises — missing packages are reported as `installed=False`.
     """
     packages = [
+        # Core analysis stack
         "midas_calibrate", "midas_integrate", "midas_diffract",
         "midas_transforms", "midas_pipeline", "midas_ff_pipeline",
         "midas_nf_pipeline", "midas_index", "midas_peakfit",
         "midas_fit_grain", "midas_hkls", "midas_stress",
         "midas_params", "midas_process_grains", "midas_nf_preprocess",
         "midas_nf_fitorientation", "midas_parsl_configs", "midas_suite",
+        # v2 engines + auxiliary (previously omitted from this list)
+        "midas_calibrate_v2", "midas_integrate_v2", "midas_invert",
+        "midas_joint_ff_calibrate", "midas_distortion", "midas_zipper",
+        "midas_propagate", "midas_uq",
+        # New v0.1.0 capability packages (wired as APEXA MCP tools)
+        "midas_pdf", "midas_defect", "midas_dfxm", "midas_xaf",
+        "midas_2d", "midas_grain_odf", "midas_pf_odf", "midas_pink",
     ]
     out: Dict[str, Any] = {}
     for pkg in packages:
