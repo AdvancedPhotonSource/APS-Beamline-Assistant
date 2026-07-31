@@ -8072,6 +8072,56 @@ def _modality_from_param_files(param_paths) -> dict:
             "why": "parameter file(s) carry no decisive FF/NF/PF keys"}
 
 
+# Powder detector-calibration standards (refine Lsd/BC/out-of-plane ty/tz). Au is a
+# single-crystal standard used for a DIFFERENT calibration — the IN-PLANE tilt tx,
+# which Debye-Scherrer rings can't see — so an Au_FF scan is a geometry-check /
+# in-plane-calibration dataset, NOT a sample FF pilot.
+_POWDER_CALIBRANTS = {"ceo2", "ceria", "lab6", "si", "al2o3"}
+_INPLANE_CALIBRANTS = {"au", "gold", "ruby"}
+
+
+def _read_param_target(param_path: Path) -> dict:
+    """Parse what a MIDAS param file actually points AT: RawFolder / FileStem and,
+    from those names, whether the target is a calibration standard.
+
+    Returns {"rawfolder", "filestem", "calibrant", "calib_kind"} where calib_kind is
+    "powder" (CeO2/LaB6/Si → detector geometry), "inplane" (Au single-crystal → tx),
+    or None (a real sample). calibrant is the matched token, else None.
+    """
+    raw = filestem = None
+    try:
+        with param_path.open(errors="ignore") as fh:
+            for raw_line in fh:
+                line = raw_line.split("#", 1)[0].strip()
+                if not line:
+                    continue
+                parts = line.split()
+                k = parts[0].lower()
+                if k == "rawfolder" and len(parts) > 1:
+                    raw = parts[1]
+                elif k == "filestem" and len(parts) > 1:
+                    filestem = parts[1]
+    except Exception:
+        return {"rawfolder": None, "filestem": None, "calibrant": None,
+                "calib_kind": None}
+    # Match a calibrant token in the target's basename (FileStem preferred).
+    hay = " ".join(x for x in (filestem, (Path(raw).name if raw else None)) if x).lower()
+    calib, kind = None, None
+    for tok in _POWDER_CALIBRANTS:
+        if tok in hay:
+            calib, kind = tok, "powder"
+            break
+    if not calib:
+        # Whole-word only for short tokens like "au" (avoid matching "gauss", "aug").
+        toks = set(re.split(r"[^a-z0-9]+", hay))
+        for tok in _INPLANE_CALIBRANTS:
+            if tok in toks:
+                calib, kind = tok, "inplane"
+                break
+    return {"rawfolder": raw, "filestem": filestem, "calibrant": calib,
+            "calib_kind": kind}
+
+
 # Whole-word modality tags — the FALLBACK signal used only when goal, parameter-file
 # contents, and reconstruction outputs are all silent. Literal near-/far-field /
 # point-focus markers plus the "nfdev" development-dir convention. (Detector-family
@@ -8370,6 +8420,39 @@ async def recommend_workflow(path: str = "", goal: str = "") -> str:
                 pf = info["param_files"][0]
                 frames_note = (f"{ns} rotation frame(s)" if ns >= 1
                                else f"{info.get('n_subdirs')} scan subdirectorie(s)")
+
+                # What do the param files TARGET (RawFolder/FileStem), and is that a
+                # calibration standard? An Au single-crystal FF scan is an in-plane
+                # (tx) calibration dataset, NOT a sample — so don't pilot on it.
+                param_targets = {nm: _read_param_target(p / nm)
+                                 for nm in info["param_files"]} if p.is_dir() else {}
+                chosen_tgt = param_targets.get(pf, {})
+                try:
+                    subdir_names = ([q.name for q in sorted(p.iterdir()) if q.is_dir()]
+                                    if p.is_dir() else [])
+                except Exception:
+                    subdir_names = []
+
+                def _is_cal_dir(nm):
+                    low = nm.lower()
+                    return low in ("cali", "calib", "calibration") or "calibrant" in low
+                cal_dir = next((n for n in subdir_names if _is_cal_dir(n)), None)
+                # Sample FF folders = *_FF_* subdirs that are NOT a calibrant/dark.
+                sample_ffs = []
+                for n in subdir_names:
+                    low = n.lower()
+                    if "dark" in low or _is_cal_dir(n):
+                        continue
+                    toks = set(re.split(r"[^a-z0-9]+", low))
+                    if toks & (_POWDER_CALIBRANTS | _INPLANE_CALIBRANTS):
+                        continue
+                    if "ff" in toks:
+                        sample_ffs.append(n)
+                # A param file whose target is a real sample (not a calibrant), if any.
+                sample_param = next((n for n in info["param_files"]
+                                     if param_targets.get(n, {}).get("calib_kind") is None),
+                                    None)
+
                 if modality == "nf":
                     hedm_rec = {
                         "tool": "run_nf_hedm_reconstruction",
@@ -8393,6 +8476,23 @@ async def recommend_workflow(path: str = "", goal: str = "") -> str:
                         "alternative": "run_ff_hedm_full_workflow (far-field) | "
                                        "run_nf_hedm_reconstruction (near-field)",
                     }
+                elif chosen_tgt.get("calib_kind") == "inplane":
+                    # The chosen param file targets an Au single-crystal dataset →
+                    # this is an IN-PLANE (tx) calibration run, not a sample pilot.
+                    _tgt = chosen_tgt.get("filestem") or chosen_tgt.get("rawfolder") or "Au"
+                    hedm_rec = {
+                        "tool": "run_ff_hedm_full_workflow",
+                        "role": "in-plane (tx) calibration / geometry check",
+                        "why": f"{pf} targets an Au single-crystal dataset ({_tgt}) — this is "
+                               f"an IN-PLANE (tx) calibration / geometry-check run, NOT a "
+                               f"sample FF pilot",
+                        "params": {"param_file": f"<{pf}>",
+                                   "result_dir": "<in-plane-calibration output>"},
+                        "note": "run AFTER powder detector calibration (CeO2/LaB6 → Lsd/BC + "
+                                "out-of-plane ty/tz); the Au grains refine the in-plane tilt "
+                                "tx that Debye-Scherrer rings cannot see. Do not treat these "
+                                "grains as sample science.",
+                    }
                 else:
                     ff_why = (f"far-field data — {mod['why']} — " if mod["modality"] == "ff"
                               else "no explicit FF/NF/PF signal — FF is the DEFAULT, not a "
@@ -8411,6 +8511,39 @@ async def recommend_workflow(path: str = "", goal: str = "") -> str:
                     }
                 hedm_rec["modality_inference"] = mod
                 recs.insert(0, hedm_rec) if wants_grains else recs.append(hedm_rec)
+
+                # For FF containers, add the ACTUAL sample pilot + calibrate-first
+                # steps so the container isn't presented as one monolithic Au run.
+                if modality == "ff" and sample_ffs:
+                    _sp = sample_param or pf
+                    _sp_note = ("" if sample_param else
+                                " (both param files here target the Au calibration dataset — "
+                                "copy one and set RawFolder/FileStem to the sample)")
+                    recs.insert(0, {
+                        "tool": "run_ff_hedm_full_workflow",
+                        "role": "sample FF-HEDM pilot",
+                        "why": "real FF-HEDM pilot — run on an actual sample folder, not the "
+                               "Au in-plane-calibration dataset",
+                        "params": {"param_file": f"<{_sp}{_sp_note}>",
+                                   "data_dir": f"<{sample_ffs[0]}>",
+                                   "result_dir": "<Grains.csv output>",
+                                   "refine_backend": "c-omp (for Grains.csv) | python"},
+                        "sample_candidates": sample_ffs[:6],
+                        "output": "Grains.csv (grain centroid / orientation / strain)",
+                    })
+                if cal_dir or any(t.get("calib_kind") == "powder"
+                                  for t in param_targets.values()):
+                    recs.insert(0, {
+                        "tool": "midas_auto_calibrate",
+                        "role": "detector calibration (do first)",
+                        "why": ("calibrate detector geometry first"
+                                + (f" — '{cal_dir}/' calibration folder present" if cal_dir
+                                   else "")),
+                        "params": {"image_file": f"<CeO2/LaB6 image in {cal_dir or 'cali'}/>"},
+                        "note": "powder standard → Lsd/BC + out-of-plane tilts ty/tz; the "
+                                "in-plane tilt tx is refined afterwards from the Au "
+                                "single-crystal FF scan.",
+                    })
         elif kind == "hdf5_image":
             dl = info.get("data_location_guess")
             dsrc = "embedded" if info.get("embedded_dark") else "file"
