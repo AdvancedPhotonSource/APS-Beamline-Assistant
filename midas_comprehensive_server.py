@@ -7870,6 +7870,20 @@ def _classify_input(p: Path) -> dict:
         darks = [q for q in imgs if "dark" in q.name.lower()]
         samples = [q for q in imgs if "dark" not in q.name.lower()]
         cal = [q for q in samples if _explicit_calibrant(q.stem)]
+        # Param files: MIDAS ships several naming conventions — refined_MIDAS_params*,
+        # *Parameters*, and the ps_*.txt style used for NF/FF scan configs (e.g.
+        # ps_nfdev.txt). Dedupe while preserving order.
+        _pf = []
+        for _pat in ("refined_MIDAS_params*.txt", "*[Pp]aram*.txt", "ps_*.txt"):
+            _pf += sorted(p.glob(_pat))
+        _pf = list(dict.fromkeys(_pf))
+        # Subdirectories: a scan collection (…/varexD/<many scan dirs>) keeps its
+        # images one level down, so top-level image counts are 0 — record the subdir
+        # shape so recommend_workflow can still classify a container directory.
+        try:
+            subdirs = sorted(q for q in p.iterdir() if q.is_dir())
+        except Exception:
+            subdirs = []
         info.update({
             "n_images": len(imgs), "n_samples": len(samples), "n_darks": len(darks),
             "has_dark_before": any("dark_before" in q.name.lower() for q in darks),
@@ -7879,8 +7893,9 @@ def _classify_input(p: Path) -> dict:
             "sample_first": str(samples[0]) if samples else None,
             "grains_csv": [q.name for q in sorted(p.glob("*[Gg]rains*.csv"))[:3]],
             "mic_files": [q.name for q in sorted(p.glob("*.mic"))[:3]],
-            "param_files": [q.name for q in (sorted(p.glob("refined_MIDAS_params*.txt"))
-                                             + sorted(p.glob("*[Pp]arams*.txt")))[:3]],
+            "param_files": [q.name for q in _pf[:3]],
+            "n_subdirs": len(subdirs),
+            "subdir_examples": [q.name for q in subdirs[:6]],
         })
         return info
     # single file
@@ -7919,6 +7934,86 @@ def _classify_input(p: Path) -> dict:
     elif suf in (".ge", ".ge2", ".ge3", ".ge5"):
         info["kind"] = "ge_image"
     return info
+
+
+# Whole-word modality tags used to route HEDM data when the *goal* is silent.
+# Kept minimal and defensible — literal near-/far-field / point-focus markers plus
+# the "nfdev" development-dir convention. (Detector-family guessing is deliberately
+# excluded: Varex/GE/Dexela panels are used for both FF and NF at different beamlines.)
+_NF_TOKENS = {"nf", "nfdev", "nearfield", "nfhedm"}
+_FF_TOKENS = {"ff", "farfield", "ffhedm"}
+_PF_TOKENS = {"pf", "pointfocus", "pfhedm", "scanning"}
+
+
+def _infer_hedm_modality(p: Path, info: dict, goal: str = "") -> dict:
+    """Infer FF vs NF vs PF from the goal first, then data-side signals.
+
+    Goal keywords win when present. Otherwise decide from the data — in order:
+    reconstruction output already on disk (.mic → NF), then whole-word modality
+    tokens in the path components, then a child-name majority (a container of scan
+    dirs). Returns {"modality": "ff"|"nf"|"pf"|None, "source": ..., "why": ...};
+    modality is None only when nothing is decisive, and the caller keeps FF as the
+    documented default (but flags it as a fallback, not evidence).
+    """
+    import re
+    g = (goal or "").lower()
+
+    # 1) Explicit goal keyword wins (check NF/PF before FF).
+    if re.search(r"\bnf\b", g) or any(k in g for k in
+                                      ("near-field", "near field", "nearfield")):
+        return {"modality": "nf", "source": "goal", "why": "goal names near-field"}
+    if re.search(r"\bpf\b", g) or any(k in g for k in
+                                      ("point-focus", "point focus", "pointfocus", "scanning")):
+        return {"modality": "pf", "source": "goal",
+                "why": "goal names point-focus/scanning"}
+    if re.search(r"\bff\b", g) or any(k in g for k in
+                                      ("far-field", "far field", "farfield")):
+        return {"modality": "ff", "source": "goal", "why": "goal names far-field"}
+
+    def _toks(strings):
+        out = set()
+        for s in strings:
+            out.update(t for t in re.split(r"[^a-z0-9]+", s.lower()) if t)
+        return out
+
+    # 2) Reconstruction output already present → decisive.
+    if info.get("mic_files"):
+        return {"modality": "nf", "source": "data",
+                "why": f".mic reconstruction output present ({info['mic_files'][0]})"}
+
+    # 3) Whole-word modality tokens in the path components (+ multiword substrings).
+    pl = str(p).lower()
+    path_toks = _toks(list(p.parts) + [p.name])
+    nf = bool(path_toks & _NF_TOKENS) or any(s in pl for s in ("near-field", "near_field", "nearfield"))
+    pf = bool(path_toks & _PF_TOKENS) or any(s in pl for s in ("point-focus", "point_focus", "pointfocus"))
+    ff = bool(path_toks & _FF_TOKENS) or any(s in pl for s in ("far-field", "far_field", "farfield"))
+    hits = [m for m, on in (("nf", nf), ("pf", pf), ("ff", ff)) if on]
+    if len(hits) == 1:
+        m = hits[0]
+        return {"modality": m, "source": "path",
+                "why": f"'{m}' signalled by the data path"}
+
+    # 4) Child-name majority (e.g. many *_scans* NF dirs beside one Au_FF reference).
+    fam = {"nf": 0, "ff": 0, "pf": 0}
+    if p.is_dir():
+        try:
+            for c in p.iterdir():
+                ct = _toks([c.name])
+                if ct & _NF_TOKENS:
+                    fam["nf"] += 1
+                if ct & _FF_TOKENS:
+                    fam["ff"] += 1
+                if ct & _PF_TOKENS:
+                    fam["pf"] += 1
+        except Exception:
+            pass
+    best = max(fam, key=fam.get)
+    if fam[best] > 0 and list(fam.values()).count(fam[best]) == 1:
+        return {"modality": best, "source": "children",
+                "why": f"{fam[best]} child item(s) tagged '{best}'"}
+
+    return {"modality": None, "source": None,
+            "why": "no explicit FF/NF/PF signal in goal, path, or contents"}
 
 
 # Grouped, grounded capability summary (real tool names) — returned when
@@ -8106,34 +8201,56 @@ async def recommend_workflow(path: str = "", goal: str = "") -> str:
                             "as an APEXA @mcp.tool (tracked gap).",
                     "manual_step": True,
                 })
-            # FF/NF/PF-HEDM: many rotation frames + a MIDAS parameter file → grain
-            # reconstruction is on the table (same raw frames the integrator reads).
-            # Integration vs HEDM is goal-driven — rank grains first only when asked.
-            if info.get("param_files") and ns >= 1:
-                wants_grains = any(k in g for k in (
-                    "hedm", "ff", "grain", "index", "reconstruct", "orientation", "refine"))
+            # FF/NF/PF-HEDM: a MIDAS parameter file + rotation frames (or a
+            # collection of scan subdirectories) → grain reconstruction is on the
+            # table. Modality is decided DATA-FIRST — reconstruction outputs, then
+            # path tokens (…/nfdev_jul26/…), then a child-name majority — with goal
+            # keywords overriding. This stops near-field data being misrouted to the
+            # far-field default. (A container dir has its frames one level down, so
+            # accept n_subdirs when there are no top-level images.)
+            if info.get("param_files") and (ns >= 1 or info.get("n_subdirs")):
+                mod = _infer_hedm_modality(p, info, goal)
+                modality = mod["modality"] or "ff"     # documented FF default
+                # Rank grains first when asked OR when the data itself points at a
+                # modality (positive evidence, not the bare fallback).
+                wants_grains = (
+                    any(k in g for k in ("hedm", "ff", "nf", "pf", "grain", "index",
+                                         "reconstruct", "orientation", "refine"))
+                    or mod["source"] in ("data", "path", "children"))
                 pf = info["param_files"][0]
-                if any(k in g for k in ("nf", "near-field", "near field")):
+                frames_note = (f"{ns} rotation frame(s)" if ns >= 1
+                               else f"{info.get('n_subdirs')} scan subdirectorie(s)")
+                if modality == "nf":
                     hedm_rec = {
                         "tool": "run_nf_hedm_reconstruction",
-                        "why": f"near-field goal + parameter file ({pf}) → spatial grain-map",
+                        "why": f"near-field data — {mod['why']} — + parameter file ({pf}) "
+                               f"→ spatial grain map",
                         "params": {"param_file": f"<{pf}>",
                                    "result_folder": "<where to write Grains.mic>"},
-                        "output": "Grains.mic (voxel grain map) → convert_nf_to_dream3d",
-                        "alternative": "run_ff_hedm_full_workflow for far-field grain centroids",
+                        "output": "LayerNr_*/Grains.mic (voxel grain map) → convert_nf_to_dream3d",
+                        "next_step": "validate_parameter_file(pipeline='nf') first; "
+                                     "inspect one scan subdir with inspect_dataset_file "
+                                     "to confirm frames/omega before the full run",
+                        "alternative": "run_ff_hedm_full_workflow — only if this is actually far-field",
                     }
-                elif "pf" in g or "point-focus" in g or "scanning" in g:
+                elif modality == "pf":
                     hedm_rec = {
                         "tool": "run_pf_hedm_workflow",
-                        "why": f"point-focus/scanning goal + parameter file ({pf})",
+                        "why": f"point-focus/scanning data — {mod['why']} — + parameter file ({pf})",
                         "params": {"param_file": f"<{pf}>",
                                    "result_dir": "<where to write per-layer Grains.csv>"},
-                        "output": "LayerNr_*/Grains.csv",
+                        "output": "LayerNr_*/Grains.csv + v_map.h5",
+                        "alternative": "run_ff_hedm_full_workflow (far-field) | "
+                                       "run_nf_hedm_reconstruction (near-field)",
                     }
                 else:
+                    ff_why = (f"far-field data — {mod['why']} — " if mod["modality"] == "ff"
+                              else "no explicit FF/NF/PF signal — FF is the DEFAULT, not a "
+                                   "detection (pass goal='nf'/'pf' or check the data path if "
+                                   "this is near-field/point-focus) — ")
                     hedm_rec = {
                         "tool": "run_ff_hedm_full_workflow",
-                        "why": f"MIDAS parameter file present ({pf}) + {ns} rotation frame(s) "
+                        "why": f"{ff_why}+ parameter file ({pf}) + {frames_note} "
                                f"→ full FF-HEDM grain reconstruction",
                         "params": {"param_file": f"<{pf}>",
                                    "result_dir": "<where to write Grains.csv>",
@@ -8142,6 +8259,7 @@ async def recommend_workflow(path: str = "", goal: str = "") -> str:
                         "alternative": "run_nf_hedm_reconstruction (near-field grain map) | "
                                        "run_pf_hedm_workflow (point-focus scanning)",
                     }
+                hedm_rec["modality_inference"] = mod
                 recs.insert(0, hedm_rec) if wants_grains else recs.append(hedm_rec)
         elif kind == "hdf5_image":
             dl = info.get("data_location_guess")
