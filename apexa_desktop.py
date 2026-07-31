@@ -22,6 +22,8 @@ Environment::
     APEXA_DESKTOP_PORT     fixed loopback port (default: an auto-picked free one)
     APEXA_DESKTOP_WIDTH    initial window width  (default 1440)
     APEXA_DESKTOP_HEIGHT   initial window height (default 900)
+    APEXA_DESKTOP_STARTUP_TIMEOUT  seconds to wait for backend + MCP servers
+                           to come up before giving up (default 180)
 """
 import os
 import socket
@@ -51,14 +53,34 @@ def _pick_port() -> int:
         return s.getsockname()[1]
 
 
-def _wait_until_up(host: str, port: int, timeout: float = 40.0) -> bool:
-    """Block until the server accepts a TCP connection (or timeout)."""
+def _wait_until_up(host: str, port: int, timeout: float = 180.0,
+                   thread: threading.Thread | None = None) -> bool:
+    """Block until the server accepts a TCP connection (or timeout).
+
+    uvicorn opens the listening socket only *after* the FastAPI startup event
+    finishes, and that startup connects all MCP servers (midas alone spins up 50
+    tools + the torch stack). On a beamline workstation that can take a couple of
+    minutes on a cold cache, so the timeout is generous by default and tunable
+    via APEXA_DESKTOP_STARTUP_TIMEOUT. A heartbeat keeps the wait from looking
+    like a hang, and we bail immediately if the backend thread has died.
+    """
     deadline = time.time() + timeout
+    start = time.time()
+    next_beat = start + 10.0
     while time.time() < deadline:
+        if thread is not None and not thread.is_alive():
+            print("❌ backend thread exited during startup (see traceback above)",
+                  file=sys.stderr)
+            return False
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.settimeout(0.5)
             if s.connect_ex((host, port)) == 0:
                 return True
+        now = time.time()
+        if now >= next_beat:
+            print(f"   … still bringing up MCP servers ({int(now - start)}s)",
+                  flush=True)
+            next_beat = now + 10.0
         time.sleep(0.25)
     return False
 
@@ -88,8 +110,13 @@ def main() -> int:
     thread = threading.Thread(target=server.run, name="apexa-uvicorn", daemon=True)
     thread.start()
 
-    if not _wait_until_up(HOST, port):
-        print("❌ backend did not come up in time", file=sys.stderr)
+    startup_timeout = float(os.environ.get("APEXA_DESKTOP_STARTUP_TIMEOUT", "180"))
+    print(f"⏳ waiting for backend + MCP servers (up to {int(startup_timeout)}s)…",
+          flush=True)
+    if not _wait_until_up(HOST, port, timeout=startup_timeout, thread=thread):
+        print(f"❌ backend did not come up within {int(startup_timeout)}s. "
+              "If MCP startup is genuinely slower, raise APEXA_DESKTOP_STARTUP_TIMEOUT.",
+              file=sys.stderr)
         server.should_exit = True
         return 1
 
