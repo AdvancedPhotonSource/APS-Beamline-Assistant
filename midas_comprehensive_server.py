@@ -7842,6 +7842,33 @@ async def diagnose_parameter_file(
         return format_result({"tool": "diagnose_parameter_file", "status": "error", "error": str(e)})
 
 
+# Core MIDAS geometry keys — a .txt carrying a couple of these IS a parameter file,
+# regardless of its name (so ps_au.txt / an oddly-named param file is still caught).
+_CORE_PARAM_KEYS = {
+    "lsd", "wavelength", "bc", "spacegroup", "latticeparameter", "latticeconstant",
+    "px", "nrpixels", "nrpixelsy", "nrpixelsz", "omegastart", "omegastep",
+    "omegarange", "tx", "ty", "tz",
+}
+
+
+def _looks_like_param_file(p: Path) -> bool:
+    """Content sniff: does this .txt hold MIDAS parameter keys? (name-independent)."""
+    try:
+        keyset = set()
+        with p.open(errors="ignore") as fh:
+            for i, raw in enumerate(fh):
+                if i > 200:                      # params are short; cap the read
+                    break
+                line = raw.split("#", 1)[0].strip()
+                if line:
+                    keyset.add(line.split()[0].lower())
+    except Exception:
+        return False
+    # Any FF/NF discriminator, or ≥2 core geometry keys → it's a param file.
+    return bool(keyset & (_NF_PARAM_KEYS | _FF_PARAM_KEYS)) or \
+        len(keyset & _CORE_PARAM_KEYS) >= 2
+
+
 def _classify_input(p: Path) -> dict:
     """Read-only, fast classification of a data path (for recommend_workflow).
 
@@ -7910,7 +7937,8 @@ def _classify_input(p: Path) -> dict:
         info["kind"] = "cif"
     elif name.endswith(".zarr.zip"):
         info["kind"] = "zarr_integration"
-    elif suf == ".txt" and ("param" in name or "midas" in name):
+    elif suf == ".txt" and (("param" in name or "midas" in name)
+                            or _looks_like_param_file(p)):
         info["kind"] = "param_file"
     elif suf in (".h5", ".hdf5", ".hdf", ".nxs"):
         info["kind"] = "hdf5_image"
@@ -7936,10 +7964,118 @@ def _classify_input(p: Path) -> dict:
     return info
 
 
-# Whole-word modality tags used to route HEDM data when the *goal* is silent.
-# Kept minimal and defensible — literal near-/far-field / point-focus markers plus
-# the "nfdev" development-dir convention. (Detector-family guessing is deliberately
-# excluded: Varex/GE/Dexela panels are used for both FF and NF at different beamlines.)
+# Parameter-file KEYS that are unique to each pipeline (from the MIDAS v11 example
+# param files: NF_HEDM/Example/ps_au.txt vs FF_HEDM/Example/Parameters.txt). These
+# are the authoritative, name-independent modality signal — a param file's contents
+# say what it is regardless of what it's called or where it lives. All lowercased.
+_NF_PARAM_KEYS = {
+    "ndistances", "nrfilesperdistance", "gridsize", "gridmask", "edgelength",
+    "minconfidence", "minfracaccept", "nrorientations", "savensolutions",
+    "orienttol", "micfilebinary", "micfiletext", "onlyspotsinfo",
+    "globalpositionfirstlayer", "layerthickness", "maxringrad", "lsdtol",
+    "lsdrelativetol", "bctol", "tiltstol", "extreduced", "extorig",
+    "medfiltradius", "gaussfiltradius", "logmaskradius", "blanketsubtraction",
+}
+_FF_PARAM_KEYS = {
+    "ringthresh", "overallringtoindex", "completeness", "minnrspots",
+    "usefriedelpairs", "stepsizeorient", "stepsizepos", "marginradial",
+    "margineta", "marginome", "marginradius", "omebinsize", "etabinsize",
+    "margabc", "margabg", "nrfilespersweep", "imtransopt", "hbeam", "vsample",
+    "tint", "tgap", "upperboundthreshold", "width",
+}
+
+
+def _read_param_modality(param_path: Path) -> dict:
+    """Classify ONE MIDAS parameter file as FF/NF/PF from its KEYS (not its name).
+
+    Reads the first whitespace token of each non-comment line and scores it against
+    the NF/FF key sets. Point-focus is a far-field-format file with ``nScans > 1``;
+    near-field is decided by NF-only keys or multiple detector distances
+    (``nDistances`` / repeated ``Lsd``). Returns
+    {"modality": ..., "why": ..., "nf": <count>, "ff": <count>}.
+    """
+    try:
+        text = param_path.read_text(errors="ignore")
+    except Exception as e:
+        return {"modality": None, "why": f"{param_path.name}: unreadable ({e})",
+                "nf": 0, "ff": 0}
+    keyset = set()
+    n_lsd = 0
+    n_scans = None
+    n_dist = None
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0].strip()      # strip inline + full-line comments
+        if not line:
+            continue
+        parts = line.split()
+        k = parts[0].lower()
+        keyset.add(k)
+        if k == "lsd":
+            n_lsd += 1
+        elif k == "nscans" and len(parts) > 1:
+            try:
+                n_scans = int(float(parts[1]))
+            except ValueError:
+                pass
+        elif k == "ndistances" and len(parts) > 1:
+            try:
+                n_dist = int(float(parts[1]))
+            except ValueError:
+                pass
+    nf = len(keyset & _NF_PARAM_KEYS)
+    ff = len(keyset & _FF_PARAM_KEYS)
+    name = param_path.name
+    # Point-focus: FF-format scanning file with more than one scan position.
+    if n_scans and n_scans > 1:
+        return {"modality": "pf",
+                "why": f"{name}: nScans={n_scans} (>1 → point-focus/scanning)",
+                "nf": nf, "ff": ff}
+    multi_dist = (n_dist and n_dist > 1) or n_lsd > 1
+    if multi_dist or (nf and nf > ff):
+        why = f"{name}: {nf} NF-only key(s)"
+        if multi_dist:
+            why += f" + {n_dist or n_lsd} detector distances"
+        return {"modality": "nf", "why": why, "nf": nf, "ff": ff}
+    if ff and ff > nf:
+        return {"modality": "ff",
+                "why": f"{name}: {ff} FF-only key(s) (RingThresh/indexing/margins)",
+                "nf": nf, "ff": ff}
+    return {"modality": None, "why": f"{name}: no decisive FF/NF/PF keys",
+            "nf": nf, "ff": ff}
+
+
+def _modality_from_param_files(param_paths) -> dict:
+    """Aggregate per-file param classifications into one modality decision.
+
+    PF is decisive if any file scans; otherwise the unambiguous majority of NF/FF
+    votes wins. Returns the standard {"modality", "source", "why", ...} shape with
+    modality None when the param files carry no decisive keys.
+    """
+    votes = {"nf": 0, "ff": 0, "pf": 0}
+    reasons = []
+    for pp in param_paths:
+        d = _read_param_modality(pp)
+        if d["modality"]:
+            votes[d["modality"]] += 1
+            reasons.append(d["why"])
+    if votes["pf"]:
+        return {"modality": "pf", "source": "paramfile", "votes": votes,
+                "why": "; ".join(r for r in reasons if "nScans" in r)
+                       or "scanning parameter file"}
+    cand = {k: v for k, v in (("nf", votes["nf"]), ("ff", votes["ff"])) if v}
+    if cand:
+        best = max(cand, key=cand.get)
+        if list(cand.values()).count(cand[best]) == 1:      # unambiguous majority
+            return {"modality": best, "source": "paramfile", "votes": votes,
+                    "why": "; ".join(reasons)}
+    return {"modality": None, "source": None, "votes": votes,
+            "why": "parameter file(s) carry no decisive FF/NF/PF keys"}
+
+
+# Whole-word modality tags — the FALLBACK signal used only when goal, parameter-file
+# contents, and reconstruction outputs are all silent. Literal near-/far-field /
+# point-focus markers plus the "nfdev" development-dir convention. (Detector-family
+# guessing is deliberately excluded: Varex/GE/Dexela panels serve both FF and NF.)
 _NF_TOKENS = {"nf", "nfdev", "nearfield", "nfhedm"}
 _FF_TOKENS = {"ff", "farfield", "ffhedm"}
 _PF_TOKENS = {"pf", "pointfocus", "pfhedm", "scanning"}
@@ -7948,10 +8084,12 @@ _PF_TOKENS = {"pf", "pointfocus", "pfhedm", "scanning"}
 def _infer_hedm_modality(p: Path, info: dict, goal: str = "") -> dict:
     """Infer FF vs NF vs PF from the goal first, then data-side signals.
 
-    Goal keywords win when present. Otherwise decide from the data — in order:
-    reconstruction output already on disk (.mic → NF), then whole-word modality
-    tokens in the path components, then a child-name majority (a container of scan
-    dirs). Returns {"modality": "ff"|"nf"|"pf"|None, "source": ..., "why": ...};
+    Goal keywords win when present. Otherwise decide from the DATA — in order:
+    (2) the parameter file's own KEYS (read the file, authoritative — a param file's
+    contents say what pipeline it is regardless of name/location), (3) reconstruction
+    output already on disk (.mic → NF), then the name-based fallbacks: (4) whole-word
+    modality tokens in the path components, (5) a child-name majority (a container of
+    scan dirs). Returns {"modality": "ff"|"nf"|"pf"|None, "source": ..., "why": ...};
     modality is None only when nothing is decisive, and the caller keeps FF as the
     documented default (but flags it as a fallback, not evidence).
     """
@@ -7976,12 +8114,24 @@ def _infer_hedm_modality(p: Path, info: dict, goal: str = "") -> dict:
             out.update(t for t in re.split(r"[^a-z0-9]+", s.lower()) if t)
         return out
 
-    # 2) Reconstruction output already present → decisive.
+    # 2) READ the parameter file(s) and classify from their keys — the authoritative
+    #    signal. This is what makes recommend_workflow decide from data, not names.
+    param_paths = []
+    if p.is_dir():
+        param_paths = [p / n for n in (info.get("param_files") or []) if n]
+    elif info.get("kind") == "param_file" or p.suffix.lower() == ".txt":
+        param_paths = [p]
+    if param_paths:
+        pm = _modality_from_param_files(param_paths)
+        if pm.get("modality"):
+            return pm
+
+    # 3) Reconstruction output already present → decisive.
     if info.get("mic_files"):
         return {"modality": "nf", "source": "data",
                 "why": f".mic reconstruction output present ({info['mic_files'][0]})"}
 
-    # 3) Whole-word modality tokens in the path components (+ multiword substrings).
+    # 4) Whole-word modality tokens in the path components (+ multiword substrings).
     pl = str(p).lower()
     path_toks = _toks(list(p.parts) + [p.name])
     nf = bool(path_toks & _NF_TOKENS) or any(s in pl for s in ("near-field", "near_field", "nearfield"))
@@ -7993,7 +8143,7 @@ def _infer_hedm_modality(p: Path, info: dict, goal: str = "") -> dict:
         return {"modality": m, "source": "path",
                 "why": f"'{m}' signalled by the data path"}
 
-    # 4) Child-name majority (e.g. many *_scans* NF dirs beside one Au_FF reference).
+    # 5) Child-name majority (e.g. many *_scans* NF dirs beside one Au_FF reference).
     fam = {"nf": 0, "ff": 0, "pf": 0}
     if p.is_dir():
         try:
@@ -8324,8 +8474,41 @@ async def recommend_workflow(path: str = "", goal: str = "") -> str:
                          "why": "zarr integration output → refine with a CIF",
                          "alternative": "run_midas_viewer — caked heatmap + lineout"})
         elif kind == "param_file":
-            recs.append({"tool": "validate_parameter_file → diagnose_parameter_file",
-                         "why": "MIDAS parameter file → validate before using it in a pipeline"})
+            # Read the file's KEYS to decide which pipeline it belongs to, then
+            # recommend validating against THAT pipeline and running it.
+            pm = _modality_from_param_files([p])
+            pipe = pm.get("modality") or "ff"
+            recs.append({
+                "tool": "validate_parameter_file → diagnose_parameter_file",
+                "why": "MIDAS parameter file → validate before using it in a pipeline",
+                "params": {"param_file": str(p), "pipeline": pipe},
+                "modality_inference": pm,
+            })
+            if pm.get("modality") == "nf":
+                recs.append({
+                    "tool": "run_nf_hedm_reconstruction",
+                    "why": f"parameter file reads as near-field — {pm['why']}",
+                    "params": {"param_file": str(p),
+                               "result_folder": "<where to write Grains.mic>"},
+                    "output": "LayerNr_*/Grains.mic",
+                })
+            elif pm.get("modality") == "pf":
+                recs.append({
+                    "tool": "run_pf_hedm_workflow",
+                    "why": f"parameter file reads as point-focus/scanning — {pm['why']}",
+                    "params": {"param_file": str(p),
+                               "result_dir": "<where to write per-layer Grains.csv>"},
+                    "output": "LayerNr_*/Grains.csv + v_map.h5",
+                })
+            elif pm.get("modality") == "ff":
+                recs.append({
+                    "tool": "run_ff_hedm_full_workflow",
+                    "why": f"parameter file reads as far-field — {pm['why']}",
+                    "params": {"param_file": str(p),
+                               "data_file": "<.analysis.MIDAS.zip zarr>",
+                               "result_dir": "<where to write Grains.csv>"},
+                    "output": "Grains.csv / IndexBest.bin",
+                })
         else:
             recs.append({"tool": "inspect_dataset_file",
                          "why": "unrecognized type — inspect to extract geometry/metadata first"})

@@ -27,7 +27,11 @@ versioning. Until v1.0.0, breaking changes may land in minor versions.
 - `recommend_workflow` now maps exposed data → the correct FF/NF/PF workflow, cites the
   relevant Agent Skill, distinguishes powder vs single-crystal calibrants (Au → NF
   beam-position, not FF powder geometry), and surfaces the in-plane `tx` post-reconstruction
-  calibration step.
+  calibration step. Modality is now decided **by reading the parameter file's keys**
+  (`nDistances`/`MicFile*`/`MinConfidence` → NF; `RingThresh`/`OverAllRingToIndex` → FF;
+  `nScans > 1` → PF) — the authoritative, name-independent signal, ranked above the
+  path/directory-name heuristics. A `.txt` is recognized as a param file by its contents
+  too, so an oddly-named file (e.g. `ps_au.txt`) is no longer missed.
 - `midas_auto_calibrate` (v2 engine) now returns an honest error for unsupported
   calibrants instead of silently substituting CeO2.
 
