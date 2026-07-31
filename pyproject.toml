@@ -52,6 +52,7 @@ dependencies = [
     # has no Windows wheels — skip it on native Windows so `uv sync` installs cleanly
     # (CLI/agent/core work; run MIDAS HEDM tools under WSL2/Linux). Unchanged elsewhere.
     "midas-suite[ff,pdf,defect,dfxm,xaf,ultrafast,grain-odf,pf-odf,pink]>=0.4.0 ; sys_platform != 'win32'",
+    "pywebview>=6.2.1",
 ]
 
 [project.optional-dependencies]

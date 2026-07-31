@@ -56,7 +56,9 @@ export function ChatInput() {
 
   const handleSend = () => {
     const trimmed = text.trim()
-    if ((!trimmed && attachments.length === 0) || isLoading) return
+    // Note: no isLoading guard — the backend /ws loop serializes turns, so a
+    // message sent mid-turn is queued and runs after the current one finishes.
+    if (!trimmed && attachments.length === 0) return
     // Compose the message with explicit attachment paths so the agent grounds on
     // the real files (and the anti-hallucination path-resolution works).
     let msg = trimmed
@@ -156,10 +158,9 @@ export function ChatInput() {
           {/* Attach button */}
           <button
             onClick={() => fileInputRef.current?.click()}
-            disabled={isLoading}
             title="Attach image or data file"
             className="shrink-0 w-8 h-8 rounded-lg flex items-center justify-center transition-all duration-150"
-            style={{ background: 'var(--apexa-surface-3)', color: 'var(--apexa-text-muted)', cursor: isLoading ? 'default' : 'pointer' }}
+            style={{ background: 'var(--apexa-surface-3)', color: 'var(--apexa-text-muted)', cursor: 'pointer' }}
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
@@ -174,22 +175,24 @@ export function ChatInput() {
             onPaste={handlePaste}
             onFocus={() => setFocused(true)}
             onBlur={() => setFocused(false)}
-            placeholder="Ask APEXA — or attach / drag / paste an image or data file…"
+            placeholder={isLoading
+              ? 'Working… type to queue the next command (Enter sends)'
+              : 'Ask APEXA — or attach / drag / paste an image or data file…'}
             rows={1}
             className="flex-1 bg-transparent text-sm resize-none outline-none max-h-[200px] leading-relaxed"
             style={{ color: 'var(--apexa-text)' }}
-            disabled={isLoading}
           />
           <button
             onClick={handleSend}
-            disabled={(!text.trim() && attachments.length === 0) || isLoading}
+            disabled={!text.trim() && attachments.length === 0}
+            title={isLoading ? 'Queue this command (runs after the current turn)' : 'Send'}
             className="shrink-0 w-8 h-8 rounded-lg flex items-center justify-center transition-all duration-150"
             style={{
               background: (text.trim() || attachments.length > 0) ? 'var(--apexa-accent-grad)' : 'var(--apexa-surface-3)',
               color: (text.trim() || attachments.length > 0) ? 'white' : 'var(--apexa-text-muted)',
-              boxShadow: (text.trim() || attachments.length > 0) && !isLoading ? 'var(--apexa-glow)' : 'none',
-              opacity: ((!text.trim() && attachments.length === 0) || isLoading) ? 0.4 : 1,
-              cursor: ((!text.trim() && attachments.length === 0) || isLoading) ? 'default' : 'pointer',
+              boxShadow: (text.trim() || attachments.length > 0) ? 'var(--apexa-glow)' : 'none',
+              opacity: (!text.trim() && attachments.length === 0) ? 0.4 : 1,
+              cursor: (!text.trim() && attachments.length === 0) ? 'default' : 'pointer',
             }}
           >
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">

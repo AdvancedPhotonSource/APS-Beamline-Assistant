@@ -9,6 +9,10 @@ import { useConfirmStore, nextConfirmId } from './confirmStore'
 interface ChatState {
   messages: ChatMessage[]
   isLoading: boolean
+  // Number of turns sent but not yet answered. The backend /ws loop serializes
+  // turns (reads one message at a time), so a user can queue several while one
+  // runs — isLoading stays true until the LAST queued turn is answered.
+  pendingCount: number
   progress: { step: string; percent: number } | null
   _pendingToolResults: ToolResult[]
 
@@ -62,12 +66,79 @@ function processResponse(text: string, msgId: string) {
   if (artifacts.length > 0) {
     useVizStore.getState().addArtifacts(artifacts)
   }
+  // Auto-plot any integration results parsed from the response text (in case the
+  // outputs arrived inline rather than as discrete tool_result events).
+  for (const tr of toolResults) autoRenderIntegration(tr, msgId)
   return { toolResults, artifacts }
+}
+
+// ── Auto-render integration outputs in the side panel ───────────────────────
+// Integration tools (midas_integrate_2d_to_1d / _series / _batch) return output
+// file PATHS, not plot data — so they never carry a `plotly` field for
+// extractArtifacts() to pick up. Without this bridge, "integrate and plot" leaves
+// the side panel empty even though the .xy / .zarr.zip were written. Here we call
+// the same /api/viz/* endpoints the VizLauncher uses and push the returned Plotly
+// as artifacts, so the panel populates the moment integration finishes.
+async function renderVizFile(
+  endpoint: 'lineout' | 'caked',
+  file: string,
+  messageId: string,
+  extras?: Record<string, string>,
+) {
+  try {
+    const body = new FormData()
+    body.append('file', file)
+    if (extras) for (const [k, v] of Object.entries(extras)) body.append(k, v)
+    const res = await fetch(`/api/viz/${endpoint}`, { method: 'POST', body })
+    if (!res.ok) return
+    const r = await res.json()
+    if (r && r.plotly) {
+      useVizStore.getState().addArtifact({
+        id: `autoviz-${endpoint}-${genId()}`,
+        type: 'plotly',
+        title: (r.title as string) || (file.split('/').pop() ?? file),
+        data: r.plotly,
+        sourceMessageId: messageId,
+      })
+    }
+  } catch {
+    // best-effort: a failed auto-plot must never break the chat turn
+  }
+}
+
+function autoRenderIntegration(result: ToolResult, messageId: string) {
+  if (!result.tool || !result.tool.includes('integrate')) return
+  if (result.status === 'error') return
+  const d = result.data as Record<string, unknown>
+
+  // Collect (lineout, caked) pairs from the payload: single-file tools expose
+  // them at the top level; series/batch tools nest one per output.
+  const pairs: Array<{ lineout?: unknown; caked?: unknown; peaks?: unknown }> = []
+  pairs.push({ lineout: d.lineout_xy ?? d.lineout_file ?? d.lineout, caked: d.zarr_zip ?? d.caked_file ?? d.caked, peaks: d.peaks_csv })
+  const nested = (d.outputs ?? d.results ?? d.series) as unknown
+  if (Array.isArray(nested)) {
+    for (const item of nested.slice(0, 8)) {   // cap: don't flood the panel
+      if (item && typeof item === 'object') {
+        const o = item as Record<string, unknown>
+        pairs.push({ lineout: o.lineout_xy ?? o.lineout_file ?? o.lineout, caked: o.zarr_zip ?? o.caked_file ?? o.caked, peaks: o.peaks_csv })
+      }
+    }
+  }
+
+  for (const p of pairs) {
+    if (typeof p.lineout === 'string' && p.lineout) {
+      void renderVizFile('lineout', p.lineout, messageId, typeof p.peaks === 'string' ? { peaks_csv: p.peaks } : undefined)
+    }
+    if (typeof p.caked === 'string' && p.caked) {
+      void renderVizFile('caked', p.caked, messageId)
+    }
+  }
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
   messages: [],
   isLoading: false,
+  pendingCount: 0,
   progress: null,
   _pendingToolResults: [],
   sessions: [],
@@ -105,6 +176,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
             if (artifacts.length > 0) {
               useVizStore.getState().addArtifacts(artifacts)
             }
+            // Integration tools carry only file paths — fetch + render them.
+            autoRenderIntegration(toolResult, tempId)
           }
           break
         }
@@ -156,7 +229,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
       content,
       timestamp: Date.now(),
     }
-    set((s) => ({ messages: [...s.messages, userMsg], isLoading: true, progress: null, _pendingToolResults: [] }))
+    set((s) => ({
+      messages: [...s.messages, userMsg],
+      isLoading: true,
+      pendingCount: s.pendingCount + 1,
+      progress: null,
+      _pendingToolResults: [],
+    }))
     get()._persist()
 
     if (wsManager.connected) {
@@ -183,7 +262,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
       toolResults: toolResults.length > 0 ? toolResults : undefined,
       artifacts: artifacts.length > 0 ? artifacts : undefined,
     }
-    set((s) => ({ messages: [...s.messages, msg], isLoading: false, progress: null }))
+    set((s) => {
+      const pendingCount = Math.max(0, s.pendingCount - 1)
+      return { messages: [...s.messages, msg], pendingCount, isLoading: pendingCount > 0, progress: null }
+    })
     get()._persist()
   },
 
@@ -192,7 +274,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   clearHistory: () => {
-    set({ messages: [], isLoading: false, progress: null, _pendingToolResults: [] })
+    set({ messages: [], isLoading: false, pendingCount: 0, progress: null, _pendingToolResults: [] })
     get()._persist()
   },
 
