@@ -268,7 +268,8 @@ def _print_help():
     _cmd("session new [name]", "Archive current & start a fresh session")
     _cmd("session save [name]", "Save current session (with conversation)")
     _cmd("session load <name>", "Load & resume a saved session (turns append to it)")
-    _cmd("session switch <name>", "Switch active session (resume + continue)")
+    _cmd("session switch <name>", "Switch active session (protects unsaved scratch work)")
+    _cmd("session append <name>", "Merge current turns into an existing session & continue")
     _cmd("session resume", "Resume last session (autosaved on exit)")
     _cmd("session list | summary", "Manage sessions")
     _cmd("clear tools | forget tools", "Drop tool-call history (keep prose) — un-poison context")
@@ -405,6 +406,66 @@ class ExperimentContext:
                 pass
         self._remember_active()
         return self.active_session
+
+    def append_to(self, target_name: str, conversation: List[Dict],
+                  summary: str = None) -> int:
+        """Non-destructively merge the current conversation into an existing
+        session, then continue in it.
+
+        Unlike ``save_session`` (which copies/overwrites the target transcript),
+        this *appends* the given turns after the target's existing transcript —
+        so carrying scratch work into a named session never clobbers what is
+        already there. The target becomes the active session; subsequent turns
+        keep appending to it.
+
+        Returns the target transcript's total message count after the merge.
+        """
+        # Already writing into the target — nothing to carry over.
+        if target_name == self.active_session:
+            return len(self.read_transcript(target_name))
+
+        source_was_scratch = (self.active_session == "_autosave")
+
+        # Switch active to the target FIRST so append_message() (which writes to
+        # the active slot) lands after the target's existing turns.
+        self.active_session = target_name
+        for msg in conversation:
+            role = msg.get("role")
+            content = msg.get("content")
+            if role is not None and content is not None:
+                self.append_message(role, content)
+
+        # Drain the scratch slot so its turns can't be double-merged later.
+        if source_was_scratch:
+            self.discard_scratch()
+
+        # Restore state mirrors load_session(): the full merged transcript is the
+        # canonical conversation, and the summary comes from the caller or the
+        # target's sidecar.
+        self.loaded_conversation = self.read_transcript(target_name)
+        if summary is not None:
+            self.loaded_summary = summary
+        else:
+            self.loaded_summary = ""
+            sidecar = self.session_dir / f"{target_name}.json"
+            if sidecar.exists():
+                try:
+                    with open(sidecar) as f:
+                        self.loaded_summary = json.load(f).get("running_summary", "")
+                except Exception:
+                    pass
+        self._remember_active()
+        # loaded_conversation is now the full merged transcript (existing + new).
+        return len(self.loaded_conversation)
+
+    def discard_scratch(self):
+        """Wipe the rolling autosave scratch transcript."""
+        tf = self._transcript_file("_autosave")
+        try:
+            if tf.exists():
+                tf.unlink()
+        except Exception:
+            pass
 
     def append_message(self, role: str, content: str):
         """Append one message to the active session's append-only transcript.
@@ -1879,7 +1940,7 @@ class APEXAClient:
                     session_cmd = user_input[8:].strip().split()
 
                     if not session_cmd:
-                        print("Usage: session <new|save|load|resume|list|summary> [name]")
+                        print("Usage: session <new|save|load|switch|append|resume|list|summary> [name]")
                         continue
 
                     action = session_cmd[0]
@@ -1929,6 +1990,58 @@ class APEXAClient:
                             continue
                         else:
                             session_name = session_cmd[1]
+
+                        # Guard against orphaning unsaved scratch work: if we are
+                        # in the rolling _autosave slot with real turns and are
+                        # about to switch AWAY to a different named session, those
+                        # turns would be stranded in _autosave.jsonl. Named
+                        # sessions are always safe on disk, so this only fires from
+                        # scratch.
+                        convo = self.orchestrator.export_history() if self.orchestrator else []
+                        if (self.context.active_session == "_autosave"
+                                and convo
+                                and session_name != "_autosave"
+                                and session_name != self.context.active_session):
+                            summ = self.orchestrator.export_summary() if self.orchestrator else ""
+                            print(f"  {C.YELLOW}⚠{C.RESET} You have {len(convo)} unsaved "
+                                  f"message(s) in the current scratch session.")
+                            print(f"    {C.CYAN}[a]{C.RESET}ppend into '{session_name}'   "
+                                  f"{C.CYAN}[s]{C.RESET}ave separately   "
+                                  f"{C.CYAN}[d]{C.RESET}iscard   "
+                                  f"{C.CYAN}[c]{C.RESET}ancel")
+                            choice = (await pt_session.prompt_async("  Choice: ")).strip().lower()
+                            if choice in ('a', 'append'):
+                                merged = self.context.append_to(
+                                    session_name, convo, summary=summ)
+                                if self.orchestrator:
+                                    self.orchestrator.import_history(self.context.loaded_conversation)
+                                    self.orchestrator.import_summary(self.context.loaded_summary)
+                                print(f"  {C.GREEN}✓{C.RESET} Appended {len(convo)} message(s) "
+                                      f"into {C.CYAN}{session_name}{C.RESET} "
+                                      f"{C.DIM}({merged - len(convo)}→{merged}; now active){C.RESET}")
+                                print(self.context.get_summary())
+                                continue
+                            elif choice in ('s', 'save'):
+                                newname = (await pt_session.prompt_async(
+                                    "  Save scratch as (name): ")).strip()
+                                if not newname:
+                                    print(f"  {C.DIM}No name given — staying put.{C.RESET}")
+                                    continue
+                                saved_file = self.context.save_session(
+                                    newname, conversation=convo, summary=summ)
+                                print(f"  {C.GREEN}✓{C.RESET} Scratch saved: "
+                                      f"{C.CYAN}{saved_file.stem}{C.RESET} "
+                                      f"{C.DIM}({len(convo)} messages){C.RESET}")
+                                # fall through to load the requested target below
+                            elif choice in ('d', 'discard'):
+                                self.context.discard_scratch()
+                                print(f"  {C.DIM}Scratch discarded.{C.RESET}")
+                                # fall through to load the requested target below
+                            else:
+                                print(f"  {C.DIM}Cancelled — staying in the current "
+                                      f"session.{C.RESET}")
+                                continue
+
                         # winding up the current session is automatic: its turns
                         # are already on disk in its append-only transcript.
                         if self.context.load_session(session_name):
@@ -1945,6 +2058,33 @@ class APEXAClient:
                             where = "autosave" if session_name == "_autosave" else session_name
                             print(f"  {C.RED}✗{C.RESET} Session not found: {where}")
 
+                    elif action == 'append':
+                        # session append <name>: merge the current turns into an
+                        # existing (or new) session and continue there.
+                        if len(session_cmd) < 2:
+                            print("Usage: session append <session_name>")
+                            continue
+                        session_name = session_cmd[1]
+                        if session_name == self.context.active_session:
+                            print(f"  {C.DIM}Already in '{session_name}' — nothing to "
+                                  f"append.{C.RESET}")
+                            continue
+                        convo = self.orchestrator.export_history() if self.orchestrator else []
+                        summ = self.orchestrator.export_summary() if self.orchestrator else ""
+                        if not convo:
+                            print(f"  {C.DIM}No current turns to append — use "
+                                  f"'session load {session_name}' instead.{C.RESET}")
+                            continue
+                        merged = self.context.append_to(
+                            session_name, convo, summary=summ)
+                        if self.orchestrator:
+                            self.orchestrator.import_history(self.context.loaded_conversation)
+                            self.orchestrator.import_summary(self.context.loaded_summary)
+                        print(f"  {C.GREEN}✓{C.RESET} Appended {len(convo)} message(s) into "
+                              f"{C.CYAN}{session_name}{C.RESET} "
+                              f"{C.DIM}({merged - len(convo)}→{merged}; now active){C.RESET}")
+                        print(self.context.get_summary())
+
                     elif action == 'list':
                         sessions = self.context.list_sessions()
                         if sessions:
@@ -1960,7 +2100,7 @@ class APEXAClient:
 
                     else:
                         print(f"Unknown session command: {action}")
-                        print("Available: new, save, load, switch, resume, list, summary")
+                        print("Available: new, save, load, switch, append, resume, list, summary")
 
                 elif user_input.lower().startswith('image '):
                     # Image analysis command
