@@ -39,6 +39,7 @@ os.chdir(Path(__file__).resolve().parent)
 
 import uvicorn  # noqa: E402  (after chdir)
 import webview  # noqa: E402
+from webview.errors import WebViewException  # noqa: E402
 
 HOST = "127.0.0.1"  # desktop app binds loopback only — never 0.0.0.0
 
@@ -127,24 +128,59 @@ def main() -> int:
 
     width = int(os.environ.get("APEXA_DESKTOP_WIDTH", "1440"))
     height = int(os.environ.get("APEXA_DESKTOP_HEIGHT", "900"))
-    webview.create_window(
-        "APEXA — Advanced Photon Experiment Assistant",
-        f"http://{HOST}:{port}",
-        width=width,
-        height=height,
-        min_size=(1024, 700),
-    )
 
     # Set APEXA_DESKTOP_DEBUG=1 to enable the WebKit inspector (right-click →
     # Inspect Element) and print a one-line DOM/connection diagnosis to the
     # terminal — useful if the window ever comes up blank or unresponsive.
     debug = os.environ.get("APEXA_DESKTOP_DEBUG", "0").strip() not in ("0", "false", "no")
     try:
+        webview.create_window(
+            "APEXA — Advanced Photon Experiment Assistant",
+            f"http://{HOST}:{port}",
+            width=width,
+            height=height,
+            min_size=(1024, 700),
+        )
         webview.start(_diagnose if debug else None, debug=debug)
+    except WebViewException as exc:
+        # No native GUI backend — normal on a headless/remote Linux beamline box
+        # (macOS/Windows ship a system webview; Linux needs GTK+WebKit2GTK or
+        # Qt+QtWebEngine). Don't crash: keep the backend up and serve the same UI
+        # over the browser instead.
+        _no_gui_fallback(port, exc)
     finally:
         server.should_exit = True
         thread.join(timeout=5)
     return 0
+
+
+def _no_gui_fallback(port: int, exc: Exception) -> None:
+    """Degrade to serve-only when pywebview has no GUI toolkit to render into."""
+    bar = "━" * 63
+    print(f"\n{bar}", file=sys.stderr)
+    print("⚠  No native window backend (GTK/Qt) on this machine — can't open a "
+          "desktop window.", file=sys.stderr)
+    print(f"   ({type(exc).__name__}: {exc})", file=sys.stderr)
+    print(bar, file=sys.stderr)
+    print("The web UI is still running. Use it in a browser instead:", file=sys.stderr)
+    print(f"    • Local display:  http://{HOST}:{port}", file=sys.stderr)
+    print(f"    • Remote box:     ssh -L {port}:{HOST}:{port} <this-host>  "
+          f"then open http://localhost:{port}", file=sys.stderr)
+    print("      (or run the network web server: python web_server.py)", file=sys.stderr)
+    print("", file=sys.stderr)
+    print("To get a real desktop window on Linux, install a webview backend, e.g.:",
+          file=sys.stderr)
+    print("    • GTK  (light, no Chromium):  system pkgs python3-gi + "
+          "gir1.2-webkit2-4.1", file=sys.stderr)
+    print("    • Qt   (pip, bundles Chromium):  uv pip install qtpy PyQt6 "
+          "PyQt6-WebEngine", file=sys.stderr)
+    print(f"{bar}\n", file=sys.stderr)
+    print("Serving until Ctrl-C…", file=sys.stderr, flush=True)
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        pass
 
 
 def _diagnose() -> None:
