@@ -13,6 +13,9 @@ import os
 import sys
 import shutil
 import re
+import signal
+import contextlib
+import psutil
 from typing import Optional, Dict, Any, List
 from contextlib import AsyncExitStack
 
@@ -242,6 +245,9 @@ def _print_help():
     def _ex(text):
         print(f"  {C.BLUE}•{C.RESET} {C.DIM}{text}{C.RESET}")
 
+    def _note(text):
+        print(f"  {C.DIM}{text}{C.RESET}")
+
     print(f"\n  {C.BOLD}{C.BCYAN}APEXA{C.RESET} {C.DIM}Command Reference{C.RESET}")
 
     _sec("Analysis & Processing")
@@ -271,7 +277,8 @@ def _print_help():
     _cmd("session switch <name>", "Switch active session (protects unsaved scratch work)")
     _cmd("session append <name>", "Merge current turns into an existing session & continue")
     _cmd("session resume", "Resume last session (autosaved on exit)")
-    _cmd("session list | summary", "Manage sessions")
+    _cmd("session current", "Show the active session (name + message count)")
+    _cmd("session list | summary", "Manage sessions (active marked ●)")
     _cmd("clear tools | forget tools", "Drop tool-call history (keep prose) — un-poison context")
 
     _sec("Configuration")
@@ -282,7 +289,14 @@ def _print_help():
     _cmd("stats", "Interaction log stats")
     _cmd("timing", "Toggle API response timing")
     _cmd("clear", "Clear conversation history")
+    _cmd("Ctrl-C", "Abort the running command (kills its compute); at idle prompt, quits")
     _cmd("quit", "Exit APEXA")
+
+    _sec("Aborting a running command")
+    _note("Ctrl-C during a command aborts it and kills that server's compute tree,")
+    _note("then returns you to the prompt. Ctrl-C at the idle prompt exits APEXA.")
+    _note("NOTE: abort is not a motion e-stop — a move already sent to the EPICS IOC")
+    _note("keeps going; use 'stop' / stop_motor to halt motor motion.")
 
     _sec("Shell Commands (direct, no prefix needed)")
     _cmd("pwd, cd, cat, head, tail, grep ...", "Standard Unix commands")
@@ -1502,6 +1516,17 @@ class APEXAClient:
         self.sessions = {}
         self.exit_stack = AsyncExitStack()
 
+        # Abort/reconnect state (Ctrl-C aborts a running command; see
+        # _abort_active_query / _reconnect_server). Each MCP server gets its own
+        # AsyncExitStack so a single session can be torn down + rebuilt after its
+        # process tree is killed, without disturbing the others.
+        self._server_stacks:  Dict[str, AsyncExitStack] = {}   # name → per-server stack
+        self._server_configs: Dict[str, str]            = {}   # name → script_path (for reconnect)
+        self._server_pids:    Dict[str, int]            = {}   # name → server subprocess PID
+        self._busy_server:    Optional[str]             = None # server with an in-flight call_tool
+        self._abort_busy:     Optional[str]             = None # busy server captured at Ctrl-C (before unwind)
+        self._active_task:    Optional[asyncio.Task]    = None # the running run_query task, if any
+
         # Smart context manager for session persistence
         self.context = ExperimentContext()
 
@@ -1565,54 +1590,91 @@ class APEXAClient:
             }
         }
 
+    @staticmethod
+    def _server_command(script_path: str) -> str:
+        """Resolve the interpreter/command used to spawn a server script.
+
+        Uses the venv Python if available, otherwise the current interpreter.
+        Cross-platform: Windows venv is .venv\\Scripts\\python.exe, Unix is
+        .venv/bin/python3. sys.executable is the uv-managed venv under `uv run`
+        and is the correct fallback on every OS.
+        """
+        if script_path.endswith('.py'):
+            _cands = [Path(".venv/Scripts/python.exe"),
+                      Path(".venv/bin/python3"), Path(".venv/bin/python")]
+            _vp = next((p for p in _cands if p.exists()), None)
+            return str(_vp) if _vp else sys.executable
+        return "node"
+
+    async def _connect_one_server(self, name: str, script_path: str,
+                                  register_tools: bool = True):
+        """Spawn + initialize a single MCP server on its OWN AsyncExitStack.
+
+        Isolating each server in its own stack lets us tear down and rebuild a
+        single session (after killing its process tree on abort) without
+        touching the others. Captures the server subprocess PID via psutil so
+        _abort_active_query can kill the whole MIDAS process tree. On reconnect
+        the tool set is unchanged, so pass register_tools=False.
+        """
+        # Snapshot our current children so we can identify the newly-spawned one.
+        _me = psutil.Process()
+        _before = {c.pid for c in _me.children(recursive=True)}
+
+        stack = AsyncExitStack()
+        server_params = StdioServerParameters(
+            command=self._server_command(script_path),
+            args=[script_path],
+            env=None,
+        )
+        stdio_transport = await stack.enter_async_context(stdio_client(server_params))
+        stdio, write = stdio_transport
+        session = await stack.enter_async_context(ClientSession(stdio, write))
+        await session.initialize()
+
+        self._server_stacks[name] = stack
+        self._server_configs[name] = script_path
+        self.sessions[name] = session
+
+        # Identify the server subprocess: the new child whose cmdline references
+        # the script. mcp spawns it with start_new_session=True (its own process
+        # group), so killing this PID's tree also kills MIDAS grandchildren.
+        self._server_pids.pop(name, None)
+        try:
+            for c in _me.children(recursive=True):
+                if c.pid in _before:
+                    continue
+                try:
+                    if any(script_path in part for part in c.cmdline()):
+                        self._server_pids[name] = c.pid
+                        break
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+        except Exception:
+            pass  # PID capture is best-effort; abort degrades to client-side cancel
+
+        response = await session.list_tools()
+        if register_tools:
+            for tool in response.tools:
+                self._tool_registry[tool.name] = name
+                self._available_tools.append({
+                    "type": "function",
+                    "function": {
+                        "name":        tool.name,
+                        "description": f"[{name.upper()}] {tool.description}",
+                        "parameters":  tool.inputSchema,
+                    },
+                })
+        return len(response.tools)
+
     async def connect_to_multiple_servers(self, server_configs: List[Dict[str, str]]):
         self.sessions = {}
-        
+
         for config in server_configs:
             name = config["name"]
             script_path = config["script_path"]
-            
             try:
-                # Use venv Python if available, otherwise the current interpreter.
-                # Cross-platform: Windows venv is .venv\Scripts\python.exe, Unix is
-                # .venv/bin/python3. sys.executable is the uv-managed venv under
-                # `uv run` and is the correct fallback on every OS (the old
-                # hardcoded ".venv/bin/python3" / "python3" broke server spawn on Windows).
-                if script_path.endswith('.py'):
-                    _cands = [Path(".venv/Scripts/python.exe"),
-                              Path(".venv/bin/python3"), Path(".venv/bin/python")]
-                    _vp = next((p for p in _cands if p.exists()), None)
-                    command = str(_vp) if _vp else sys.executable
-                else:
-                    command = "node"
-
-                server_params = StdioServerParameters(
-                    command=command,
-                    args=[script_path],
-                    env=None
-                )
-                
-                stdio_transport = await self.exit_stack.enter_async_context(stdio_client(server_params))
-                stdio, write = stdio_transport
-                session = await self.exit_stack.enter_async_context(ClientSession(stdio, write))
-                await session.initialize()
-                
-                self.sessions[name] = session
-
-                # Build tool registry for this server in same pass
-                response = await session.list_tools()
-                for tool in response.tools:
-                    self._tool_registry[tool.name] = name
-                    self._available_tools.append({
-                        "type": "function",
-                        "function": {
-                            "name":        tool.name,
-                            "description": f"[{name.upper()}] {tool.description}",
-                            "parameters":  tool.inputSchema,
-                        },
-                    })
-                print(f"  {name}: {len(response.tools)} tools")
-
+                n = await self._connect_one_server(name, script_path)
+                print(f"  {name}: {n} tools")
             except Exception as e:
                 print(f"  {name}: FAILED ({e})")
 
@@ -1625,6 +1687,91 @@ class APEXAClient:
             all_tools=self._available_tools,
             context=self.context,
         )
+
+    async def _reconnect_server(self, name: str):
+        """Rebuild a single MCP session after its process tree was killed.
+
+        Called from _abort_active_query. The session is dead once we kill the
+        server's process tree, so we close its (now-broken) stack best-effort and
+        spawn a fresh one. Tools are unchanged → registry is left intact.
+        """
+        script_path = self._server_configs.get(name)
+        if not script_path:
+            return
+        old = self._server_stacks.pop(name, None)
+        if old is not None:
+            with contextlib.suppress(Exception):
+                await old.aclose()
+        try:
+            await self._connect_one_server(name, script_path, register_tools=False)
+            if name == "midas":
+                self.session = self.sessions.get("midas")
+            print(f"  {C.GREEN}✓{C.RESET} reconnected {C.CYAN}{name}{C.RESET}")
+        except Exception as e:
+            print(f"  {C.RED}✗{C.RESET} failed to reconnect {name}: {e}")
+
+    @staticmethod
+    def _kill_process_tree(pid: int):
+        """Terminate a server subprocess and every descendant (cross-platform).
+
+        The MIDAS compute runs as a subprocess.run() child of the server, so we
+        must kill the whole tree, not just the server. SIGTERM first, then SIGKILL
+        any survivors after a short grace period.
+        """
+        try:
+            parent = psutil.Process(pid)
+        except psutil.NoSuchProcess:
+            return
+        procs = parent.children(recursive=True) + [parent]
+        for p in procs:
+            with contextlib.suppress(psutil.NoSuchProcess, psutil.AccessDenied):
+                p.terminate()
+        _gone, alive = psutil.wait_procs(procs, timeout=3)
+        for p in alive:
+            with contextlib.suppress(psutil.NoSuchProcess, psutil.AccessDenied):
+                p.kill()
+
+    def _on_sigint(self):
+        """SIGINT handler active ONLY while a query runs.
+
+        prompt_toolkit installs its own SIGINT handler for the duration of
+        prompt_async and restores ours afterward, so this fires only during a
+        running command — cancelling the query task. An idle-prompt Ctrl-C is
+        prompt_toolkit's (→ KeyboardInterrupt → top-level handler → quit).
+        """
+        task = self._active_task
+        if task is not None and not task.done():
+            print(f"\n  {C.YELLOW}⏹{C.RESET} Aborting…", flush=True)
+            # Snapshot the busy server NOW, before task.cancel() unwinds
+            # execute_tool_call's finally (which clears _busy_server).
+            self._abort_busy = self._busy_server
+            task.cancel()
+
+    async def _abort_active_query(self):
+        """Abort the in-flight query: cancel the task, kill the busy server's
+        compute tree, and transparently reconnect that session.
+
+        On the POSIX path _on_sigint has already cancelled the task and stashed the
+        busy server in _abort_busy (execute_tool_call's finally clears _busy_server
+        as cancellation unwinds, so we can't read it here). On the Windows fallback
+        path (KeyboardInterrupt raised at the await) the task hasn't unwound yet, so
+        _busy_server is still live — hence the fallback.
+        """
+        busy = self._abort_busy or self._busy_server
+        self._abort_busy = None
+        task = self._active_task
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, KeyboardInterrupt):
+                await task
+        if busy:
+            pid = self._server_pids.get(busy)
+            if pid:
+                self._kill_process_tree(pid)
+                print(f"  {C.DIM}killed {busy} compute (pid {pid}){C.RESET}")
+            await self._reconnect_server(busy)
+        self._busy_server = None
+        print(f"  {C.DIM}back to prompt — Ctrl-C again to quit{C.RESET}\n")
 
     async def execute_tool_call(self, tool_name: str, arguments: Dict[str, Any]) -> str:
 
@@ -1659,6 +1806,11 @@ class APEXAClient:
         _t0 = _time.monotonic()
         try:
             session = self.sessions[server_name]
+            # Mark this server busy so a Ctrl-C abort knows whose process tree to
+            # kill. Cleared in the finally (also on CancelledError, which is a
+            # BaseException and skips the `except Exception` below — _abort_active_query
+            # captures _busy_server BEFORE it awaits the cancelled task).
+            self._busy_server = server_name
             result = await session.call_tool(tool_name, arguments)
             result_text = str(result.content[0].text if result.content else "No result")
 
@@ -1681,6 +1833,8 @@ class APEXAClient:
             error_msg = f"Error: {str(e)}"
             print(f"✗ {error_msg}")
             return error_msg
+        finally:
+            self._busy_server = None
 
     async def run_query(self, query: str, use_history: bool = True,
                         on_tool_result=None) -> str:
@@ -1761,14 +1915,36 @@ class APEXAClient:
         # prompt_toolkit: tab completion, history, bracketed paste
         import glob as _glob
 
+        _SESSION_VERBS = ['new', 'save', 'load', 'switch', 'resume',
+                          'append', 'list', 'summary', 'current']
+        _SESSION_NAME_VERBS = {'load', 'switch', 'resume', 'append', 'save'}
+
         class _APEXACompleter(Completer):
-            def __init__(self, commands):
+            def __init__(self, commands, sessions_provider=None):
                 self._commands = sorted(commands)
+                self._sessions_provider = sessions_provider
 
             def get_completions(self, document, complete_event):
                 text = document.text_before_cursor
                 word = document.get_word_before_cursor(WORD=True)
                 tokens = text.split()
+
+                # `session <verb> [name]` — complete verbs, then saved session names
+                if tokens and tokens[0] == 'session':
+                    completing = '' if text.endswith(' ') else (tokens[-1] if tokens else '')
+                    idx = len(tokens) - (0 if text.endswith(' ') else 1)
+                    if idx == 1:                       # completing the verb
+                        for v in _SESSION_VERBS:
+                            if v.startswith(completing):
+                                yield Completion(v, start_position=-len(completing))
+                        return
+                    if idx == 2 and tokens[1] in _SESSION_NAME_VERBS:  # completing a name
+                        names = self._sessions_provider() if self._sessions_provider else []
+                        for nm in names:
+                            if nm.startswith(completing):
+                                yield Completion(nm, start_position=-len(completing))
+                        return
+
                 if not tokens or (len(tokens) == 1 and not text.endswith(' ')):
                     for cmd in self._commands:
                         if cmd.startswith(word):
@@ -1780,18 +1956,30 @@ class APEXAClient:
 
         _apexa_commands = sorted({
             'help', 'quit', 'exit', 'clear', 'model', 'timing',
-            'history', 'status', 'verbose',
+            'history', 'status', 'verbose', 'session',
         } | _SHELL_COMMANDS)
 
         pt_session = PromptSession(
             history=InMemoryHistory(),
-            completer=_APEXACompleter(_apexa_commands),
+            completer=_APEXACompleter(_apexa_commands,
+                                      sessions_provider=self.context.list_sessions),
             enable_history_search=True,
         )
-        prompt_text = FormattedText([
-            ("bold ansibrightcyan", "APEXA"),
-            ("ansibrightblack", "> "),
-        ])
+
+        def _prompt_text() -> FormattedText:
+            """Prompt shows the active session name (unless it's the scratch slot)."""
+            active = getattr(self.context, "active_session", "_autosave")
+            if active and active != "_autosave":
+                return FormattedText([
+                    ("bold ansibrightcyan", "APEXA"),
+                    ("ansibrightblack", "("),
+                    ("ansigreen", active),
+                    ("ansibrightblack", ")> "),
+                ])
+            return FormattedText([
+                ("bold ansibrightcyan", "APEXA"),
+                ("ansibrightblack", "> "),
+            ])
 
         async def _read_user_input() -> str:
             """Read one input, coalescing a pasted multi-line block into ONE query.
@@ -1809,7 +1997,7 @@ class APEXAClient:
             apply (Windows stdin, or prompt_toolkit having already consumed the
             bytes) it's a no-op, never worse than the per-line behavior.
             """
-            line = await pt_session.prompt_async(prompt_text)
+            line = await pt_session.prompt_async(_prompt_text())
             if "\n" in line:                       # bracketed paste already merged it
                 return line
             try:
@@ -1828,6 +2016,17 @@ class APEXAClient:
             return line
 
         history = []
+
+        # Install a SIGINT handler that aborts the *running* query (Ctrl-C) rather
+        # than exiting. prompt_toolkit owns SIGINT while prompt_async is active, so
+        # this fires only during a running command; an idle-prompt Ctrl-C stays
+        # prompt_toolkit's → KeyboardInterrupt → top-level handler → quit.
+        # add_signal_handler is unsupported on Windows ProactorEventLoop → the
+        # (KeyboardInterrupt) branch of the query try/except is the fallback there.
+        try:
+            asyncio.get_running_loop().add_signal_handler(signal.SIGINT, self._on_sigint)
+        except (NotImplementedError, RuntimeError, ValueError):
+            pass
 
         while True:
             try:
@@ -2087,10 +2286,15 @@ class APEXAClient:
 
                     elif action == 'list':
                         sessions = self.context.list_sessions()
+                        active = self.context.active_session
                         if sessions:
                             print("\nSaved Sessions:")
                             for session in sessions:
-                                print(f"  - {session}")
+                                if session == active:
+                                    print(f"  {C.GREEN}●{C.RESET} {C.CYAN}{session}{C.RESET} "
+                                          f"{C.DIM}(active){C.RESET}")
+                                else:
+                                    print(f"    {session}")
                         else:
                             print("No saved sessions found")
 
@@ -2098,9 +2302,17 @@ class APEXAClient:
                         print("\nCurrent Session:")
                         print(self.context.get_summary())
 
+                    elif action in ('current', 'status'):
+                        active = self.context.active_session
+                        where = "autosave (unsaved scratch)" if active == "_autosave" else active
+                        n_msg = len(self.orchestrator.export_history()) if self.orchestrator else 0
+                        print(f"\n  {C.GREEN}●{C.RESET} Current session: {C.CYAN}{where}{C.RESET} "
+                              f"{C.DIM}({n_msg} messages){C.RESET}")
+                        print(self.context.get_summary())
+
                     else:
                         print(f"Unknown session command: {action}")
-                        print("Available: new, save, load, switch, append, resume, list, summary")
+                        print("Available: new, save, load, switch, append, resume, list, summary, current")
 
                 elif user_input.lower().startswith('image '):
                     # Image analysis command
@@ -2435,7 +2647,19 @@ class APEXAClient:
                     # Append-only transcript: record the prompt before running
                     # so a crash mid-turn still leaves the question on disk.
                     self.context.append_message("user", user_input)
-                    response = await self.run_query(user_input)
+                    # Run the query as a cancellable task. Ctrl-C during it fires
+                    # _on_sigint (POSIX) → task.cancel() → CancelledError here; on
+                    # Windows (no signal handler) Ctrl-C raises KeyboardInterrupt at
+                    # this await. Either way we abort + kill the busy compute and
+                    # return to the prompt instead of exiting the CLI.
+                    self._active_task = asyncio.create_task(self.run_query(user_input))
+                    try:
+                        response = await self._active_task
+                    except (asyncio.CancelledError, KeyboardInterrupt):
+                        await self._abort_active_query()
+                        continue
+                    finally:
+                        self._active_task = None
                     print(f"\n{clean_markdown(response)}\n")
                     self.context.append_message("assistant", response)
                     self._autosave_session()
@@ -2452,6 +2676,13 @@ class APEXAClient:
                 print(f"  {C.RED}✗{C.RESET} {C.BOLD}Error:{C.RESET} {str(e)}")
 
     async def cleanup(self):
+        # Close each per-server stack (transport + ClientSession) first, then the
+        # shared stack. Suppress errors: a server whose tree we killed on abort is
+        # already gone, so its aclose() may raise.
+        for name, stack in list(self._server_stacks.items()):
+            with contextlib.suppress(Exception):
+                await stack.aclose()
+        self._server_stacks.clear()
         await self.exit_stack.aclose()
 
 async def main():
