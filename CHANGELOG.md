@@ -46,6 +46,34 @@ versioning. Until v1.0.0, breaking changes may land in minor versions.
   awaiting a decision; older clients that read only `.message` ignore them.
 - New deps: `langgraph`, `langgraph-checkpoint-sqlite` (+ `aiosqlite`, transitive).
 
+### Added — acquisition-driven triggering (plan schema + watcher)
+- **Acquisition watcher** (`apexa_acquisition_watcher.py`): turns a live scan
+  directory into analysis. Groups frames by sample **stem** (strips frame-index /
+  spin / segment suffixes, excludes darks), judges a set **complete** by an
+  explicit `--expected-count` or a `--quiet-seconds` idle period on the newest
+  frame, then writes a reviewable plan and fires the analysis **once per stem**.
+  Standalone (stdlib + PyYAML) so it runs on a beamline data mover without the
+  agent stack; lazy-imports the MCP server only when actually executing. This is
+  the piece that closes APEXA's "post-hoc only" gap (the reflectometry-inspired
+  data-acquisition friendliness point).
+- **Plan schema** (`apexa_plan.py`, `docs/PLAN_SCHEMA.md`): the watcher's
+  reviewable YAML artifact/data-model — inputs, geometry, dark handling, grid,
+  compute target, and `assumptions` (every inferred default + why), with a
+  `perform_execution` gate. Round-trips through YAML; `to_integrate_series_kwargs()`
+  projects it onto the existing tool.
+- **Coherent with the graph + idempotency, by construction:** the watcher
+  auto-fires only the integration family (`waxs`/`saxs`/`integration`), where
+  execution is a single `midas_integrate_series` call already covered by the
+  `@idempotent` guard (a stem fired twice replays rather than re-integrates, and
+  cache hits are reported). For FF/NF/PF-HEDM it writes the plan for the record
+  but **refuses to auto-execute** and hands off to the gated FF-HEDM graph
+  (`APEXA_WORKFLOW_MODE=graph`), which alone can answer the handbook decision
+  gates — so there is exactly one planning paradigm per technique class, not two.
+  Test: `tests/test_plan_and_watcher.py`.
+- *Considered and dropped:* a `write_analysis_plan` MCP tool. Once the FF-HEDM
+  graph landed it would have been a redundant second agent-facing planning
+  surface; the plan artifact stays owned by the watcher instead.
+
 ### Added — MIDAS Mar-2026 package release integration
 - Bumped the MIDAS pin to `midas-suite[ff,pdf,defect,dfxm,xaf,ultrafast,grain-odf,pf-odf,pink]>=0.4.0`
   (unified `midas-pipeline` 0.6.1, `midas-calibrate-v2` 0.5.2, and the full v2/aux stack).
