@@ -271,6 +271,41 @@ Typical APEXA session for FF-HEDM:
 
 ---
 
+## Graph mode — deterministic setup with human-in-the-loop gates
+
+Set `APEXA_WORKFLOW_MODE=graph` to run the **calibrate → in-plane tx → reconstruct**
+setup as a checkpointed LangGraph state machine (`apexa_ffhedm_graph.py`) instead of
+the open-ended agent loop. The graph makes the FF-HEDM handbook's decision points into
+explicit control flow, so the ordering can't drift and each step runs exactly once:
+
+- **which-calibrant** — if `cali/` holds more than one calibrant, it asks which to use
+  (or `all`) instead of guessing; a single calibrant auto-selects.
+- **propose-folders** — proposes separate output dirs (`APEXA_calib`, `APEXA_inplane_tx`,
+  `APEXA_ff_recon`) and waits for confirmation before any write.
+- **ω-sign** — auto-resolves `-1` for an aero stage, otherwise asks.
+- **verify-calibration** — pauses if status is not ok or residual is missing / > 1.0 px.
+- **mandatory ring overlay** — always confirms the calibrant rings sit on the data
+  before reconstruction is allowed to start.
+- **verify-grains** — writes the citable `APEXA_ffhedm_workflow.json` summary.
+
+Gates surface as ordinary assistant questions and resume on your next turn — no special
+UI, and the same in the CLI, web, and desktop apps. Combined with the **idempotency
+guard** on the heavy tools (a content hash in `<output_dir>/.apexa_done.json` replays a
+prior result when inputs and on-disk outputs are unchanged), this closes the
+"3× duplicate calibration" failure mode by construction. Bypass the guard for a forced
+re-run with `force=true` or `APEXA_IDEMPOTENCY=0`.
+
+**Durable across restart.** The graph checkpoints to `~/.apexa/ffhedm_graph.sqlite`
+(override `APEXA_FFHEDM_DB`; `APEXA_FFHEDM_DURABLE=0` for in-memory only). A run paused
+on a gate survives a full APEXA restart — start APEXA again and your next message
+resumes it mid-procedure. The checkpoint thread is the active session name, so
+`session switch` swaps between in-flight workflows.
+
+Design + rationale: `docs/LANGGRAPH_FF_HEDM_SPEC.md`. Default mode (unset) keeps the
+single-loop agent behavior described above.
+
+---
+
 ## MIDAS v11 key additions (vs v10)
 
 | Feature | Command |

@@ -865,9 +865,22 @@ async def websocket_endpoint(websocket: WebSocket):
                             user_message, on_tool_result=_on_tool_result
                         )
                         clean_response = _ansi_re.sub('', response)
+                        # FF-HEDM graph mode (APEXA_WORKFLOW_MODE=graph): if this turn
+                        # ended on a human-in-the-loop gate, flag it so the UI can mark
+                        # the message as awaiting a decision. Additive — older clients
+                        # that only read `.message` ignore it and still show the question.
+                        gate = None
+                        try:
+                            orch = getattr(mcp_client, "orchestrator", None)
+                            if orch is not None and hasattr(orch, "ffhedm_pending_gate"):
+                                gate = orch.ffhedm_pending_gate()
+                        except Exception:
+                            gate = None
                         await manager.send_personal_message({
                             "type": "chat_response",
-                            "message": clean_response
+                            "message": clean_response,
+                            "awaiting_input": bool(gate),
+                            "gate": gate,
                         }, websocket)
                     except Exception as e:
                         err = str(e)

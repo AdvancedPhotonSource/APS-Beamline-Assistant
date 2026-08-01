@@ -3121,6 +3121,12 @@ class OrchestratorAgent:
         # count/fan-out heuristics (which false-fire on capable models). Set
         # APEXA_AGENT_MODE=legacy to fall back to the keyword-routed specialists.
         self._mode: str = os.environ.get("APEXA_AGENT_MODE", "single").strip().lower()
+        # FF-HEDM workflow graph (APEXA_WORKFLOW_MODE=graph). Deterministic
+        # ordering + human-in-the-loop gates for calibrate→in-plane tx→recon.
+        # Coexists with the modes above; lazily built on first use so a missing
+        # langgraph never breaks startup. See docs/LANGGRAPH_FF_HEDM_SPEC.md.
+        self._workflow_mode: str = os.environ.get("APEXA_WORKFLOW_MODE", "").strip().lower()
+        self._ffhedm = None  # type: ignore  # FFHEDMWorkflow, lazy
 
     # Context-window management knobs (modern summarize-older + keep-recent).
     _KEEP_RECENT: int = 8       # messages kept verbatim in model context
@@ -3754,9 +3760,64 @@ class OrchestratorAgent:
             self.context.add_analysis(agent.name, result)
         return result
 
+    # ── FF-HEDM workflow graph (APEXA_WORKFLOW_MODE=graph) ───────────────────
+    _FFHEDM_RE = re.compile(r"\b(ff[\s\-]?hedm|far[\s\-]?field)\b", re.I)
+    _FFHEDM_RUN_HINTS = ("calibrat", "reconstruct", "run ", "pipeline",
+                         "workflow", "index", "process ")
+
+    def _ensure_ffhedm(self):
+        """Lazily build the FF-HEDM graph; None if langgraph is unavailable.
+
+        Uses ``build_default_workflow`` so the checkpointer is durable
+        (AsyncSqliteSaver under ~/.apexa/) — a workflow paused on a gate survives a
+        CLI restart and the next input resumes it (Phase 2, spec §9).
+        """
+        if self._ffhedm is None:
+            try:
+                from apexa_ffhedm_graph import build_default_workflow, LANGGRAPH_AVAILABLE
+                if not LANGGRAPH_AVAILABLE:
+                    return None
+                self._ffhedm = build_default_workflow(self._execute)
+            except Exception as e:
+                print(f"[workflow] FF-HEDM graph unavailable: {e}", file=sys.stderr)
+                self._ffhedm = None
+        return self._ffhedm
+
+    def _is_ff_hedm_workflow(self, query: str) -> bool:
+        """True when the user is asking to RUN the FF-HEDM setup (not just ask
+        about it) — an FF-HEDM/far-field mention plus a run/calibrate verb."""
+        q = (query or "").lower()
+        return bool(self._FFHEDM_RE.search(q)) and any(h in q for h in self._FFHEDM_RUN_HINTS)
+
+    def ffhedm_pending_gate(self) -> Optional[str]:
+        """Gate name the active session's FF-HEDM workflow is paused on, else None.
+
+        Sync + cheap (reads the persisted paused-map, not the checkpointer). Lets a
+        UI mark a turn as awaiting a human decision. None unless graph mode is on
+        and a run is paused for the active session.
+        """
+        if self._workflow_mode != "graph" or self._ffhedm is None:
+            return None
+        try:
+            session = getattr(self.context, "active_session", None) or "_ffhedm"
+            return self._ffhedm.pending_gate(session)
+        except Exception:
+            return None
+
     async def process(self, query: str, provider: ArgoProvider,
                       use_history: bool = True,
                       on_tool_result: OnToolResultFn = None) -> str:
+        # FF-HEDM workflow graph: deterministic ordering + human-in-the-loop gates.
+        # Routes when the flag is on AND (a run is already paused on a gate → any
+        # input resumes it, OR this query asks to start an FF-HEDM run). Everything
+        # else falls through to the modes below untouched.
+        if self._workflow_mode == "graph":
+            wf = self._ensure_ffhedm()
+            if wf is not None:
+                session = getattr(self.context, "active_session", None) or "_ffhedm"
+                if wf.is_active(session) or self._is_ff_hedm_workflow(query):
+                    return await wf.astep(query, provider, session)
+
         # Modern single-loop mode (flag) — persistent full-context reasoning.
         if self._mode == "single":
             return await self._process_single_loop(

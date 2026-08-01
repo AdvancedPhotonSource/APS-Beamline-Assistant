@@ -73,6 +73,12 @@ export interface WsIncoming {
   detail?: string          // human-readable description of what will happen
   danger?: boolean         // true → irreversible/physical action, show prominently
   safety?: string[]        // safety-check state lines to display before approval
+  // chat_response, FF-HEDM graph mode (APEXA_WORKFLOW_MODE=graph): set when the
+  // assistant turn is a paused workflow gate awaiting a human decision. The reply
+  // is just the next chat message (it resumes the checkpointed graph) — no separate
+  // response type. Optional/additive; a badge on the message is the intended use.
+  awaiting_input?: boolean
+  gate?: string | null     // gate name, e.g. "select_calibrant", "ring_overlay"
 }
 
 export interface ServerStatus {

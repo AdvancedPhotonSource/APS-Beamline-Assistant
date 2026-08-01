@@ -20,6 +20,7 @@ import asyncio
 import logging
 import traceback
 from mcp.server.fastmcp import FastMCP
+from _idempotency import idempotent  # skip-if-done guard for heavy tools (Phase 0)
 
 try:
     from dotenv import load_dotenv
@@ -629,6 +630,14 @@ def _announce_output(tool: str, out_path, **extras) -> None:
 # =============================================================================
 
 @mcp.tool()
+@idempotent(
+    tool="run_ff_hedm_full_workflow",
+    anchor=lambda kw: kw.get("result_folder") or "",
+    salient=lambda kw: {k: kw.get(k) for k in (
+        "param_file", "data_file", "detectors_json", "indexer_backend",
+        "refine_backend", "device", "start_layer", "end_layer",
+        "grains_seed_file", "skip_stages")},
+)
 async def run_ff_hedm_full_workflow(
     result_folder: str,
     param_file: str,
@@ -1232,6 +1241,13 @@ async def match_grains(
 # =============================================================================
 
 @mcp.tool()
+@idempotent(
+    tool="run_nf_hedm_reconstruction",
+    anchor=lambda kw: kw.get("result_folder") or "",
+    salient=lambda kw: {k: kw.get(k) for k in (
+        "param_file", "ff_seed_orientations", "do_image_processing",
+        "start_layer", "end_layer", "min_confidence", "device")},
+)
 async def run_nf_hedm_reconstruction(
     param_file: str,
     result_folder: str = "",
@@ -2945,6 +2961,17 @@ def _probe_dark_dataset(h5_path, explicit=None, data_location=None):
 
 
 @mcp.tool()
+@idempotent(
+    tool="midas_integrate_series",
+    anchor=lambda kw: kw.get("result_folder") or kw.get("image_dir") or "",
+    salient=lambda kw: {k: kw.get(k) for k in (
+        "parameter_file", "images", "image_dir", "pattern", "exclude_substring",
+        "dark_file", "dark_dir", "dark_pattern", "dark_kind", "dark_source",
+        "data_location", "dark_location", "max_files", "convert_files",
+        "short_names", "csv_output", "r_min", "r_max", "r_bin_size",
+        "eta_min", "eta_max", "eta_bin_size", "two_theta_min", "two_theta_max",
+        "q_min", "q_max", "n_channels")},
+)
 async def midas_integrate_series(
     parameter_file: str,
     images: list = None,
@@ -3984,6 +4011,16 @@ def _write_integration_outcome(out_dir, payload: dict,
 
 
 @mcp.tool()
+@idempotent(
+    tool="midas_auto_calibrate",
+    anchor=lambda kw: (kw.get("output_dir")
+                       or os.path.dirname(os.path.expanduser(kw.get("image_file") or ""))),
+    salient=lambda kw: {k: kw.get(k) for k in (
+        "image_file", "parameters_file", "dark_file", "calibration_engine",
+        "energy_kev", "wavelength_angstrom", "seed_from_params", "threshold",
+        "first_ring_nr", "lsd_guess", "bc_x_guess", "bc_y_guess",
+        "image_transform", "data_loc")},
+)
 async def midas_auto_calibrate(
     image_file: str,
     parameters_file: str = "",

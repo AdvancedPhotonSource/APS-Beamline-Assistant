@@ -35,6 +35,12 @@ dependencies = [
     # CLI
     "prompt-toolkit>=3.0.0",
     "psutil>=5.9.0",  # kill a server's process tree on Ctrl-C abort (cross-platform)
+    # FF-HEDM workflow graph (APEXA_WORKFLOW_MODE=graph): deterministic ordering +
+    # human-in-the-loop gates + checkpoint/resume. Pure-Python, no LangChain model
+    # packages needed — graph nodes call ArgoProvider + execute_tool_call directly.
+    "langgraph>=0.2.0",
+    "langgraph-checkpoint-sqlite>=1.0.0",
+    "aiosqlite>=0.20.0",  # durable FF-HEDM graph checkpoint (AsyncSqliteSaver, Phase 2)
     # Knowledge base / RAG
     "chromadb>=0.4.0",
     "sentence-transformers>=2.2.0",

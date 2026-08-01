@@ -7,6 +7,45 @@ versioning. Until v1.0.0, breaking changes may land in minor versions.
 
 ## [Unreleased]
 
+### Added — FF-HEDM workflow graph + idempotency guard
+- **Idempotency guard** (`_idempotency.py`) on the four heavy MIDAS tools
+  (`midas_auto_calibrate`, `run_ff_hedm_full_workflow`,
+  `run_nf_hedm_reconstruction`, `midas_integrate_series`): a content hash of
+  (tool, resolved input paths, salient params) is recorded in
+  `<output_dir>/.apexa_done.json` with the prior result and the concrete output
+  files that run produced. An identical later call replays the prior result
+  (`cached: true`) IFF those outputs still exist on disk — fixing the
+  "3× duplicate calibration" failure mode by construction. Bypass with
+  `force=True`, a non-empty `resume_from`, or `APEXA_IDEMPOTENCY=0`.
+- **FF-HEDM workflow graph** (`apexa_ffhedm_graph.py`, `APEXA_WORKFLOW_MODE=graph`):
+  a checkpointed LangGraph state machine that runs calibrate → in-plane tx →
+  reconstruct as deterministic control flow with human-in-the-loop gates at the
+  handbook's decision points (which-calibrant, propose-folders, ω-sign, verify,
+  mandatory ring overlay, verify-grains). Gates surface as normal assistant
+  questions and resume on the next turn — no UI changes. Coexists with the
+  single-loop/legacy modes; nodes call the existing `execute_tool_call`
+  dispatch, and no LangChain model packages are pulled (nodes use `ArgoProvider`
+  directly). Design: `docs/LANGGRAPH_FF_HEDM_SPEC.md`; eval:
+  `tests/test_ffhedm_graph.py` (replays the failing transcript against a fake
+  tool executor and asserts one-calibrate-per-input + gate ordering).
+- **Durable checkpointing + session threading (Phase 2).** The graph now
+  checkpoints to `AsyncSqliteSaver` at `~/.apexa/ffhedm_graph.sqlite` (override with
+  `APEXA_FFHEDM_DB`; disable → in-memory with `APEXA_FFHEDM_DURABLE=0`), so a
+  workflow paused on a gate **survives a full CLI restart** — the next input resumes
+  it mid-procedure. `thread_id == active_session`, so `session switch` swaps
+  workflows too. The sync `is_active`/`pending_gate` accessors are backed by a small
+  persisted sidecar (`ffhedm_graph.state.json`) so paused-state is correct across
+  restart without querying the event-loop-bound sqlite connection. Test:
+  `test_durable_resume_across_restart` builds a second workflow instance against the
+  same on-disk store and resumes it to completion.
+- **Web/desktop HITL over WebSocket (Phase 2).** Gates already surface as ordinary
+  `chat_response` questions (the reply is just the next chat message, which resumes
+  the checkpointed graph — works in the shipped React bundle with no rebuild). The
+  `chat_response` payload now also carries additive `awaiting_input` + `gate` fields
+  (via `OrchestratorAgent.ffhedm_pending_gate()`) so the UI can badge a turn as
+  awaiting a decision; older clients that read only `.message` ignore them.
+- New deps: `langgraph`, `langgraph-checkpoint-sqlite` (+ `aiosqlite`, transitive).
+
 ### Added — MIDAS Mar-2026 package release integration
 - Bumped the MIDAS pin to `midas-suite[ff,pdf,defect,dfxm,xaf,ultrafast,grain-odf,pf-odf,pink]>=0.4.0`
   (unified `midas-pipeline` 0.6.1, `midas-calibrate-v2` 0.5.2, and the full v2/aux stack).
