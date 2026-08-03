@@ -10,10 +10,13 @@ echo "  User Setup"
 echo ""
 
 # Check if .env already exists
+# NOTE: use full-line reads (no `-n 1`) for every y/N prompt. `read -n 1` returns
+# after one character WITHOUT consuming the Enter keystroke, and that leftover
+# newline is then swallowed by the next full-line read — which silently blanked
+# the MIDAS path prompt and made a typed "~/..." path leak into later fields.
 if [ -f ".env" ]; then
     echo "  .env file already exists."
-    read -p "  Overwrite? (y/N): " -n 1 -r
-    echo
+    read -p "  Overwrite? (y/N): " -r REPLY
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then
         echo "  Setup cancelled."
         exit 0
@@ -61,23 +64,25 @@ case $model_choice in
         ;;
 esac
 
-# Step 3: MIDAS path (optional)
+# Step 3: MIDAS path
+# Single full-line prompt with a default (Enter to accept). A leading ~ is
+# expanded here so a literal tilde never reaches .env.
 echo ""
-echo "  3. MIDAS Installation (auto-detected from ~/Git/MIDAS, ~/opt/MIDAS, etc.)"
-read -p "     Custom path? (y/N): " -n 1 -r
-echo
+echo "  3. MIDAS Installation"
+DEFAULT_MIDAS="$HOME/opt/MIDAS_canonical"
+echo "     Default: ~/opt/MIDAS_canonical"
+echo "     (Enter to accept the default, type another path, or '-' to auto-detect)"
+read -p "     Path: " -r MIDAS_INPUT
+MIDAS_INPUT="${MIDAS_INPUT:-$DEFAULT_MIDAS}"
 
-MIDAS_LINE="# MIDAS_PATH auto-detected"
-if [[ $REPLY =~ ^[Yy]$ ]]; then
-    read -p "     Path: " MIDAS_PATH
-    MIDAS_PATH="${MIDAS_PATH/#\~/$HOME}"
-    if [ -d "$MIDAS_PATH" ]; then
-        MIDAS_LINE="MIDAS_PATH=$MIDAS_PATH"
-    else
-        echo "     Warning: $MIDAS_PATH not found"
-        read -p "     Use anyway? (y/N): " -n 1 -r
-        echo
-        [[ $REPLY =~ ^[Yy]$ ]] && MIDAS_LINE="MIDAS_PATH=$MIDAS_PATH"
+if [ "$MIDAS_INPUT" = "-" ] || [ "$MIDAS_INPUT" = "auto" ]; then
+    MIDAS_LINE="# MIDAS_PATH auto-detected"
+    MIDAS_PATH=""
+else
+    MIDAS_PATH="${MIDAS_INPUT/#\~/$HOME}"   # expand a leading ~
+    MIDAS_LINE="MIDAS_PATH=$MIDAS_PATH"
+    if [ ! -d "$MIDAS_PATH" ]; then
+        echo "     Note: $MIDAS_PATH does not exist yet — saved anyway (create it or edit .env later)."
     fi
 fi
 
