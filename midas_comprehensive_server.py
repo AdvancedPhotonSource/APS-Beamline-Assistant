@@ -2847,20 +2847,51 @@ async def midas_integrate_2d_to_1d(
 
         # Verify before reporting: exit-0 with no lineout/zarr means the run did
         # NOT actually produce an integrated profile — report that, don't claim
-        # success (and never fabricate an output filename).
+        # success (and never fabricate an output filename). A lineout FILE that is
+        # header-only (0 data rows) is an equally false success: the integrator can
+        # exit 0 and write just the "# 2theta_deg  intensity" header when no pixel
+        # falls in any 2θ bin — seen on real data when the calibration params file
+        # has NrPixelsY/NrPixelsZ transposed or is missing the detector panel/mask
+        # description, so the R-Eta map is empty (Map.bin ~64 bytes). Count rows.
+        def _lineout_data_rows(p) -> int:
+            try:
+                n = 0
+                with open(p) as _fh:
+                    for _ln in _fh:
+                        s = _ln.strip()
+                        if s and not s.startswith("#"):
+                            n += 1
+                return n
+            except Exception:
+                return -1  # unreadable → unknown, don't over-claim
+        lineout_rows = _lineout_data_rows(lineout[0]) if lineout else 0
         produced = bool(lineout or zarr_out)
+        empty_lineout = bool(lineout) and lineout_rows == 0
+        if not produced:
+            status = "incomplete"
+            message = ("integrator.py exited 0 but produced no *_lineout.xy / *.zarr.zip "
+                       "in result_folder — treat as not integrated")
+        elif empty_lineout:
+            status = "incomplete"
+            message = (f"integrator.py exited 0 and wrote {lineout[0].name}, but it has no "
+                       "data rows (header only) — no pixels fell in any 2θ bin, so the "
+                       "R-Eta map is empty. Verify the calibration params file: a common "
+                       "cause is NrPixelsY/NrPixelsZ transposed or a missing detector "
+                       "panel/mask description (DataType/NPanelsY/PanelSize/MaskFile).")
+        else:
+            status = "success"
+            message = f"Integration complete. Lineout: {lineout[0].name}"
         payload = {
             "tool": "midas_integrate_2d_to_1d",
-            "status": "success" if produced else "incomplete",
+            "status": status,
             "input_image": str(image_path),
             "calibration_file": str(param_path),
             "result_folder": str(out_dir),
             "lineout_xy": str(lineout[0]) if lineout else None,
+            "lineout_data_rows": lineout_rows if lineout else 0,
             "zarr_zip": str(zarr_out[0]) if zarr_out else None,
             "csv_files": [str(p) for p in csv_files] if csv_files else None,
-            "message": (f"Integration complete. Lineout: {lineout[0].name}" if lineout
-                        else "integrator.py exited 0 but produced no *_lineout.xy / *.zarr.zip "
-                             "in result_folder — treat as not integrated"),
+            "message": message,
         }
         _write_integration_outcome(out_dir, payload)
         return format_result(payload)
@@ -6337,14 +6368,24 @@ async def plot_lineout_series_contour(
         _announce_output("plot_lineout_series_contour", png_path,
                          files=len(rows), interactive=interactive)
 
-        # 4) static PNG (always)
+        # 4) static PNG (always). A contour needs ≥2 frames (Y = frame index); a
+        #    single pattern renders as a blank mesh, so fall back to a 1D line plot
+        #    (2θ vs intensity) — same as MIDAS's own plot_lineout_results.py viewer.
+        single = len(rows) == 1
         fig, ax = _plt.subplots(figsize=(9, 6))
-        mesh = ax.pcolormesh(x_ref, _np.arange(len(rows)), Z, shading="auto", cmap="viridis")
-        ax.set_xlabel(x_label)
-        ax.set_ylabel("frame index (scan order)")
-        ax.set_title(title or f"Operando contour — {len(rows)} patterns "
-                              f"({frames[0]}–{frames[-1]})")
-        fig.colorbar(mesh, ax=ax, label="log(1+I)" if log_scale else "intensity")
+        if single:
+            ax.plot(x_ref, Z[0], linewidth=0.9, color="#1f77b4")
+            ax.set_xlabel(x_label)
+            ax.set_ylabel("log(1+I)" if log_scale else "intensity")
+            ax.set_title(title or f"Lineout — {files[0].name}")
+            ax.margins(x=0.01)
+        else:
+            mesh = ax.pcolormesh(x_ref, _np.arange(len(rows)), Z, shading="auto", cmap="viridis")
+            ax.set_xlabel(x_label)
+            ax.set_ylabel("frame index (scan order)")
+            ax.set_title(title or f"Operando contour — {len(rows)} patterns "
+                                  f"({frames[0]}–{frames[-1]})")
+            fig.colorbar(mesh, ax=ax, label="log(1+I)" if log_scale else "intensity")
         fig.tight_layout(); fig.savefig(png_path, dpi=150); _plt.close(fig)
 
         outputs = {"png": str(png_path)}
@@ -6353,14 +6394,24 @@ async def plot_lineout_series_contour(
             try:
                 import plotly.graph_objects as _go
                 html_path = png_path.with_suffix(".html")
-                figp = _go.Figure(data=_go.Heatmap(
-                    z=Z.tolist(), x=x_ref.tolist(), y=frames,
-                    colorscale="Viridis",
-                    colorbar=dict(title="log(1+I)" if log_scale else "intensity")))
-                figp.update_layout(
-                    title=title or f"Operando contour — {len(rows)} patterns",
-                    xaxis_title=x_label, yaxis_title="frame / scan number",
-                    template="plotly_dark")
+                if single:
+                    figp = _go.Figure(data=_go.Scatter(
+                        x=x_ref.tolist(), y=Z[0].tolist(), mode="lines",
+                        line=dict(width=1.3)))
+                    figp.update_layout(
+                        title=title or f"Lineout — {files[0].name}",
+                        xaxis_title=x_label,
+                        yaxis_title="log(1+I)" if log_scale else "intensity",
+                        template="plotly_dark")
+                else:
+                    figp = _go.Figure(data=_go.Heatmap(
+                        z=Z.tolist(), x=x_ref.tolist(), y=frames,
+                        colorscale="Viridis",
+                        colorbar=dict(title="log(1+I)" if log_scale else "intensity")))
+                    figp.update_layout(
+                        title=title or f"Operando contour — {len(rows)} patterns",
+                        xaxis_title=x_label, yaxis_title="frame / scan number",
+                        template="plotly_dark")
                 figp.write_html(str(html_path), include_plotlyjs="cdn")
                 outputs["html"] = str(html_path)
             except Exception as _e:
@@ -6384,14 +6435,18 @@ async def plot_lineout_series_contour(
 
         return format_result({
             "tool": "plot_lineout_series_contour", "status": "success",
+            "plot_kind": "line" if single else "contour",
             "n_patterns": len(rows), "n_x": int(x_ref.size),
             "frame_range": [frames[0], frames[-1]] if frames else None,
             "x_range": [float(x_ref.min()), float(x_ref.max())],
             "outputs": outputs, "opened": opened,
             "skipped_empty": skipped or None,
-            "note": "Open the .html for an interactive contour (zoom/pan/hover); the "
-                    ".png is a static copy. MIDAS has no native viewer for a series "
-                    "of .xye patterns.",
+            "note": ("Single pattern → a 1D line plot (2θ vs intensity); a contour "
+                     "needs ≥2 frames. Open the .html for interactive zoom/pan/hover."
+                     if single else
+                     "Open the .html for an interactive contour (zoom/pan/hover); the "
+                     ".png is a static copy. MIDAS has no native viewer for a series "
+                     "of .xye patterns."),
         })
     except Exception as e:
         return format_result({"tool": "plot_lineout_series_contour", "status": "error", "error": str(e)})

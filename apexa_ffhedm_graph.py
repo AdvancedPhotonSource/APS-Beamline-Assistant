@@ -513,10 +513,26 @@ class FFHEDMWorkflow:
         # (handbook gate 5; saturation guard, memory project_calibrant_saturation).
         bad = (cal.get("status") != "ok") or (resid is None) or (isinstance(resid, (int, float)) and resid > 1.0)
         if bad:
+            # Surface the geometry the fit DID produce — on the pip-console engine
+            # the convergence metric is often absent even when Lsd/BC are sound, so
+            # a human choosing accept/redo needs the actual refined numbers, not just
+            # "residual=None".
+            lsd = state.get("lsd_um")
+            bc = state.get("beam_center")
+            energy = state.get("energy_kev")
+            geo_bits = []
+            if lsd is not None:
+                geo_bits.append(f"Lsd={lsd} µm")
+            if bc:
+                geo_bits.append(f"BC={bc}")
+            if energy:
+                geo_bits.append(f"E={energy} keV")
+            geo_line = ("  Refined geometry: " + ", ".join(geo_bits) + ".\n") if geo_bits else ""
             ans = interrupt({
                 "gate": "verify_calibration",
                 "prompt": (f"Calibration result looks uncertain (status={cal.get('status')}, "
-                           f"residual={resid}). Check the lineout S/N for saturation. "
+                           f"residual={resid}).\n{geo_line}"
+                           "Check the lineout S/N for saturation. "
                            "Reply 'accept' to proceed, or 'redo' to re-resolve geometry."),
             })
             decision = "redo" if "redo" in (ans or "").lower() else "ok"
@@ -615,23 +631,58 @@ class FFHEDMWorkflow:
         return ans
 
     def _extract_geometry(self, res: Dict[str, Any]) -> Dict[str, Any]:
-        """Pull geometry out of a calibration result across plausible key names."""
+        """Pull geometry out of a calibration result across plausible key names.
+
+        Handles two payload shapes seen in the wild:
+          * flat top-level keys (Lsd/BC/energy_kev/residual_px) — legacy / test shape;
+          * the pip-console ``midas-autocalibrate`` engine, which nests the refined
+            geometry under ``calibrated_parameters`` (separate ``bc_x``/``bc_y``,
+            ``lsd`` in µm, ``wavelength`` in Å) and quality under
+            ``convergence_metrics`` (``final_mean_strain``, ``converged``).
+        Without the nested lookups a real calibration yields an empty geometry
+        summary and residual=None, which makes the verify gate cry wolf every run.
+        """
         g: Dict[str, Any] = {}
+        cp = res.get("calibrated_parameters")
+        cp = cp if isinstance(cp, dict) else {}
+        cm = res.get("convergence_metrics")
+        cm = cm if isinstance(cm, dict) else {}
+        src = {**res, **cp}   # nested refined values take precedence over any flat echo
+
         for k in ("lsd", "Lsd", "lsd_um", "LsdMicrons"):
-            if res.get(k) is not None:
-                g["lsd"] = res[k]; break
+            if src.get(k) is not None:
+                g["lsd"] = src[k]; break
+        # beam center: a [x, y] list, or the engine's separate bc_x / bc_y floats
         for k in ("beam_center", "BC", "bc"):
-            if isinstance(res.get(k), (list, tuple)) and len(res[k]) >= 2:
-                g["bc"] = list(res[k][:2]); break
+            if isinstance(src.get(k), (list, tuple)) and len(src[k]) >= 2:
+                g["bc"] = list(src[k][:2]); break
+        else:
+            if src.get("bc_x") is not None and src.get("bc_y") is not None:
+                g["bc"] = [src["bc_x"], src["bc_y"]]
+        # energy: direct, else derive from wavelength (Å): E[keV] = hc/λ
         for k in ("energy_kev", "energy", "Energy"):
-            if res.get(k):
-                g["energy"] = res[k]; break
+            if src.get(k):
+                g["energy"] = src[k]; break
+        else:
+            wl = src.get("wavelength") or src.get("wavelength_angstrom")
+            try:
+                if wl:
+                    g["energy"] = round(12.398419843320026 / float(wl), 4)
+            except (TypeError, ValueError):
+                pass
+        # residual / fit quality: flat keys, else the nested convergence metric
         for k in ("residual_px", "residual", "mean_residual", "rms_residual"):
             if res.get(k) is not None:
                 g["residual"] = res[k]; break
+        else:
+            for k in ("final_mean_strain", "mean_strain", "final_residual", "residual"):
+                if cm.get(k) is not None:
+                    g["residual"] = cm[k]; break
+        if isinstance(cm.get("converged"), bool):
+            g["converged"] = cm["converged"]
         for k in ("tx", "tilt_x", "in_plane_tilt"):
-            if res.get(k) is not None:
-                g["tx"] = res[k]; break
+            if src.get(k) is not None:
+                g["tx"] = src[k]; break
         return g
 
     def _summarize(self, state: FFHEDMState) -> str:
