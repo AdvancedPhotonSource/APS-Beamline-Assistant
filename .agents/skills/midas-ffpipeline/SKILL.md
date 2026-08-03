@@ -4,16 +4,21 @@ description: Run the MIDAS v11 differentiable PyTorch FF-HEDM pipeline (drop-in 
 compatibility: Requires MIDAS v11 + the midas_ff_pipeline package (packages/midas_ff_pipeline). PyTorch with CUDA recommended; CPU/MPS supported.
 metadata:
   author: pawan-tripathi
-  version: "1.1"
+  version: "1.2"
   midas-version: "11.0"
   package: "midas_ff_pipeline"
+  status: "deprecated (0.4.0; removed in 1.0.0) — use midas-ff-hedm"
 ---
 
-> ## ⚠ Consolidation in progress: `midas-ff-pipeline` → `midas-pipeline`
-> MIDAS v11 is retiring the standalone `midas-ff-pipeline` package; all FF-HEDM
-> orchestration is moving to **`midas-pipeline run --scan-mode ff`** (see
-> `packages/MIDAS_FF_PIPELINE_DEPRECATION_PLAN.md`). `midas-pipeline` already
-> covers ~90% of the surface, with multi-detector/batch being ported.
+> ## ⚠ DEPRECATED as of 0.4.0 — removed in 1.0.0: `midas-ff-pipeline` → `midas-pipeline`
+> The standalone `midas-ff-pipeline` CLI now prints a `DeprecationWarning` on every
+> invocation: *"deprecated as of 0.4.0 and will be removed in 1.0.0. Use
+> `midas-pipeline run --scan-mode ff` (CLI) or `midas_pipeline.Pipeline(...)` (API)
+> instead — the FF path is the same code under the hood."* All FF-HEDM orchestration
+> has moved to **`midas-pipeline run --scan-mode ff`** (see
+> `packages/MIDAS_FF_PIPELINE_DEPRECATION_PLAN.md`). Because it is literally the same
+> code, its stage names, backends, and outputs are identical to [[midas-ff-hedm]] —
+> refer there for the canonical stage list and performance numbers.
 >
 > **Default to [[midas-ff-hedm]] (`run_ff_hedm_full_workflow`)** — it wraps
 > `midas-pipeline` and is the consolidated path. Use **this** skill's
@@ -69,8 +74,13 @@ run_ff_pipeline(
 )
 ```
 
-Stages (in order, used by `--from`, `--only`, `--skip`):
-`prepare → convert → detector_map → integrate → spots → indexing → seeds → refine → consolidate`
+Stages (in order, used by `--from`, `--only`, `--skip`) — these are the **real**
+`midas-pipeline` stage names (the deprecated CLI runs the same code, so it accepts
+the same names, not the older `prepare/convert/...` labels):
+`zip_convert → hkl → peakfit → transforms → cross_det_merge → global_powder → binning → indexing → refinement → process_grains → consolidation`
+(full valid enum incl. multi-scan/V-map stages: `merge_overlaps, calc_radius,
+merge_scans, seeding, find_grains, voxel_cleanup, sinogen, reconstruct, fuse, potts,
+em_refine, grain_geometry, calc_radius_v, refine_vmap`). See [[midas-ff-hedm]].
 
 Run a single stage:
 ```python

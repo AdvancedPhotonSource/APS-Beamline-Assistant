@@ -4,10 +4,11 @@ description: Run the MIDAS v11 FF-HEDM grain reconstruction pipeline via APEXA. 
 compatibility: Requires MIDAS v11 + midas-suite ≥0.4.0 (midas-pipeline ≥0.6.1, midas-nf-pipeline ≥0.1.1). Install via pip install midas-suite.
 metadata:
   author: pawan-tripathi
-  version: "1.1"
+  version: "1.2"
   midas-version: "11.0"
   package: "midas-pipeline"
   tool: "run_ff_hedm_full_workflow"
+  verified-against: "midas-pipeline 0.6.1 / midas-process-grains 0.6.0 (end-to-end smoke run)"
 ---
 
 ## When to use
@@ -61,20 +62,26 @@ APEXA will fire the **pre-action reasoning gate** — write SITUATION / GAP / PL
 
 ## What midas-pipeline does internally
 
-FF-HEDM stages (in order):
+FF-HEDM stages that actually **execute** for a single-scan run (verified via
+`midas-pipeline status --json` on a real smoke run):
 
 ```
-zip_convert → hkl → peakfit → merge_overlaps → calc_radius → transforms →
-cross_det_merge → global_powder → merge_scans → seeding → binning →
-indexing → refinement → find_grains → process_grains → consolidation
+zip_convert → hkl → peakfit → transforms → cross_det_merge →
+global_powder → binning → indexing → refinement → process_grains
 ```
+
+Conditionally **skipped** in a single-scan FF config (they are valid stage names —
+see the checkpoint enum below — but do not run here): `merge_overlaps`,
+`calc_radius` (superseded by `calc_radius_v` on the V-map path), `consolidation`
+(only with `generate_h5=True`), and the V-map/multi-scan stages `merge_scans`,
+`seeding`, `find_grains`, `grain_geometry`, `calc_radius_v`, `refine_vmap`.
 
 Key stages:
 - **peakfit** — detect diffraction spots from zarr frames
 - **indexing** — match spots to HKL predictions for each candidate grain orientation
 - **refinement** — fit grain position + orientation to matched spots
-- **process_grains** — consolidate into Grains.csv (c-omp backend only; see bug note)
-- **consolidation** — write consolidated HDF5
+- **process_grains** — consolidate into Grains.csv (c-omp refiner only; see bug note)
+- **consolidation** — write consolidated HDF5 (only when `generate_h5=True`)
 
 Resume from any stage with `--resume auto` or `--resume from --from <stage>`.
 
@@ -149,7 +156,17 @@ print(f"{n_grains} grains solved, best nMatches={best_match}")
 | `indexer=c-omp, refiner=c-omp` | ✅ Yes | Fast CPU | Requires compiled `midas_indexer` + `midas_fitgrain` binaries |
 | `indexer=python, refiner=c-omp` | ❌ No | — | Mixed — c-omp refiner cannot read python indexer output format |
 
-**Known bug (first seen midas-process-grains 0.4.6; workaround still gated as of 0.6.0):** python refiner writes `OrientPosFit.bin` to the layer root, but midas-process-grains expects it in `Results/` subdirectory → process_grains + consolidation are auto-skipped when python refiner is used. APEXA reads `IndexBest.bin` directly for grain count. The auto-skip workaround remains active on the 0.6.0 pin pending a beamline refine soak that confirms 0.6.0 fixes the `OrientPosFit.bin` layout — do not remove it until then (deferred to Hemant).
+**Known bug (first seen midas-process-grains 0.4.6; CONFIRMED still present on 0.6.0):**
+the **python refiner does not write `FitBest.bin`** (the per-spot fit output that
+`process_grains` spot-aware mode needs). Without it, `process_grains` falls back to
+its legacy path and exits non-zero (`CalledProcessError`, exit 1) — no `Grains.csv`.
+Verified with a raw `midas-pipeline run --refine-backend python` (no auto-skip):
+`process_grains(FF): FitBest.bin absent (c-omp refiner) → using legacy mode` →
+failure. Therefore APEXA **auto-skips `process_grains` + `consolidation` whenever
+`refine_backend="python"`** and reads `IndexBest.bin` directly for the grain count.
+Do not remove the auto-skip on the 0.6.0 pin — the bug is still live (deferred to
+Hemant). The earlier `OrientPosFit.bin`-in-`Results/` theory was superseded by this
+0.6.0 finding: the real blocker is the missing `FitBest.bin`.
 
 To get `Grains.csv`, set both `indexer_backend="c-omp"` and `refine_backend="c-omp"`. This requires compiled MIDAS binaries — check with `validate_midas_installation`.
 
@@ -167,10 +184,13 @@ midas-pipeline simulate \
   --seed 42
 ```
 
-Outputs:
-- `sim/<stem>.analysis.MIDAS.zip` — synthetic zarr archive
+Outputs (all five, verified on disk):
+- `sim/midas_ff_pipeline_synth_det1.analysis.MIDAS.zip` — synthetic zarr archive
+  (single-detector stem is `midas_ff_pipeline_synth_det1`)
 - `sim/GrainsSim.csv` — ground-truth grain orientations + positions (for comparison)
+- `sim/Parameters.txt` — the parameter file to feed straight back into reconstruction
 - `sim/detectors.json` — detector layout
+- `sim/setup_truth.json` — full ground-truth setup (geometry + grain seeds) for provenance
 
 Then reconstruct:
 ```
@@ -181,11 +201,19 @@ run FF-HEDM reconstruction,
   n_cpus=4
 ```
 
-Expected performance (50 Au grains, python backend, 4 CPUs):
-- ~8–12 minutes runtime
-- ~230–240 seeds solved out of ~275 (~84–87%)
-- Best nMatches ~110–120 rings
-- ~45–50 unique grains recovered out of 50 ground truth
+Expected performance (50-grain synthetic, single small detector, verified on a
+laptop-class CPU, `n_cpus=4`):
+
+| Backend pair | Wall time | Result | Grain count |
+|---|---|---|---|
+| `indexer=python, refiner=python` | ~90 s (9 stages) | `IndexBest.bin` | **233 / 275 seeds solved (85%)**, best nMatches **116** |
+| `indexer=c-omp, refiner=c-omp` | ~60 s (10 stages) | `Grains.csv` | **41 grains** recovered / 50 ground truth (82%) |
+
+These are the actual numbers from a real smoke run on this machine — not estimates.
+Runtime scales with detector size, frame count, and grain density; a real beamline
+scan (large detector, thousands of frames) takes minutes-to-hours, not seconds.
+The python path reports *seeds solved* (grain count needs `IndexBest.bin` col 14);
+the c-omp path writes an explicit `%NumGrains` header in `Grains.csv`.
 
 ---
 
@@ -253,7 +281,7 @@ Do NOT skip this. The gate is enforced by APEXA's Analysis agent (`use_planning=
 |---|---|---|
 | `KeyError: RawFolder` during validation | validate_parameter_file called with zarr input | Skip validate_parameter_file when data_file is a zarr; midas-pipeline uses --skip-validation |
 | `Cannot access local variable 're'` on import | Stale .pyc cache from older midas_comprehensive_server.py | `find . -name "*.pyc" -delete && pkill -f midas_comprehensive_server && restart` |
-| `process_grains` fails silently | midas-process-grains `OrientPosFit.bin` layout bug (0.4.6; workaround still gated on 0.6.0) | Expected — read IndexBest.bin instead; or use c-omp backend pair |
+| `process_grains` fails (`CalledProcessError` exit 1) with python refiner | python refiner writes no `FitBest.bin` → legacy fallback fails (still present 0.6.0) | Expected — APEXA auto-skips it; read IndexBest.bin, or use the c-omp backend pair for Grains.csv |
 | Model hallucinates `~/opt/MIDAS` path | Model uses training-data path not actual MIDAS_PATH | Anti-hallucination guard in run_ff_hedm_full_workflow blocks this; actual path from MIDAS_PATH env var |
 | `Grains.csv not found` after run | python refiner used | Normal — use IndexBest.bin for grain count |
 
