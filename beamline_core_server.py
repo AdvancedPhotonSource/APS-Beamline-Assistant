@@ -978,7 +978,11 @@ async def check_environment() -> str:
         }
 
         # Check for MIDAS installation (same search as midas server)
+        # expanduser() so a literal "~" in MIDAS_PATH (e.g. MIDAS_PATH=~/opt/MIDAS_canonical
+        # in .env) resolves — Path("~/...").exists() is always False without it.
         midas_path = os.environ.get("MIDAS_PATH")
+        if midas_path:
+            midas_path = str(Path(midas_path).expanduser())
         if midas_path and Path(midas_path).exists():
             info["midas"] = {
                 "installed": True,
