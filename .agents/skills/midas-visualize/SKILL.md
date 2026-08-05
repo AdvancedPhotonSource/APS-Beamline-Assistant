@@ -278,6 +278,24 @@ run_midas_viewer(viewer="plotFFSpots3dGrains", data_file="/path/to/result_dir")
 > Requires `plotly` in `midas_env` (present by default). For PF V-map voxel
 > orientation/strain maps, render `v_map.h5` directly or use `pfIntensityViewer`.
 
+## 6b′. FF reconstruction report (HTML) — `generate_ff_reconstruction_report`
+
+A dedicated **whole-run report** (FF Handbook §9), separate from the 3D viewers.
+Wraps `utils/midas_ff_report.py`: reads a `LayerNr_<N>/Grains.csv` (+ optional
+`processgrains_diagnostics.h5`) and emits ONE self-contained `report.html` with all
+figures base64-embedded — grain/completeness stats, orientation & position maps,
+per-grain strain, and (with the diagnostics H5) spot-residual plates + auto-findings.
+
+```
+generate_ff_reconstruction_report(run_dir="/path/to/result/LayerNr_1")
+# optional: material="Au", c11=..., c12=... (stress), beam_height=... (µm)
+```
+
+Needs `Grains.csv` — produce it with `run_ff_hedm_full_workflow(refine_backend="c-omp",
+process_grains=True)`. Without `processgrains_diagnostics.h5` the report still renders
+(grain/orientation/strain panels), just without the residual plates. Use this for a
+publishable summary; use `plotGrains3d`/`plotFFSpots3dGrains` for interactive inspection.
+
 ## 6c. PF-HEDM sinogram / intensity — `pfIntensityViewer.py` (Dash)
 
 ```

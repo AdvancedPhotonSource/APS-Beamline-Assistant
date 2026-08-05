@@ -4,9 +4,10 @@ description: Run full HEDM (High Energy Diffraction Microscopy) analysis pipelin
 compatibility: Requires MIDAS v11 + midas-suite ≥0.4.0 (midas-pipeline ≥0.6.1, midas-nf-pipeline ≥0.1.1). Install via pip install midas-suite. Calibrated detector parameters required.
 metadata:
   author: pawan-tripathi
-  version: "2.0"
+  version: "2.1"
   midas-version: "11.0"
   package: "midas-pipeline"
+  verified-against: "midas-pipeline 0.6.1 / midas-nf-pipeline 0.1.1"
 ---
 
 ## HEDM Analysis Workflows (MIDAS v11)
@@ -52,6 +53,7 @@ run_ff_hedm_full_workflow(
     refine_backend  = "python",   # "c-omp" → writes Grains.csv
     detectors       = None,       # detectors.json for multi-detector/Hydra
     resume_from     = None,       # stage name to restart from
+    process_grains  = True,       # run process_grains+consolidation (needs c-omp)
 )
 ```
 
@@ -59,34 +61,95 @@ run_ff_hedm_full_workflow(
   [[midas-ffpipeline]] tool (`run_ff_pipeline(device="cuda", shard_gpus="auto")`).
 - **Grains.csv only with `refine_backend="c-omp"`** — the python refiner writes
   `IndexBest.bin` / `OrientPosFit.bin`; read those for grain counts (see [[midas-ff-hedm]]).
+  With `c-omp` and `process_grains=True` (default) the run also writes
+  `processgrains_diagnostics.h5` and sets `report_ready`.
+- **Before the run (FF §6b):** `calibrate_ring_thresholds(zarr_file=<...>.MIDAS.zip)`
+  → data-derived `RingThresh` (never copy from a template). Read
+  `diagnose_parameter_file` → `handbook_traps` for the silent-corruption checklist.
+- **After the run (FF §9):** `generate_ff_reconstruction_report(run_dir=<...>/LayerNr_1)`
+  → self-contained `report.html` (needs `Grains.csv`).
 
 ---
 
 ### NF-HEDM — `run_nf_hedm_reconstruction`
 
-Pure-Python `midas-nf-pipeline` (no compiled binaries needed).
+Wraps `midas-nf-pipeline run` (pure-Python; verified against midas-nf-pipeline
+**0.1.1**). NF is its **own** package — there is **no `--scan-mode`** (that's
+FF/PF). Unlike FF, NF has **no `simulate` subcommand**: it needs **real raw
+images** in `DataDirectory` for the image-processing stage.
 
 ```
 run_nf_hedm_reconstruction(
-    result_folder       = "<output dir>",
-    param_file          = "<NF Parameters.txt>",
+    result_folder       = "<output dir>",  # per-layer outputs → LayerNr_<N>/
+    param_file          = "<NF param file>",
     n_cpus              = 4,
-    device              = "auto",     # auto | cpu | cuda
-    ff_seed_orientations= False,      # seed Loop 0 from FF Grains.csv
-    do_image_processing = True,       # ProcessImagesCombined
+    device              = "auto",     # auto | cpu | cuda  (auto→cuda if present)
+    ff_seed_orientations= False,      # seed Loop 0 from FF Grains.csv (else cache)
+    do_image_processing = True,       # ProcessImagesCombined (False → SpotsInfo.bin must exist)
     start_layer         = 1,
     end_layer           = 1,
-    min_confidence      = 0.6,        # Mic2GrainsList threshold
-    resume_from         = None,       # stage label, e.g. "loop_1_seeded"
+    min_confidence      = 0.6,        # last-loop Mic2GrainsList threshold
+    resume_from         = "",         # stage label, e.g. "loop_1_seeded"
+    dtype               = "auto",     # auto | fp32/float32 | fp64/float64
+    refine              = "",         # "" (auto) | nm-triton | nm-batched | nm-serial | lbfgs+nm | lbfgs
+    skip_validation     = False,      # skip midas-params preflight
+    install_dir         = "",         # MIDAS install for seedOrientations cache (defaults to MIDAS_PATH)
 )
 ```
 
-Stages: `image_processing → spot_search → seed_generation → loop_0_unseeded
-[→ loop_N_seeded …] → parse_mic → mic2grains → consolidate`. Produces
-`LayerNr_<N>/Grains.mic`, `GrainsLayer*.csv`, and a consolidated HDF5.
+**Single vs multi-resolution** is driven by the param file, not a flag:
+single-resolution = `NumLoops=0` (no `GridRefactor` key); multi-resolution =
+a `GridRefactor (starting_grid, scaling_factor, num_loops)` triplet.
+
+**Real stage order** (one `run` covers both):
+preprocess (HKL list → seed orientations [FF `Grains.csv` or packaged cache] →
+hex grid → tomo filter → grid mask → diffraction spots) → **image_processing**
+(ProcessImagesCombined, one pass per detector distance) → **fitting**
+(`nm-triton` on CUDA if Triton present, else `nm-batched`) → **parse_mic** →
+**consolidate** [→ `mic2grains` for multi-layer]. Multi-resolution repeats
+`loop_<k>_seeded` → bad-voxel filter → `loop_<k>_unseeded` → binary merge.
+
+**Outputs** (not `Grains.mic` — that name is never written):
+- `<MicFileText>.mic` — the voxel orientation map (name from the param's `MicFileText`).
+- `<stem>_consolidated.h5` — consolidated map + provenance ledger (also the
+  `--resume` state file). Voxels at `/voxels/position` (single-res) or
+  `/multi_resolution/<label>/voxels/position`; grains at `/grains/`. The tool
+  reads voxel/grain **counts from this H5** and returns `total_voxels` /
+  `total_grains`.
+- `GrainsLayer<N>.csv` — per-layer grain list (from `mic2grains`).
+
+**Real param keys** (see `NF_HEDM/Example/ps_au.txt`): `DataDirectory`,
+`nDistances`, `Lsd` (one line per distance), `BC` (2 values per distance),
+`tx/ty/tz`, `px`, `NrPixels`, `MaxRingRad`, `OmegaStart`, `OmegaStep`,
+`StartNr`, `EndNr`, `NrFilesPerDistance`, `LatticeParameter` (6 values),
+`Wavelength`, `SpaceGroup`, `Rsample`, `GridSize`, `MinConfidence`,
+`NrOrientations`, `SaveNSolutions`, `MicFileBinary`, `MicFileText`.
+
+> **Inline-comment pitfall (auto-handled).** The run-path reader keeps only the
+> first token so `GridSize 2.5 # microns` parses, **but the final consolidation
+> stage joins all trailing tokens and calls `float()` — so a commented param
+> file crashes the run at the very last stage, after all the compute.** The
+> APEXA tool auto-strips trailing `# …` comments into a `*.apexa_clean.<ext>`
+> copy (full-line `#` comments are preserved) and reports it under
+> `param_sanitized`. The bundled `ps_au.txt` example needs this.
+
+**Geometry refinement before reconstruction** (NF Handbook §7) —
+`refine_nf_parameters(param_file, multi_point=<bool>, objective="hard")` wraps
+`midas-nf-pipeline refine-params`. Refines Lsd/BC/tilts/Wedge on a calibrant;
+`multi_point=True` uses the param file's `GridPoints` (objective `hard` =
+FracOverlap/C-parity, recommended; `soft` = L-BFGS). Paste the refined geometry
+back into the param file, then run `run_nf_hedm_reconstruction`. **Do NOT set
+`SkipFrame 1` on an NF param file** — the GE far-field rule does not apply to NF
+(NF §3g); `diagnose_parameter_file(pipeline="nf")` flags it under `handbook_traps`.
+
+**Offline subcommands** (pure-Python, fast — no images needed) for iterating on
+an existing `.mic`, callable via `run_command`:
+- `midas-nf-pipeline consolidate <mic> --paramFN <p>` → `<stem>_consolidated.h5`
+- `midas-nf-pipeline mic2grains <p> <mic> <out.csv> [doNeighbor] [nCPUs] [minConf]`
+- `midas-nf-pipeline parse-mic <p>` (rebuild the text `.mic` from binary)
 
 > Grain centroids/orientations come out of the `mic2grains` stage automatically.
-> `extract_grain_centroids` (now `midas-nf-pipeline mic2grains`) is only needed to
+> `extract_grain_centroids` (= `midas-nf-pipeline mic2grains`) is only needed to
 > re-run that step on an existing `.mic`.
 
 ---
@@ -156,8 +219,8 @@ GapIntensity     -1        APS detector convention
 |---|---|
 | Calibration | `refined_MIDAS_params_CeO2.txt` (+ `autocal.log`, `*corr.csv`) |
 | Integration | `*_lineout.xy`, `<stem>.zarr.zip` |
-| FF-HEDM | `IndexBest.bin`, `OrientPosFit.bin`, `InputAll.csv`; `Grains.csv` (c-omp refiner) |
-| NF-HEDM | `Grains.mic`, `GrainsLayer*.csv`, consolidated HDF5 |
+| FF-HEDM | `IndexBest.bin`, `OrientPosFit.bin`, `InputAll.csv`; `Grains.csv` + `processgrains_diagnostics.h5` (c-omp refiner); `report.html` via `generate_ff_reconstruction_report` |
+| NF-HEDM | `<MicFileText>.mic`, `<stem>_consolidated.h5`, `GrainsLayer*.csv` |
 | PF-HEDM | per-layer `Grains.csv`, `v_map.h5` |
 
 ---

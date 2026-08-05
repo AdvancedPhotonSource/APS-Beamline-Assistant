@@ -655,6 +655,7 @@ async def run_ff_hedm_full_workflow(
     resume_from: str = "",
     grains_seed_file: str = "",
     detectors_json: str = "",
+    process_grains: bool = True,
 ) -> str:
     """Run complete FF-HEDM grain reconstruction using midas-pipeline.
 
@@ -690,10 +691,22 @@ async def run_ff_hedm_full_workflow(
                      reads completed-stage state from the result_folder.
         grains_seed_file: Optional Grains.csv seed file (NF→FF handoff).
         detectors_json: Path to detectors.json for multi-detector runs.
+        process_grains: Run process_grains + consolidation to produce
+                        LayerNr_<N>/Grains.csv and processgrains_diagnostics.h5
+                        (FF Handbook §8/§9 — the grain list + report inputs).
+                        Default True. Set False to stop after indexing/refinement.
+                        NOTE: process_grains only succeeds with
+                        refine_backend='c-omp' (the handbook-preferred path). The
+                        python refiner writes no FitBest.bin (known bug through
+                        0.6.0), so process_grains is auto-skipped for python and
+                        the grain count comes from IndexBest.bin — re-run with
+                        c-omp to get Grains.csv + the reconstruction report.
 
     Returns:
-        JSON with status, layer-by-layer grain counts, output file paths,
-        and the exact midas-pipeline command that was run.
+        JSON with status, layer-by-layer grain counts, output file paths
+        (incl. processgrains_diagnostics.h5 and report_ready), and the exact
+        midas-pipeline command that was run. When report_ready is true, chain
+        generate_ff_reconstruction_report on the layer dir.
     """
     try:
         import shutil as _shutil
@@ -792,23 +805,40 @@ async def run_ff_hedm_full_workflow(
             if valid_s:
                 cmd += ["--ff-grains-file", seed_path]
 
-        # With the python refiner, midas-process-grains 0.4.6 cannot find
-        # OrientPosFit.bin (python writes to layer root; c-omp writes to
-        # Results/). Skip those stages automatically so the pipeline succeeds.
-        # The indexing + refinement outputs (IndexBest.bin, OrientPosFit.bin)
-        # are still produced and useful. Use refine_backend="c-omp" to get
-        # Grains.csv from process_grains.
+        # Grain processing (FF Handbook §8/§9): process_grains + consolidation
+        # produce LayerNr_<N>/Grains.csv and processgrains_diagnostics.h5 — the
+        # grain list the user wants and the inputs the reconstruction report needs.
+        #
+        # KNOWN BUG (midas-process-grains 0.4.6 → still present 0.6.0): the python
+        # refiner does not write FitBest.bin, so process_grains falls back to its
+        # legacy path and exits 1 — no Grains.csv. So process_grains can only
+        # succeed with refine_backend='c-omp' (the handbook-preferred path anyway).
+        # We therefore auto-skip process_grains+consolidation when the refiner is
+        # python (either explicitly disabled, or because it would only fail),
+        # and run them for c-omp when process_grains=True (the default).
+        report_note = ""
         _effective_skip = set(s.strip() for s in (skip_stages or "").split(",") if s.strip())
-        if refine_backend == "python":
+        if not process_grains:
             _effective_skip.update({"process_grains", "consolidation"})
-            if _effective_skip - {"process_grains", "consolidation"}:
-                pass  # user-provided skips also applied
-            print(
-                "[FF-HEDM] python refiner: auto-skipping process_grains + consolidation "
-                "(midas-process-grains 0.4.6 expects c-omp output layout). "
-                "Use refine_backend='c-omp' to get Grains.csv.",
-                file=sys.stderr,
-            )
+            report_note = ("process_grains=False → no Grains.csv; "
+                           "grain count from IndexBest.bin.")
+            print("[FF-HEDM] process_grains=False: skipping process_grains + "
+                  "consolidation.", file=sys.stderr)
+        elif refine_backend == "python":
+            _effective_skip.update({"process_grains", "consolidation"})
+            report_note = (
+                "Grains.csv NOT produced: the python refiner cannot run "
+                "process_grains (missing FitBest.bin, known bug through 0.6.0). "
+                "Re-run with refine_backend='c-omp' to get Grains.csv + the "
+                "reconstruction report (FF §8/§9).")
+            print("[FF-HEDM] refine_backend='python': auto-skipping process_grains "
+                  "+ consolidation (python refiner writes no FitBest.bin → "
+                  "process_grains fails). Use refine_backend='c-omp' for Grains.csv.",
+                  file=sys.stderr)
+        else:
+            print("[FF-HEDM] process_grains enabled (c-omp) → will write "
+                  "LayerNr_<N>/Grains.csv + processgrains_diagnostics.h5.",
+                  file=sys.stderr)
         for stage in _effective_skip:
             cmd += ["--skip", stage]
 
@@ -877,6 +907,15 @@ async def run_ff_hedm_full_workflow(
             if (layer_dir / "Results" / "OrientPosFit.bin").exists():
                 info["refinement_complete"] = True
 
+            # 4. processgrains_diagnostics.h5 — written by process_grains; the
+            #    residual/strain plate + most auto-findings in the reconstruction
+            #    report need it (FF §9). report_ready when Grains.csv exists so the
+            #    agent can chain generate_ff_reconstruction_report immediately.
+            diag = layer_dir / "processgrains_diagnostics.h5"
+            if diag.exists():
+                info["diagnostics_h5"] = str(diag)
+            info["report_ready"] = "grains_file" in info
+
             layer_outputs.append(info)
 
         ok = proc.returncode == 0
@@ -891,8 +930,11 @@ async def run_ff_hedm_full_workflow(
             "result_folder": str(result_path),
             "layers": f"{start_layer}-{end_layer}",
             "refine_backend": refine_backend,
+            "process_grains": process_grains,
             "layer_outputs": layer_outputs,
             "total_grains": sum(l.get("n_grains", 0) for l in layer_outputs),
+            "report_ready": any(l.get("report_ready") for l in layer_outputs),
+            "grains_note": report_note,
         })
 
     except subprocess.TimeoutExpired:
@@ -902,6 +944,119 @@ async def run_ff_hedm_full_workflow(
     except Exception as e:
         return format_result({"tool": "run_ff_hedm_full_workflow",
                               "status": "error", "error": str(e)})
+
+
+@mcp.tool()
+async def calibrate_ring_thresholds(
+    zarr_file: str,
+    result_folder: str = "",
+    n_frames: int = 40,
+) -> str:
+    """Recommend per-ring peak-search thresholds from the data (FF Handbook §6b).
+
+    Wraps MIDAS `midas-ring-thresh`, which sweeps candidate thresholds on the
+    first N frames of a converted .MIDAS.zip (zarr) and reports, per ring, a
+    paste-ready `RingThresh <ring> <value>` line chosen so real Bragg blobs are
+    kept while noise/false-positives stay bounded. Use this BEFORE an FF run to
+    set RingThresh — never copy RingThresh from a template (a wrong value gives
+    0 peaks and an empty grain list).
+
+    Handbook caveat (§3d/§6b): the recommendation is meaningless if the dark is
+    all-zero or mis-paired — the tell is threshold-invariant 0-peak output.
+    Verify the dark (darkLoc/darkDataset) if every ring reports "NO SAFE VALUE".
+
+    Args:
+        zarr_file: The converted archive, typically
+                   <run>/LayerNr_1/<name>.MIDAS.zip.
+        result_folder: Where intermediates go (default: the zarr's parent).
+        n_frames: Number of leading frames to analyze (default 40).
+
+    Returns:
+        JSON with parsed `ring_thresholds` (list of {ring, value, note}), the
+        paste-ready block, and the raw stdout report.
+    """
+    try:
+        import shutil as _shutil
+
+        valid, zpath = validate_file(zarr_file)
+        if not valid:
+            return format_result({"tool": "calibrate_ring_thresholds",
+                                  "status": "error", "error": zpath})
+
+        rf = result_folder or str(Path(zpath).expanduser().absolute().parent)
+
+        rt_bin = _shutil.which("midas-ring-thresh")
+        if rt_bin:
+            cmd = [rt_bin, zpath, "--result-folder", rf, "--n-frames", str(n_frames)]
+        else:
+            # Fallback: invoke the module entry point via the midas-suite Python.
+            py = find_midas_python()
+            cmd = [py, "-c",
+                   "import sys; from midas_peakfit.ring_thresh import main; "
+                   "sys.exit(main())",
+                   zpath, "--result-folder", rf, "--n-frames", str(n_frames)]
+
+        print(f"[RING-THRESH] {' '.join(cmd)}", file=sys.stderr)
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=1800,
+            env=get_midas_env(),
+        )
+
+        if proc.returncode != 0:
+            return format_result({
+                "tool": "calibrate_ring_thresholds",
+                "status": "error",
+                "error": "midas-ring-thresh failed (see stderr).",
+                "return_code": proc.returncode,
+                "command": " ".join(cmd),
+                "stdout": proc.stdout[-2000:] if proc.stdout else "",
+                "stderr": proc.stderr[-3000:] if proc.stderr else "",
+            })
+
+        # Parse paste-ready "RingThresh <ring> <value>  [# note]" lines.
+        ring_thresholds = []
+        paste_lines = []
+        for line in (proc.stdout or "").splitlines():
+            s = line.strip()
+            if not s.startswith("RingThresh"):
+                continue
+            paste_lines.append(s)
+            body, _, note = s.partition("#")
+            parts = body.split()
+            if len(parts) >= 3:
+                ring = parts[1]
+                val = parts[2]
+                entry = {"ring": ring, "value": val}
+                if note.strip():
+                    entry["note"] = note.strip()
+                if val in ("??",):
+                    entry["note"] = (entry.get("note", "")
+                                     + " NO SAFE VALUE — inspect band/dark").strip()
+                ring_thresholds.append(entry)
+
+        return format_result({
+            "tool": "calibrate_ring_thresholds",
+            "status": "success",
+            "zarr_file": zpath,
+            "n_frames": n_frames,
+            "ring_thresholds": ring_thresholds,
+            "paste_block": "\n".join(paste_lines),
+            "command": " ".join(cmd),
+            "stdout": proc.stdout[-6000:] if proc.stdout else "",
+            "note": (
+                "Set these RingThresh values in the parameter file before the FF "
+                "run. If every ring says NO SAFE VALUE, check the dark (§3d)."
+            ),
+        })
+
+    except subprocess.TimeoutExpired:
+        return format_result({"tool": "calibrate_ring_thresholds",
+                              "status": "error",
+                              "error": "midas-ring-thresh timed out (>30 min)."})
+    except Exception as e:
+        return format_result({"tool": "calibrate_ring_thresholds",
+                              "status": "error", "error": str(e)})
+
 
 @mcp.tool()
 async def run_pf_hedm_workflow(
@@ -1259,36 +1414,63 @@ async def run_nf_hedm_reconstruction(
     end_layer: int = 1,
     min_confidence: float = 0.6,
     resume_from: str = "",
+    dtype: str = "auto",
+    refine: str = "",
+    skip_validation: bool = False,
+    install_dir: str = "",
 ) -> str:
     """Run NF-HEDM voxel-level microstructure reconstruction.
 
-    Uses midas-nf-pipeline (pure-Python) from midas-suite. Produces
-    a voxel orientation map (Grains.mic / consolidated HDF5) from
-    near-field diffraction images.
+    Wraps `midas-nf-pipeline run` (pure-Python, from midas-suite). Produces a
+    voxel orientation map — `<MicFileText>.mic` plus a consolidated
+    `*_consolidated.h5` — from near-field diffraction images.
 
-    Pipeline stages (pure Python, no compiled binaries needed):
-      image_processing → spot_search → seed_generation → loop_0_unseeded
-      [→ loop_N_seeded ...] → parse_mic → mic2grains → consolidate
+    Real stage order (single-resolution = NumLoops=0; multi-resolution driven
+    by a `GridRefactor` triplet in the param file):
+      preprocess (HKL list → seed orientations [FF Grains.csv or cache] → hex
+      grid → tomo filter → grid mask → diffraction spots) → image_processing
+      (ProcessImagesCombined, one pass per detector distance) → fitting
+      (nm-triton on CUDA, else nm-batched) → parse_mic → consolidate
+      [→ mic2grains for multi-layer]. Multi-resolution repeats loop_<k>_seeded
+      → bad-voxel filter → loop_<k>_unseeded → binary merge per loop.
 
     Args:
-        param_file: Path to NF-HEDM Parameters.txt. Must contain at least:
-                    DataDirectory, FileStem, NrFilesPerSweep, Wavelength,
-                    Lsd, BC, NrPixels, px, OmegaStart/End/Step, RingThresh,
-                    LatticeConstant, SpaceGroup, Rsample, Hbeam.
-        result_folder: Output directory (overrides OutputDirectory in params).
-                       LayerNr_<N>/ subdirs created here.
+        param_file: Path to NF-HEDM parameter file. Real keys (see the Au
+                    example `NF_HEDM/Example/ps_au.txt`): DataDirectory (raw
+                    image dir), nDistances, Lsd (one line per distance), BC
+                    (two values per distance), tx/ty/tz, px, NrPixels,
+                    MaxRingRad, OmegaStart, OmegaStep, StartNr, EndNr,
+                    NrFilesPerDistance, LatticeParameter (6 values), Wavelength,
+                    SpaceGroup, Rsample, GridSize, MinConfidence, NrOrientations,
+                    SaveNSolutions, MicFileBinary, MicFileText. Inline `# ...`
+                    comments after a value are tolerated by the run-path reader
+                    but crash the final consolidation stage, so this tool
+                    auto-strips them into a sanitized copy before running.
+        result_folder: Output dir (overrides OutputDirectory in params).
+                       Per-layer outputs go into <result_folder>/LayerNr_<N>/.
         n_cpus: CPU cores for image processing and orientation fitting.
-        device: "auto" (GPU if available, else CPU), "cpu", "cuda".
-        ff_seed_orientations: Seed with FF-HEDM Grains.csv (default False).
-        do_image_processing: Run ProcessImagesCombined (default True).
+        device: "auto" (CUDA if available, else CPU), "cpu", "cuda".
+        ff_seed_orientations: Seed loop 0 from an FF-HEDM Grains.csv instead of
+                    the packaged seedOrientations cache (default False = cache).
+        do_image_processing: Run ProcessImagesCombined (default True). Set False
+                    only when SpotsInfo.bin already exists in DataDirectory.
         start_layer: First layer number.
         end_layer: Last layer number.
-        min_confidence: Confidence threshold for Mic2GrainsList (default 0.6).
-        resume_from: Stage label to restart from (e.g. "loop_1_seeded").
+        min_confidence: MinConfidence for the per-layer Mic2GrainsList run after
+                    the last loop (default 0.6).
+        resume_from: Stage label to restart from (e.g. "loop_1_seeded",
+                    "loop_2_unseeded"); the tool auto-locates the pipeline H5.
+        dtype: "auto" (fp32 on cuda/mps, fp64 on cpu), "fp32"/"float32",
+               "fp64"/"float64". Only forwarded when not "auto".
+        refine: Phase-2 refine strategy — "" (auto), "nm-triton", "nm-batched",
+                "nm-serial", "lbfgs+nm", "lbfgs".
+        skip_validation: Skip the midas-params preflight on the param file.
+        install_dir: MIDAS install dir for the seedOrientations cache; defaults
+                     to the detected MIDAS_PATH so cache-based seeding resolves.
 
     Returns:
-        JSON with status, consolidated HDF5 path, voxel count, and the
-        midas-nf-pipeline command that was run.
+        JSON with status, consolidated HDF5 path, voxel/grain counts (read from
+        the consolidated H5), the mic files, and the command that was run.
     """
     try:
         import shutil as _shutil
@@ -1308,9 +1490,38 @@ async def run_nf_hedm_reconstruction(
                 ),
             })
 
+        # Sanitize inline "# ..." comments. The run-path param reader
+        # (parse_parameters) keeps only the first token so it tolerates them,
+        # but the final consolidation stage (extract_nf_params) joins all
+        # trailing tokens and calls float() → a commented param crashes the run
+        # AFTER hours of compute. Strip trailing " # ..." (whitespace-hash) into
+        # a sanitized copy beside the original (preserves relative DataDirectory/
+        # OutputDirectory resolution). Full-line "#" comments are left as-is.
+        import re as _re
+        _param_note = None
+        run_param = param_path
+        try:
+            _orig = Path(param_path).read_text()
+            _clean_lines, _changed = [], False
+            for _ln in _orig.splitlines():
+                _stripped = _re.sub(r"\s+#.*$", "", _ln)
+                if _stripped != _ln and _ln.lstrip()[:1] != "#":
+                    _changed = True
+                _clean_lines.append(_stripped)
+            if _changed:
+                _san = Path(param_path).with_name(
+                    Path(param_path).stem + ".apexa_clean" + Path(param_path).suffix)
+                _san.write_text("\n".join(_clean_lines) + "\n")
+                run_param = str(_san)
+                _param_note = (
+                    f"stripped inline '#' comments → {_san.name} "
+                    "(would otherwise crash the consolidation stage)")
+        except Exception:
+            pass  # non-fatal — fall back to the original param file
+
         cmd = [
             _nf_bin, "run",
-            param_path,
+            run_param,
             "--n-cpus", str(n_cpus),
             "--device", device,
             "--start-layer", str(start_layer),
@@ -1325,6 +1536,17 @@ async def run_nf_hedm_reconstruction(
         else:
             rp = Path(param_path).parent
 
+        if dtype and dtype != "auto":
+            cmd += ["--dtype", dtype]
+        if refine:
+            cmd += ["--refine", refine]
+        if skip_validation:
+            cmd += ["--skip-validation"]
+        # seedOrientations cache lookup needs a MIDAS install dir; default to the
+        # detected MIDAS tree so cache-based seeding (the default) resolves.
+        _inst = install_dir or (str(MIDAS_ROOT) if MIDAS_ROOT else "")
+        if _inst and Path(_inst).exists():
+            cmd += ["--install-dir", _inst]
         if ff_seed_orientations:
             cmd += ["--ff-seed-orientations"]
         if not do_image_processing:
@@ -1336,7 +1558,12 @@ async def run_nf_hedm_reconstruction(
             # --resume (the old behavior) was wrong and always failed. Point
             # --resume at the per-layer pipeline H5 if one exists so the engine
             # can reuse prior outputs; always pass the stage via --restart-from.
-            _state_h5 = sorted(rp.glob("**/pipeline*.h5")) + sorted(rp.glob("**/*pipeline*.hdf5"))
+            # The NF pipeline H5 (provenance ledger with a pipeline_state group)
+            # is the per-layer *_consolidated.h5; older builds also wrote
+            # pipeline*.h5. Prefer the consolidated ledger.
+            _state_h5 = (sorted(rp.glob("**/*_consolidated.h5"))
+                         + sorted(rp.glob("**/pipeline*.h5"))
+                         + sorted(rp.glob("**/*pipeline*.hdf5")))
             if _state_h5:
                 cmd += ["--resume", str(_state_h5[0])]
             cmd += ["--restart-from", resume_from]
@@ -1349,23 +1576,46 @@ async def run_nf_hedm_reconstruction(
             env=get_midas_env(),
         )
 
-        # Locate consolidated HDF5 and Grains.mic outputs
-        h5_files = sorted(rp.glob("**/*.h5")) + sorted(rp.glob("**/*.hdf5"))
-        mic_files = sorted(rp.glob("**/Grains.mic"))
+        # Locate outputs. The mic map is <MicFileText>.mic (NOT "Grains.mic");
+        # the consolidated map is *_consolidated.h5.
+        all_h5 = sorted(rp.glob("**/*.h5")) + sorted(rp.glob("**/*.hdf5"))
+        consolidated = [h for h in all_h5 if h.name.endswith("_consolidated.h5")]
+        h5_files = consolidated or all_h5
+        mic_files = sorted(rp.glob("**/*.mic"))
         grains_csvs = sorted(rp.glob("**/GrainsLayer*.csv"))
 
-        voxel_count = 0
-        for mic in mic_files:
+        # Authoritative voxel/grain counts come from the consolidated H5
+        # (voxels/position single-res, or the largest multi_resolution loop).
+        # Fall back to counting non-% lines in the mic map only if no H5.
+        voxel_count, grain_count = None, None
+        if h5_files:
             try:
-                lines = mic.read_text().splitlines()
-                voxel_count += sum(
-                    1 for l in lines if l.strip() and not l.startswith("%")
-                )
+                import h5py as _h5py
+                with _h5py.File(str(h5_files[0]), "r") as _f:
+                    if "voxels/position" in _f:
+                        voxel_count = int(_f["voxels/position"].shape[0])
+                    elif "multi_resolution" in _f:
+                        voxel_count = max(
+                            (int(_f[f"multi_resolution/{lp}/voxels/position"].shape[0])
+                             for lp in _f["multi_resolution"]
+                             if f"multi_resolution/{lp}/voxels/position" in _f),
+                            default=0)
+                    if "grains/grain_id" in _f:
+                        grain_count = int(_f["grains/grain_id"].shape[0])
             except Exception:
                 pass
+        if voxel_count is None:
+            voxel_count = 0
+            for mic in mic_files:
+                try:
+                    voxel_count += sum(
+                        1 for l in mic.read_text().splitlines()
+                        if l.strip() and not l.startswith("%"))
+                except Exception:
+                    pass
 
         ok = proc.returncode == 0
-        return format_result({
+        payload = {
             "tool": "run_nf_hedm_reconstruction",
             "status": "success" if ok else "error",
             "engine": "midas-nf-pipeline",
@@ -1375,16 +1625,140 @@ async def run_nf_hedm_reconstruction(
             "stderr": proc.stderr[-2000:] if proc.stderr else "",
             "result_folder": str(rp),
             "consolidated_h5": str(h5_files[0]) if h5_files else None,
-            "grains_mic_files": [str(m) for m in mic_files],
+            "mic_files": [str(m) for m in mic_files],
             "grains_layer_csvs": [str(g) for g in grains_csvs],
             "total_voxels": voxel_count,
-        })
+            "total_grains": grain_count,
+        }
+        if _param_note:
+            payload["param_sanitized"] = _param_note
+        return format_result(payload)
 
     except subprocess.TimeoutExpired:
         return format_result({"tool": "run_nf_hedm_reconstruction", "status": "error",
                               "error": "NF pipeline timed out (>8 h)."})
     except Exception as e:
         return format_result({"tool": "run_nf_hedm_reconstruction",
+                              "status": "error", "error": str(e)})
+
+
+@mcp.tool()
+async def refine_nf_parameters(
+    param_file: str,
+    multi_point: bool = False,
+    row_nr: int = 0,
+    n_cpus: int = 1,
+    device: str = "auto",
+    objective: str = "hard",
+) -> str:
+    """Refine NF-HEDM detector geometry on a calibrant (NF Handbook §7).
+
+    Wraps `midas-nf-pipeline refine-params`, which optimizes the NF geometry
+    (Lsd/distance, beam center, detector tilts tx/ty/tz, Wedge) against a
+    known calibrant orientation before the full reconstruction. Paste the
+    refined values back into the parameter file, then run
+    run_nf_hedm_reconstruction.
+
+    Single-point (default) refines at one voxel (row_nr). Multi-point uses the
+    GridPoints defined in the parameter file — objective 'hard' maximizes
+    FracOverlap with C-parity conventions (recommended); 'soft' uses an L-BFGS
+    differentiable objective.
+
+    Args:
+        param_file: NF MIDAS parameter file (defines the calibrant, geometry
+                    seed, and — for multi-point — GridPoints).
+        multi_point: Use the GridPoints multi-point refinement (default False =
+                     single-point at row_nr).
+        row_nr: Voxel index for single-point refinement (ignored when
+                multi_point=True). Default 0.
+        n_cpus: CPU cores (default 1).
+        device: "auto", "cpu", or "cuda". Default "auto".
+        objective: "hard" (FracOverlap, C-parity — recommended) or "soft"
+                   (L-BFGS). Only used when multi_point=True.
+
+    Returns:
+        JSON with any refined geometry values parsed from stdout (Lsd, BC,
+        tx/ty/tz, Wedge) for pasting back, plus the raw stdout and command.
+    """
+    try:
+        import shutil as _shutil
+
+        valid, ppath = _resolve_param_file(param_file)
+        if not valid:
+            return format_result({"tool": "refine_nf_parameters",
+                                  "status": "error", "error": ppath})
+
+        nf_bin = _shutil.which("midas-nf-pipeline")
+        if nf_bin:
+            cmd = [nf_bin, "refine-params", ppath]
+        else:
+            py = find_midas_python()
+            cmd = [py, "-c",
+                   "import sys; from midas_nf_pipeline.cli import main; "
+                   "sys.exit(main())",
+                   "refine-params", ppath]
+
+        if multi_point:
+            cmd += ["--multi-point", "--objective", objective]
+        else:
+            cmd += ["--row-nr", str(row_nr)]
+        cmd += ["--n-cpus", str(n_cpus), "--device", device]
+
+        print(f"[NF-REFINE] {' '.join(cmd)}", file=sys.stderr)
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=7200,
+            env=get_midas_env(),
+        )
+
+        if proc.returncode != 0:
+            return format_result({
+                "tool": "refine_nf_parameters",
+                "status": "error",
+                "error": "midas-nf-pipeline refine-params failed (see stderr).",
+                "return_code": proc.returncode,
+                "command": " ".join(cmd),
+                "stdout": proc.stdout[-2000:] if proc.stdout else "",
+                "stderr": proc.stderr[-3000:] if proc.stderr else "",
+            })
+
+        # Best-effort parse of refined geometry from stdout for pasting back.
+        refined = {}
+        _keys = {
+            "Lsd": r"Lsd", "BC": r"BC", "tx": r"tx", "ty": r"ty",
+            "tz": r"tz", "Wedge": r"Wedge",
+        }
+        for line in (proc.stdout or "").splitlines():
+            for name, key in _keys.items():
+                if name in refined:
+                    continue
+                m = re.search(
+                    rf"\b{key}\b\s*[:=]?\s*(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?"
+                    r"(?:\s*,\s*-?\d+(?:\.\d+)?)*)", line)
+                if m:
+                    refined[name] = m.group(1).strip()
+
+        return format_result({
+            "tool": "refine_nf_parameters",
+            "status": "success",
+            "param_file": ppath,
+            "mode": "multi-point" if multi_point else "single-point",
+            "objective": objective if multi_point else None,
+            "refined_geometry": refined,
+            "command": " ".join(cmd),
+            "stdout": proc.stdout[-6000:] if proc.stdout else "",
+            "note": (
+                "Paste the refined geometry back into the NF parameter file, then "
+                "run run_nf_hedm_reconstruction. If refined_geometry is empty, "
+                "read stdout — the fitter's output format may differ."
+            ),
+        })
+
+    except subprocess.TimeoutExpired:
+        return format_result({"tool": "refine_nf_parameters",
+                              "status": "error",
+                              "error": "NF parameter refinement timed out (>2 h)."})
+    except Exception as e:
+        return format_result({"tool": "refine_nf_parameters",
                               "status": "error", "error": str(e)})
 
 
@@ -1397,11 +1771,11 @@ async def convert_nf_to_dream3d(
 ) -> str:
     """Convert NF-HEDM output to DREAM.3D format for visualization.
 
-    Converts MIDAS Grains.mic format to DREAM.3D HDF5 format for
+    Converts a MIDAS NF .mic voxel map to DREAM.3D HDF5 format for
     visualization in Paraview, DREAM.3D, or other 3D visualization tools.
 
     Args:
-        nf_mic_file: Path to NF-HEDM Grains.mic file
+        nf_mic_file: Path to an NF-HEDM .mic file (e.g. <MicFileText>.mic)
         output_hdf5: Output HDF5 file name
         include_strain: Include strain tensor data (if available)
         voxel_size: Voxel size in microns
@@ -1486,7 +1860,7 @@ async def overlay_ff_nf_results(
 
     Args:
         ff_grains_file: Path to FF-HEDM Grains.csv
-        nf_mic_file: Path to NF-HEDM Grains.mic
+        nf_mic_file: Path to an NF-HEDM .mic file (e.g. <MicFileText>.mic)
         output_plot: Output plot file name
         slice_position: Which slice to show (top, middle, bottom)
 
@@ -1836,7 +2210,7 @@ async def extract_grain_centroids(
     their centroids, volumes, and average orientations.
 
     Args:
-        nf_mic_file: Path to NF-HEDM Grains.mic file
+        nf_mic_file: Path to an NF-HEDM .mic file (e.g. <MicFileText>.mic)
         output_csv: Output CSV file with centroid data
         min_grain_size: Minimum grain size in voxels
 
@@ -2189,11 +2563,27 @@ async def create_midas_parameter_file(
                 validation["contains_detector"] = "Lsd" in content and "BC" in content
                 validation["contains_wavelength"] = "Wavelength" in content
 
+        # Handbook trap lint (FF/NF Handbook = source of truth). This template
+        # intentionally omits SkipFrame / MinPeakSNR / RingThresh / dark keys —
+        # the lint reminds the caller to fill them in before an FF run.
+        try:
+            traps = _lint_handbook_traps(output_path, "ff")
+        except Exception as _e:
+            traps = []
+        if traps:
+            print("[create_midas_parameter_file] Handbook traps (FF/NF source of truth):",
+                  file=sys.stderr)
+            for t in traps:
+                mark = "⚠" if t["severity"] == "warning" else "ℹ"
+                sec = f" [{t['section']}]" if t.get("section") else ""
+                print(f"  {mark} {t['key']}{sec}: {t['message']}", file=sys.stderr)
+
         return format_result({
             "tool": "create_midas_parameter_file",
             "status": "completed",
             "output_file": str(output_path),
             "validation": validation,
+            "handbook_traps": traps,
             "parameters": {
                 "lattice_constants": lattice_constants,
                 "space_group": space_group,
@@ -2496,10 +2886,11 @@ async def get_midas_workflow_status(
                 "Grains.csv"
             ]
         elif workflow_type.lower() == "nf":
-            # NF-HEDM outputs
+            # NF-HEDM outputs (mic map is <MicFileText>.mic, not "Grains.mic")
             output_patterns = [
-                "Grains.mic",
-                "*.mic"
+                "*.mic",
+                "*_consolidated.h5",
+                "GrainsLayer*.csv"
             ]
         else:
             output_patterns = ["*.csv", "*.mic"]
@@ -6628,6 +7019,156 @@ async def run_midas_viewer(
         })
 
 
+@mcp.tool()
+async def generate_ff_reconstruction_report(
+    run_dir: str,
+    material: str = "",
+    title: str = "",
+    out: str = "report.html",
+    c11: float = 0.0,
+    c12: float = 0.0,
+    beam_height: float = 0.0,
+    figdir: str = "",
+) -> str:
+    """Generate a self-contained FF-HEDM reconstruction report (FF Handbook §9).
+
+    Wraps MIDAS `utils/midas_ff_report.py`, which reads a completed FF run's
+    Grains.csv (and, if present, processgrains_diagnostics.h5) and emits ONE
+    standalone report.html with all figures base64-embedded — grain-count and
+    completeness stats, orientation/IPF maps, position maps, per-grain strain,
+    and (with the diagnostics H5) spot-residual plates and auto-findings. The
+    UI renders the returned HTML path.
+
+    Prerequisite: the run must have produced Grains.csv. That comes from
+    run_ff_hedm_full_workflow with process_grains=True (the default) — ideally
+    refine_backend='c-omp', the handbook-preferred path. If Grains.csv is
+    missing this tool returns an actionable error instead of a report.
+
+    Args:
+        run_dir: A LayerNr_<N> folder containing Grains.csv (the per-layer
+                 result dir, NOT the parent result folder).
+        material: Material name for the report header (default: derived from
+                  the Grains.csv spacegroup, e.g. "SG225").
+        title: Report title (default: auto).
+        out: Output HTML filename. Relative paths are written inside run_dir
+             (default: report.html → <run_dir>/report.html).
+        c11, c12: Optional cubic elastic constants (GPa) to bias the d0
+                  equilibrium for per-grain stress; 0 = omit (strain only).
+        beam_height: Optional beam height (µm) for the vertical extent panel;
+                     0 = omit.
+        figdir: Scratch dir for intermediate figures (default:
+                <run_dir>/_report_figs).
+
+    Returns:
+        JSON with the absolute report path, size, has_diagnostics, and the
+        exact command run.
+    """
+    try:
+        rp = Path(run_dir).expanduser().absolute()
+        if not rp.exists() or not rp.is_dir():
+            return format_result({
+                "tool": "generate_ff_reconstruction_report",
+                "status": "error",
+                "error": f"run_dir not found or not a directory: {rp}",
+            })
+
+        grains = rp / "Grains.csv"
+        if not grains.exists():
+            return format_result({
+                "tool": "generate_ff_reconstruction_report",
+                "status": "error",
+                "error": (
+                    f"Grains.csv not found in {rp}. The FF run did not produce a "
+                    "grain list. Re-run run_ff_hedm_full_workflow with "
+                    "process_grains=True (default) and refine_backend='c-omp' "
+                    "(the handbook-preferred, most-reliable path to Grains.csv), "
+                    "then point run_dir at the LayerNr_<N> folder it writes."
+                ),
+            })
+
+        has_diag = (rp / "processgrains_diagnostics.h5").exists()
+
+        # Resolve output path: relative → inside run_dir so we can verify it.
+        out_path = Path(out).expanduser()
+        if not out_path.is_absolute():
+            out_path = rp / out_path
+
+        report_script = MIDAS_ROOT / "utils" / "midas_ff_report.py"
+        if not report_script.exists():
+            return format_result({
+                "tool": "generate_ff_reconstruction_report",
+                "status": "error",
+                "error": f"Report generator not found: {report_script}",
+            })
+
+        py = find_midas_python()
+        cmd = [py, str(report_script), str(rp), "--out", str(out_path)]
+        if material:
+            cmd += ["--material", material]
+        if title:
+            cmd += ["--title", title]
+        if c11:
+            cmd += ["--c11", str(c11)]
+        if c12:
+            cmd += ["--c12", str(c12)]
+        if beam_height:
+            cmd += ["--beam-height", str(beam_height)]
+        if figdir:
+            cmd += ["--figdir", figdir]
+
+        _announce_output("generate_ff_reconstruction_report", out_path,
+                         has_diagnostics=has_diag)
+        print(f"[FF-REPORT] {' '.join(cmd)}", file=sys.stderr)
+
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=1800,
+            env=get_midas_env(),
+        )
+
+        if proc.returncode != 0 or not out_path.exists():
+            return format_result({
+                "tool": "generate_ff_reconstruction_report",
+                "status": "error",
+                "error": "Report generation failed (see stderr).",
+                "return_code": proc.returncode,
+                "command": " ".join(cmd),
+                "stdout": proc.stdout[-2000:] if proc.stdout else "",
+                "stderr": proc.stderr[-3000:] if proc.stderr else "",
+            })
+
+        _announce_output("generate_ff_reconstruction_report", out_path,
+                         status="written")
+        return format_result({
+            "tool": "generate_ff_reconstruction_report",
+            "status": "success",
+            "report_html": str(out_path),
+            "size_bytes": out_path.stat().st_size,
+            "has_diagnostics": has_diag,
+            "run_dir": str(rp),
+            "command": " ".join(cmd),
+            "note": (
+                "Standalone report.html with embedded figures."
+                + ("" if has_diag else
+                   " No processgrains_diagnostics.h5 — spot-residual plates and "
+                   "some auto-findings are omitted (grain/orientation/strain "
+                   "panels still render).")
+            ),
+        })
+
+    except subprocess.TimeoutExpired:
+        return format_result({
+            "tool": "generate_ff_reconstruction_report",
+            "status": "error",
+            "error": "Report generation timed out (>30 min).",
+        })
+    except Exception as e:
+        return format_result({
+            "tool": "generate_ff_reconstruction_report",
+            "status": "error",
+            "error": str(e),
+        })
+
+
 # =============================================================================
 # GSAS-II REFINEMENT & LIVE ANALYSIS
 # =============================================================================
@@ -7895,6 +8436,15 @@ async def diagnose_parameter_file(
         fmt = "json" if output_format not in ("json", "prompt") else output_format
         args = ["diagnose", param_path, "--path", pipeline, "--format", fmt]
 
+        # APEXA-side handbook trap lint (source of truth: FF/NF Handbooks) —
+        # catches silent-corruption rules midas-params doesn't check.
+        try:
+            traps = _lint_handbook_traps(param_path, pipeline)
+        except Exception as _e:
+            traps = [{"severity": "info", "key": "_lint",
+                      "message": f"handbook trap lint unavailable: {_e}",
+                      "section": ""}]
+
         if fmt == "prompt":
             cli = _find_midas_params_cli()
             if cli is None:
@@ -7908,13 +8458,22 @@ async def diagnose_parameter_file(
                 cmd, capture_output=True, text=True,
                 timeout=60, env=get_midas_env(),
             )
+            diag_text = result.stdout
+            if traps:
+                lines = ["", "## Handbook traps (APEXA — FF/NF Handbook source of truth)"]
+                for t in traps:
+                    mark = "⚠" if t["severity"] == "warning" else "ℹ"
+                    sec = f" [{t['section']}]" if t.get("section") else ""
+                    lines.append(f"{mark} {t['key']}{sec}: {t['message']}")
+                diag_text = diag_text + "\n" + "\n".join(lines)
             return format_result({
                 "tool": "diagnose_parameter_file",
                 "status": "success",
                 "param_file": param_path,
                 "pipeline": pipeline,
                 "format": "prompt",
-                "diagnosis": result.stdout,
+                "diagnosis": diag_text,
+                "handbook_traps": traps,
             })
 
         diagnosis = _run_midas_params(args)
@@ -7925,6 +8484,7 @@ async def diagnose_parameter_file(
             "pipeline": pipeline,
             "format": "json",
             "diagnosis": diagnosis,
+            "handbook_traps": traps,
         })
 
     except FileNotFoundError:
@@ -8075,6 +8635,171 @@ _FF_PARAM_KEYS = {
     "margabc", "margabg", "nrfilespersweep", "imtransopt", "hbeam", "vsample",
     "tint", "tgap", "upperboundthreshold", "width",
 }
+
+
+def _parse_param_multi(param_path: Path) -> dict:
+    """Parse a MIDAS parameter file into {lowercased_key: [value-token-lists]}.
+
+    Keys can repeat (RingThresh, Lsd, …), so every occurrence is kept. Each
+    value is the list of whitespace tokens after the key (comments stripped).
+    Also returns "_raw_keys" with original-case first-token spellings.
+    """
+    out: dict = {}
+    raw_keys: dict = {}
+    try:
+        text = param_path.read_text(errors="ignore")
+    except Exception:
+        return {"_raw_keys": {}}
+    for line in text.splitlines():
+        s = line.split("#", 1)[0].strip()
+        if not s:
+            continue
+        parts = s.split()
+        k = parts[0].lower()
+        out.setdefault(k, []).append(parts[1:])
+        raw_keys.setdefault(k, parts[0])
+    out["_raw_keys"] = raw_keys
+    return out
+
+
+def _lint_handbook_traps(param_path, pipeline: str = "ff", source_h5: str = "") -> list:
+    """Check a parameter file against the FF/NF Handbook silent-corruption traps.
+
+    Returns a list of {severity, key, message, section} dicts. Severity is
+    "warning" (likely-wrong, silently corrupts results) or "info" (a rule that
+    can't be confirmed from the param file alone — a reminder). Grounded in
+    manuals/FF_HEDM_Handbook.md and NF_HEDM_Handbook.md (the source of truth).
+    """
+    p = Path(param_path).expanduser()
+    pipe = (pipeline or "ff").lower()
+    traps: list = []
+
+    def add(sev, key, msg, section):
+        traps.append({"severity": sev, "key": key, "message": msg, "section": section})
+
+    params = _parse_param_multi(p)
+    have = lambda k: k in params  # noqa: E731
+
+    def first_float(k):
+        try:
+            return float(params[k][0][0])
+        except Exception:
+            return None
+
+    if pipe in ("ff", "pf"):
+        # §3e — GE/far-field frames carry a leading throwaway frame; SkipFrame 1.
+        if not have("skipframe"):
+            add("warning", "SkipFrame",
+                "SkipFrame is not set. GE/far-field data carry a leading throwaway "
+                "frame — set 'SkipFrame 1' (FF §3e). Omitting it shifts every "
+                "omega by one step, mirroring/rotating the microstructure "
+                "undetectably.", "FF §3e")
+        elif str(params["skipframe"][0][0] if params["skipframe"][0] else "") != "1":
+            add("info", "SkipFrame",
+                f"SkipFrame={params['skipframe'][0]} (expected 1 for GE/far-field). "
+                "Confirm this matches the detector's frame layout (FF §3e).",
+                "FF §3e")
+
+        # §3d — a separate Dark .h5 stores its frame at exchange/data, so BOTH
+        # darkLoc and darkDataset must point at exchange/data (not exchange/dark).
+        if have("dark") or have("darkfile"):
+            dl = (params.get("darkloc", [[""]])[0] or [""])[0].lower()
+            dd = (params.get("darkdataset", [[""]])[0] or [""])[0].lower()
+            bad = []
+            if have("darkloc") and dl and dl != "exchange/data":
+                bad.append(f"darkLoc={dl}")
+            if have("darkdataset") and dd and dd != "exchange/data":
+                bad.append(f"darkDataset={dd}")
+            if not have("darkloc") and not have("darkdataset"):
+                add("warning", "darkLoc",
+                    "A separate Dark file is set but darkLoc/darkDataset are not. "
+                    "A standalone dark .h5 stores its frame at 'exchange/data' — "
+                    "set BOTH darkLoc and darkDataset to exchange/data (FF §3d). "
+                    "The integrator default 'exchange/dark' reads nothing → an "
+                    "all-zero dark → threshold-invariant 0-peak output.", "FF §3d")
+            elif bad:
+                add("warning", "darkLoc",
+                    "Separate Dark file with " + ", ".join(bad) + ". A standalone "
+                    "dark .h5 stores its frame at 'exchange/data' — set BOTH "
+                    "darkLoc and darkDataset to exchange/data (FF §3d).", "FF §3d")
+
+        # §6c — MinPeakSNR is the spot-quality gate; FitRMSE/NImgs are not proxies.
+        if not have("minpeaksnr"):
+            add("info", "MinPeakSNR",
+                "MinPeakSNR is not set. It is the peak/spot quality gate (FF §6c) — "
+                "set it explicitly rather than relying on FitRMSE/NImgs proxies.",
+                "FF §6c")
+
+        # §6 — Rsample/Hbeam are the grain-SEARCH BOUND, never the sample size.
+        for k, label in (("rsample", "Rsample"), ("hbeam", "Hbeam")):
+            v = first_float(k)
+            if v is not None and 0 < v < 100:
+                add("warning", label,
+                    f"{label}={v} looks small. {label} is the grain-search bound "
+                    "(half-width in µm the indexer searches), NOT the physical "
+                    "sample size (FF §6). Setting it to the sample size drops grains "
+                    "at the edges. Use a bound comfortably larger than the beam-lit "
+                    "volume.", "FF §6")
+
+        # §6 — a calibrant LatticeConstant left on a sample run.
+        lc = params.get("latticeconstant") or params.get("latticeparameter")
+        if lc:
+            try:
+                a0 = float(lc[0][0])
+                for nm, (sg, a_cal) in _CALIBRANT_DB.items():
+                    if abs(a0 - a_cal) < 0.01:
+                        add("warning", "LatticeConstant",
+                            f"LatticeConstant a={a0} ≈ {nm} ({a_cal} Å). If this is a "
+                            f"SAMPLE run, you are indexing with the calibrant's cell "
+                            "(FF §6). Set the sample's LatticeConstant + SpaceGroup.",
+                            "FF §6")
+                        break
+            except Exception:
+                pass
+
+        # §6b — template-looking RingThresh (all rings share one identical value).
+        rt = params.get("ringthresh", [])
+        if rt:
+            vals = []
+            for toks in rt:
+                if len(toks) >= 2:
+                    vals.append(toks[1])
+            if len(vals) >= 2 and len(set(vals)) == 1:
+                add("warning", "RingThresh",
+                    f"All {len(vals)} RingThresh lines share the same value "
+                    f"({vals[0]}) — that is a template, not data-derived. Real "
+                    "per-ring thresholds differ. Run calibrate_ring_thresholds on "
+                    "the .MIDAS.zip and paste its RingThresh block (FF §6b); a wrong "
+                    "value gives 0 peaks and an empty grain list.", "FF §6b")
+
+        # §2 — omega sign / aero convention: unconfirmable without the _FF.par.
+        add("info", "OmegaStart",
+            "Verify the omega sign against the beamline's rotation convention "
+            "(FF §2). On aero-convention data, OmegaStart AND OmegaStep must be "
+            "negated; a sign flip mirrors the microstructure and is undetectable "
+            "from the grain list alone." + (
+                "" if source_h5 else " (No _FF.par provided to auto-check.)"),
+            "FF §2")
+
+        # §4b — Lsd is calibrated, not a stage readback; DetZ ≠ Lsd.
+        add("info", "Lsd",
+            "Lsd must come from the calibrant fit, not a DetZ stage readback "
+            "(FF §4b). Confirm this Lsd is the calibrated sample-to-detector "
+            "distance.", "FF §4b")
+
+    if pipe == "nf":
+        # §3g — the GE SkipFrame-1 rule must NOT cross to NF. NF's extra frame is a
+        # trailing omega-wrap frame, not a leading throwaway.
+        if have("skipframe") and str(
+                params["skipframe"][0][0] if params["skipframe"][0] else "") == "1":
+            add("warning", "SkipFrame",
+                "SkipFrame 1 is set on an NF parameter file. The GE far-field "
+                "SkipFrame rule does NOT apply to NF — NF's extra frame is a "
+                "trailing omega-wrap frame, not a leading throwaway (NF §3g). "
+                "Remove SkipFrame here or you will drop a real omega frame.",
+                "NF §3g")
+
+    return traps
 
 
 def _read_param_modality(param_path: Path) -> dict:
@@ -8551,8 +9276,9 @@ async def recommend_workflow(path: str = "", goal: str = "") -> str:
                         "why": f"near-field data — {mod['why']} — + parameter file ({pf}) "
                                f"→ spatial grain map",
                         "params": {"param_file": f"<{pf}>",
-                                   "result_folder": "<where to write Grains.mic>"},
-                        "output": "LayerNr_*/Grains.mic (voxel grain map) → convert_nf_to_dream3d",
+                                   "result_folder": "<output dir>"},
+                        "output": "LayerNr_*/<MicFileText>.mic (voxel grain map) "
+                                  "+ *_consolidated.h5 → convert_nf_to_dream3d",
                         "next_step": "validate_parameter_file(pipeline='nf') first; "
                                      "inspect one scan subdir with inspect_dataset_file "
                                      "to confirm frames/omega before the full run",
@@ -8714,8 +9440,8 @@ async def recommend_workflow(path: str = "", goal: str = "") -> str:
                     "tool": "run_nf_hedm_reconstruction",
                     "why": f"parameter file reads as near-field — {pm['why']}",
                     "params": {"param_file": str(p),
-                               "result_folder": "<where to write Grains.mic>"},
-                    "output": "LayerNr_*/Grains.mic",
+                               "result_folder": "<output dir>"},
+                    "output": "LayerNr_*/<MicFileText>.mic + *_consolidated.h5",
                 })
             elif pm.get("modality") == "pf":
                 recs.append({

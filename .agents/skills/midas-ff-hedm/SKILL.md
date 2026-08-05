@@ -289,13 +289,25 @@ Do NOT skip this. The gate is enforced by APEXA's Analysis agent (`use_planning=
 
 ## Workflow integration
 
-Typical APEXA session for FF-HEDM:
+Typical APEXA session for FF-HEDM (FF Handbook order):
 
 1. **Calibrate** — `midas_auto_calibrate` → produces `refined_MIDAS_params_CeO2.txt`
 2. **Integrate** — `midas_integrate_2d_to_1d` → produces `*_lineout.xy`, `*_caked.hdf.zarr.zip`
-3. **Reconstruct** — `run_ff_hedm_full_workflow` → produces `IndexBest.bin`, `OrientPosFit.bin`
-4. **Compare** — `read_grains_summary` → compare to `GrainsSim.csv` ground truth
-5. **Visualize** — `run_midas_viewer(viewer="plotGrains3d", data_file="<result_dir>")` (3D grain map → HTML), or `plotFFSpots3dGrains` for spots-by-grain. See [[midas-visualize]].
+3. **Ring thresholds** — `calibrate_ring_thresholds(zarr_file=<...>.MIDAS.zip)` → paste-ready
+   `RingThresh` lines from the data (FF §6b). Set these in the parameter file BEFORE
+   reconstructing — never copy RingThresh from a template (→ 0 peaks). Also run
+   `diagnose_parameter_file` and read its `handbook_traps` list (SkipFrame, dark loc,
+   MinPeakSNR, Rsample-as-bound, calibrant lattice, ω-sign).
+4. **Reconstruct** — `run_ff_hedm_full_workflow` (default `process_grains=True`). Use
+   `refine_backend="c-omp"` to produce `LayerNr_<N>/Grains.csv` +
+   `processgrains_diagnostics.h5` (FF §8); the python refiner only yields
+   `IndexBest.bin` (see backend bug note above). Check `report_ready` in the result.
+5. **Report** — `generate_ff_reconstruction_report(run_dir="<result>/LayerNr_1")` →
+   self-contained `report.html` (FF §9). Needs `Grains.csv`; the diagnostics H5 adds
+   spot-residual plates.
+6. **Compare / visualize** — `read_grains_summary`; then
+   `run_midas_viewer(viewer="plotGrains3d", data_file="<result_dir>")` (3D grain map →
+   HTML), or `plotFFSpots3dGrains` for spots-by-grain. See [[midas-visualize]].
 
 ---
 
