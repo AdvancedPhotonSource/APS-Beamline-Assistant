@@ -5133,6 +5133,32 @@ print("APEXA_V2_RESULT="+json.dumps(out))
             dark_path = Path(dark_file).expanduser().absolute()
             if dark_path.exists():
                 cmd.extend(["-darkFN", str(dark_path)])
+                # AutoCalibrateZarr reads a SEPARATE dark .h5 at `dark_loc or
+                # 'exchange/dark'` with NO existence guard
+                # (read_image_for_estimation line 768) → a hard KeyError crash
+                # when the dark file stores its frames elsewhere. GE5 darks keep
+                # the real dark at exchange/data and have no exchange/dark, and
+                # exchange/data_dark is an all-zero placeholder — so the default
+                # both crashes AND (if it existed) would subtract nothing. Probe
+                # the dark file for the dataset that actually holds nonzero counts
+                # and pass it as -darkLoc so the read targets real dark data.
+                if dark_path.suffix.lower() in (".h5", ".hdf5", ".hdf", ".nxs"):
+                    _dkloc, _dkmean = _probe_dark_dataset(
+                        dark_path, data_location=(data_loc or None))
+                    if _dkmean is not None:   # a real, readable dataset was found
+                        _dkloc = _dkloc.lstrip("/")
+                        cmd.extend(["-darkLoc", _dkloc])
+                        print(f"✓ Dark dataset resolved in dark file: {_dkloc} "
+                              f"(mean {_dkmean:.0f})", file=sys.stderr)
+                        if _dkmean == 0.0:
+                            print("  ⚠ chosen dark dataset reads all-zero — dark "
+                                  "subtraction will be a no-op and rings may be "
+                                  "too weak to fit. Verify the dark file.",
+                                  file=sys.stderr)
+                    else:
+                        print("  ⚠ could not read any dark dataset from the dark "
+                              "file; leaving -darkLoc unset (AutoCalibrateZarr "
+                              "defaults to exchange/dark).", file=sys.stderr)
 
         if lsd_guess < 1000000:  # User provided a real guess (not the auto sentinel)
             # Unit guard: Lsd is µm here, but callers routinely pass mm (e.g. 895
