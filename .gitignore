@@ -77,6 +77,26 @@ knowledge_base/chroma_db/
 !knowledge_base/*.py
 !knowledge_base/README.md
 
+# Knowledge Base - ship the open MIDAS reference docs (public, from the MIDAS repo)
+# so the RAG KB source travels with a fresh checkout. The logbooks/*.md blanket
+# ignore above still protects the drop-zone for any proprietary beamtime notes an
+# operator adds. Add a line here when a new open MIDAS doc is added to the KB.
+!knowledge_base/logbooks/FF_HEDM_Handbook.md
+!knowledge_base/logbooks/FF_HEDM_Lab_Notebook.md
+!knowledge_base/logbooks/NF_HEDM_Handbook.md
+!knowledge_base/logbooks/NF_HEDM_Lab_Notebook.md
+!knowledge_base/logbooks/Reconstruction_Reports.md
+!knowledge_base/logbooks/FF_Analysis.md
+!knowledge_base/logbooks/FF_Interactive_Plotting.md
+!knowledge_base/logbooks/FF_autocalibrate.md
+!knowledge_base/logbooks/FF_dual_datasets.md
+!knowledge_base/logbooks/ForwardSimulationManual.md
+!knowledge_base/logbooks/MIDAS_RADINT.md
+!knowledge_base/logbooks/NF_Analysis.md
+!knowledge_base/logbooks/NF_calibration.md
+!knowledge_base/logbooks/NF_gui.md
+!knowledge_base/logbooks/PF_Analysis.md
+
 # Compiled files
 *.pyc
 *.pyo
