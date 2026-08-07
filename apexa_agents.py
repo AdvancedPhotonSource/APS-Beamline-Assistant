@@ -151,10 +151,11 @@ def _native_tools_enabled(model: str = "") -> bool:
 
     Policy (Aug-2026 Argo docs: /chat tool calling functional for all vendors):
     - ``APEXA_NATIVE_TOOLS`` set to a truthy value (1/true/yes/on) → ON for ANY
-      model (explicit opt-in, incl. the still-unverified Gemini path).
+      model (explicit opt-in).
     - set to a falsy value (0/false/no/off) → OFF for all models (escape hatch).
-    - unset (DEFAULT) → ON for claude* and gpt*/gpto* (documented + reliable);
-      OFF for gemini* and unknown models until their response shape is verified.
+    - unset (DEFAULT) → ON for claude*, gpt*/gpto*, and gemini* (the three Argo
+      vendor families with documented /chat tool calling); OFF for unknown
+      models until their response shape is verified.
 
     A request that carries ``tools`` and is rejected with a 400/422 falls back
     automatically to the text path (see ArgoProvider.chat), so defaulting ON is
@@ -165,8 +166,12 @@ def _native_tools_enabled(model: str = "") -> bool:
         return True
     if raw in {"0", "false", "no", "off"}:
         return False
-    # Unset → default-on for the verified vendors only.
-    return model.startswith("claude") or model.startswith("gpt")
+    # Unset → default-on for the three known Argo vendor families.
+    return (
+        model.startswith("claude")
+        or model.startswith("gpt")
+        or model.startswith("gemini")
+    )
 
 
 # ── Data Types ──────────────────────────────────────────────────────────────
@@ -303,8 +308,9 @@ class ArgoProvider:
             return out
         if model.startswith("gemini"):
             # Gemini function declarations; Argo wraps these into Google
-            # Function/Tool objects. (Best-effort per the doc — unverified;
-            # claude* is the primary target.)
+            # Function/Tool objects. Default-on alongside claude/OpenAI; the
+            # 400/422 auto-fallback in chat() covers any schema mismatch that a
+            # live smoke test hasn't yet confirmed.
             out = []
             for t in tools:
                 fn = t.get("function", t)
@@ -3158,6 +3164,9 @@ class OrchestratorAgent:
             "calibrated file", "calibrated data", "calibrated image",
             "recommend", "suggest", "advise", "what should i", "what can you do",
             "my options", "what are my options", "capabilit", "what tools",
+            # Remote execution — run analysis on the host where the data lives
+            # (run_remote_command); e.g. "ssh copland and run ...", "on copland".
+            "ssh", "remote", "copland", "run remotely", "on the remote",
         },
         "knowledge": {
             "explain", "what is", "what's", "what are", "whats",
