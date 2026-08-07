@@ -6043,11 +6043,30 @@ _knowledge_base = None
 _materials_db = None
 _typical_params = None
 
+def _apply_offline_hf_env() -> bool:
+    """Force HuggingFace fully offline when APEXA offline mode is requested, so the
+    embedder loads ONLY from the local cache and never reaches the network.
+
+    This is the hard requirement for air-gapped beamline machines: the embed model
+    must already be pre-staged in ~/.cache/huggingface, and with these flags set a
+    missing-network machine loads it from cache instead of hanging/failing on an HF
+    HEAD request. Enable with APEXA_OFFLINE=1 (or set HF_HUB_OFFLINE=1 directly).
+    Idempotent; safe to call before every model load. Returns True if offline."""
+    truthy = ("1", "true", "yes", "on")
+    if (os.environ.get("APEXA_OFFLINE", "").lower() in truthy
+            or os.environ.get("HF_HUB_OFFLINE", "").lower() in truthy):
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        os.environ["TRANSFORMERS_OFFLINE"] = "1"
+        return True
+    return False
+
+
 def get_knowledge_base():
     """Get or initialize the knowledge base (RAG with ChromaDB)"""
     global _knowledge_base
     if _knowledge_base is None:
         try:
+            offline = _apply_offline_hf_env()  # must run before SentenceTransformer import
             import chromadb
             from sentence_transformers import SentenceTransformer
             from pathlib import Path
@@ -6058,10 +6077,21 @@ def get_knowledge_base():
             if chroma_path.exists():
                 model_name = os.environ.get("APEXA_EMBED_MODEL",
                                             "nomic-ai/nomic-embed-text-v1.5")
+                st_kwargs = {"trust_remote_code": True}
+                if offline:
+                    st_kwargs["local_files_only"] = True
+                try:
+                    embedder = SentenceTransformer(model_name, **st_kwargs)
+                except TypeError:
+                    # older sentence-transformers lacks local_files_only kwarg;
+                    # the env vars above still force offline loading.
+                    st_kwargs.pop("local_files_only", None)
+                    embedder = SentenceTransformer(model_name, **st_kwargs)
                 _knowledge_base = {
                     "client": chromadb.PersistentClient(path=str(chroma_path)),
-                    "embedder": SentenceTransformer(model_name, trust_remote_code=True),
+                    "embedder": embedder,
                     "model_name": model_name,
+                    "offline": offline,
                     "available": True
                 }
             else:
@@ -10158,7 +10188,7 @@ async def run_ff_pipeline(
     detectors: str = None,
     layers: str = "1-1",
     n_cpus: int = 16,
-    device: str = "cuda",
+    device: str = "auto",
     dtype: str = "auto",
     resume: str = "auto",
     resume_from: str = None,
@@ -10197,7 +10227,11 @@ async def run_ff_pipeline(
         detectors: Detector spec (e.g. "1" or "1,2,3,4" for Hydra).
         layers: Layer range, e.g. "1-1" or "1-3".
         n_cpus: CPU thread count for non-GPU stages.
-        device: "cuda" | "cpu" | "mps".
+        device: "auto" (default) | "cuda" | "cpu" | "mps". "auto" resolves to
+            "cuda" only when a real CUDA GPU is present, else "cpu" — never
+            "mps" here (this pipeline uses float64, which MPS can't do, so mps
+            would fail at the first torch stage). Do NOT default to "cuda":
+            CPU-only beamline hosts have no CUDA and the pipeline aborts.
         dtype: "auto" | "float32" | "float64".
         resume: Resume policy — "none" | "auto" | "from".
         resume_from: Stage to resume from when resume="from".
@@ -10216,6 +10250,15 @@ async def run_ff_pipeline(
         generate_h5: Emit consolidated HDF5 output.
         extra_args: Any additional argv to forward verbatim (advanced).
     """
+    # Resolve device="auto" to a concrete backend the host actually has. Resolve
+    # here (not by passing "auto" to the CLI, which may not accept it) so the
+    # choice is logged and never silently defaults to cuda on a CPU-only host.
+    if str(device).lower() == "auto":
+        accel, name = _local_accelerator()
+        device = "cuda" if (accel and name == "cuda") else "cpu"
+        print(f"[FF-pipeline] device=auto → resolved to '{device}' "
+              f"(local accelerator: {name})", file=sys.stderr)
+
     args = ["run", "--params", params, "--result", result, "--layers", layers,
             "--n-cpus", n_cpus, "--device", device, "--dtype", dtype,
             "--resume", resume, "--solver", solver, "--loss", loss,

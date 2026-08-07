@@ -36,6 +36,33 @@ import os as _os
 # Override via env: APEXA_EMBED_MODEL=nvidia/llama-embed-nemotron-8b uv run ...
 EMBED_MODEL = _os.environ.get("APEXA_EMBED_MODEL", "nomic-ai/nomic-embed-text-v1.5")
 
+
+def _apply_offline_hf_env() -> bool:
+    """Force HuggingFace offline when APEXA offline mode is requested, so the embed
+    model loads only from the local cache — needed to re-index on an air-gapped
+    beamline machine where the model is pre-staged but there's no network. Enable
+    with APEXA_OFFLINE=1 (or HF_HUB_OFFLINE=1). Returns True if offline."""
+    truthy = ("1", "true", "yes", "on")
+    if (_os.environ.get("APEXA_OFFLINE", "").lower() in truthy
+            or _os.environ.get("HF_HUB_OFFLINE", "").lower() in truthy):
+        _os.environ["HF_HUB_OFFLINE"] = "1"
+        _os.environ["TRANSFORMERS_OFFLINE"] = "1"
+        return True
+    return False
+
+
+def _load_embedder():
+    """Construct the SentenceTransformer, honoring APEXA offline mode."""
+    offline = _apply_offline_hf_env()
+    kwargs = {"trust_remote_code": True}
+    if offline:
+        kwargs["local_files_only"] = True
+    try:
+        return SentenceTransformer(EMBED_MODEL, **kwargs)
+    except TypeError:
+        kwargs.pop("local_files_only", None)
+        return SentenceTransformer(EMBED_MODEL, **kwargs)
+
 # Per-model task prefixes. Nomic requires explicit task tags; most other models
 # (Nemotron, BGE-M3, E5 in symmetric mode) don't. When in doubt, add an entry here.
 EMBED_PREFIXES = {
@@ -364,7 +391,7 @@ def index_documents(kb_path: Path, collection_name: str = "hedm_knowledge"):
     print("\U0001f680 Starting knowledge base indexing...")
     print()
     print(f"\U0001f4e6 Loading embedding model ({EMBED_MODEL})...")
-    embedder = SentenceTransformer(EMBED_MODEL, trust_remote_code=True)
+    embedder = _load_embedder()
     print("   ✓ Model loaded")
 
     chroma_path = kb_path / "chroma_db"
@@ -449,7 +476,7 @@ def test_query(kb_path: Path, query: str = "How does MIDAS index grains?"):
         return
     print()
     print(f"\U0001f50d Test query: '{query}'")
-    embedder = SentenceTransformer(EMBED_MODEL, trust_remote_code=True)
+    embedder = _load_embedder()
     client = chromadb.PersistentClient(path=str(kb_path / "chroma_db"))
     try:
         collection = client.get_collection(name="hedm_knowledge")

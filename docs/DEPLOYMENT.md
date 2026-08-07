@@ -42,6 +42,10 @@ Smoke-test in the foreground before daemonizing:
 # → open http://<machine>:8001 in a browser, run one query, Ctrl+C
 ```
 
+> **Air-gapped / no-internet machine?** The RAG knowledge base needs its ~523 MB
+> embedding model pre-staged, and off-machine data must be mounted/staged locally.
+> See [`OFFLINE_DEPLOYMENT.md`](OFFLINE_DEPLOYMENT.md).
+
 ---
 
 ## Install — systemd user service (recommended)

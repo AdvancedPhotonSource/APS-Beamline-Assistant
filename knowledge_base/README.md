@@ -15,20 +15,24 @@ Citation-aware retrieval that backs the `KnowledgeAgent` and the
 | `logbooks/*.md` (the 15 open MIDAS docs) | ✅ | FF/NF handbooks + lab notebooks, `Reconstruction_Reports`, and the analysis/calibration docs — un-ignored explicitly in `.gitignore` |
 | `logbooks/*.txt`, other `logbooks/*.md` | ❌ | drop-zone for **private** beamtime notes — gitignored by default |
 | `papers/*.pdf`, `books/*.pdf` | ❌ | copyrighted / large |
-| `chroma_db/` | ❌ | the built index — **rebuilt on deploy** (see below) |
+| `chroma_db/` | ✅ | the **prebuilt index (~15 MB) ships in git** — ready to query on checkout, no re-index needed. Only the active segment + `chroma.sqlite3` are tracked. |
 
-## Deploy step (run once per machine, after `git pull`)
+## Deploy step (after `git pull`)
 
-The index (`chroma_db/`) is not committed, so build it after checkout:
+The prebuilt index now ships in git, so **online machines need no deploy step** —
+the RAG works on checkout (first query downloads + caches the ~523 MB Nomic model).
+
+**Re-index only when you change a source document:**
 
 ```bash
-uv run python knowledge_base/index_knowledge.py
+uv run python knowledge_base/index_knowledge.py   # then commit the updated chroma_db/
 ```
 
-First run downloads the Nomic embedding model (~once, cached) and embeds all
-`papers/` + `logbooks/` + `books/` content — a few minutes on CPU. Re-run it any
-time you add or change a source document. On success it prints
-`Indexing complete` and writes `data/index_stats.json`.
+On success it prints `Indexing complete` and writes `data/index_stats.json`.
+
+**Air-gapped / no-internet machine:** the embedding model must be pre-staged and
+`APEXA_OFFLINE=1` set (both index- and query-time load only from the local cache).
+See [`../docs/OFFLINE_DEPLOYMENT.md`](../docs/OFFLINE_DEPLOYMENT.md).
 
 To use a different embedding model, set `APEXA_EMBED_MODEL` before indexing **and**
 at query time (both must match, or retrieval returns garbage):

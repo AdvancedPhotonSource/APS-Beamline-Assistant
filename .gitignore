@@ -70,7 +70,11 @@ knowledge_base/papers/*.pdf
 knowledge_base/logbooks/*.txt
 knowledge_base/logbooks/*.md
 knowledge_base/books/*.pdf
-knowledge_base/chroma_db/
+# NOTE: knowledge_base/chroma_db/ is intentionally NOT ignored — the prebuilt
+# index (~15 MB) ships in git so an air-gapped beamline machine has a working RAG
+# on checkout with no re-index step. (.DS_Store inside it is still caught by the
+# global macOS rule above.) Re-emit + recommit after changing any source doc:
+#   uv run python knowledge_base/index_knowledge.py
 
 # Knowledge Base - Keep tracked files
 !knowledge_base/data/*.json
