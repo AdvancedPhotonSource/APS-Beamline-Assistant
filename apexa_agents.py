@@ -141,18 +141,32 @@ DEV_URL  = "https://apps-dev.inside.anl.gov/argoapi/api/v1/resource/chat/"
 DEV_ONLY_MODELS: set = set()
 
 
-def _native_tools_enabled() -> bool:
-    """Opt-in flag for native Argo /chat/ tool calling (APEXA_NATIVE_TOOLS).
+def _native_tools_enabled(model: str = "") -> bool:
+    """Whether native Argo /chat/ tool calling is active for ``model``.
 
     When ON, ArgoProvider passes a per-vendor ``tools`` array in the payload and
     the model returns structured ``tool_calls`` that AgentRunner's Mode 1
-    executes directly. When OFF (default), behaviour is byte-for-byte the
-    existing text-based TOOL_CALL:/ARGUMENTS: path. See the Aug-2026 Argo docs:
-    /chat tool calling is now functional for all vendors.
+    executes directly. When OFF, behaviour is byte-for-byte the existing
+    text-based TOOL_CALL:/ARGUMENTS: path.
+
+    Policy (Aug-2026 Argo docs: /chat tool calling functional for all vendors):
+    - ``APEXA_NATIVE_TOOLS`` set to a truthy value (1/true/yes/on) → ON for ANY
+      model (explicit opt-in, incl. the still-unverified Gemini path).
+    - set to a falsy value (0/false/no/off) → OFF for all models (escape hatch).
+    - unset (DEFAULT) → ON for claude* and gpt*/gpto* (documented + reliable);
+      OFF for gemini* and unknown models until their response shape is verified.
+
+    A request that carries ``tools`` and is rejected with a 400/422 falls back
+    automatically to the text path (see ArgoProvider.chat), so defaulting ON is
+    safe even before a live smoke test.
     """
-    return os.environ.get("APEXA_NATIVE_TOOLS", "").strip().lower() in {
-        "1", "true", "yes", "on",
-    }
+    raw = os.environ.get("APEXA_NATIVE_TOOLS", "").strip().lower()
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    # Unset → default-on for the verified vendors only.
+    return model.startswith("claude") or model.startswith("gpt")
 
 
 # ── Data Types ──────────────────────────────────────────────────────────────
@@ -262,7 +276,7 @@ class ArgoProvider:
         # older "Argo strips native tool_calls" assumption no longer holds. When
         # the flag is OFF we omit tools entirely, so the payload is byte-for-byte
         # the text-based path and the model uses TOOL_CALL: / ARGUMENTS: format.
-        if tools and _native_tools_enabled():
+        if tools and _native_tools_enabled(self.model):
             payload["tools"] = self._to_vendor_tools(tools)
 
         return payload
@@ -424,6 +438,21 @@ class ArgoProvider:
                         prompt_tok=prompt_tok, n_messages=n_messages,
                         temperature=temperature, error=f"retry_{status}"))
                     await asyncio.sleep(wait)
+                    continue
+                # Native-tools safety net: if the gateway rejects a payload that
+                # carries `tools` (400/422 — e.g. an unexpected per-vendor schema
+                # or a model that doesn't accept tools), drop `tools` and retry
+                # once on the text path instead of hard-failing. This makes
+                # default-on native tool calling safe: worst case it degrades to
+                # the existing TOOL_CALL:/ARGUMENTS: behaviour.
+                if status in (400, 422) and "tools" in payload:
+                    print(f"  \033[33m⚠ Argo {status} with tools — retrying without native "
+                          f"tools (falling back to text path)\033[0m", file=sys.stderr)
+                    log_llm_call(self._timing_record(
+                        attempt=attempt, status=status, elapsed=elapsed,
+                        prompt_tok=prompt_tok, n_messages=n_messages,
+                        temperature=temperature, error=f"tools_reject_{status}"))
+                    payload.pop("tools", None)
                     continue
                 if status != 200:
                     print(f"  Argo API error ({status}): {response.text[:500]}", file=sys.stderr)
@@ -2049,7 +2078,7 @@ class AgentRunner:
 
     def _assistant_message(self, resp: AgentResponse, model: str) -> Dict:
         """Format assistant message (with tool calls) for conversation history."""
-        if _native_tools_enabled():
+        if _native_tools_enabled(model):
             # Native /chat path: feed the assistant's tool intent back as a flat
             # STRING so the payload sanitizer (which json-dumps non-string
             # content) can't corrupt it, and Argo's undocumented follow-up-turn
@@ -2092,7 +2121,7 @@ class AgentRunner:
     def _tool_result_message(self, tc: ToolCall, result: str,
                              model: str) -> Dict:
         """Format tool result for next API call (model-specific)."""
-        if _native_tools_enabled():
+        if _native_tools_enabled(model):
             # Native /chat path: flat-text user turn for ALL vendors — survives
             # the payload sanitizer and matches the flat-text assistant turn
             # above. (Argo /chat flattens everything to {role, content:str}.)
