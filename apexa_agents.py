@@ -140,6 +140,21 @@ DEV_URL  = "https://apps-dev.inside.anl.gov/argoapi/api/v1/resource/chat/"
 # Models that require the DEV endpoint (add new beta models here)
 DEV_ONLY_MODELS: set = set()
 
+
+def _native_tools_enabled() -> bool:
+    """Opt-in flag for native Argo /chat/ tool calling (APEXA_NATIVE_TOOLS).
+
+    When ON, ArgoProvider passes a per-vendor ``tools`` array in the payload and
+    the model returns structured ``tool_calls`` that AgentRunner's Mode 1
+    executes directly. When OFF (default), behaviour is byte-for-byte the
+    existing text-based TOOL_CALL:/ARGUMENTS: path. See the Aug-2026 Argo docs:
+    /chat tool calling is now functional for all vendors.
+    """
+    return os.environ.get("APEXA_NATIVE_TOOLS", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
 # ── Data Types ──────────────────────────────────────────────────────────────
 
 @dataclass
@@ -178,7 +193,8 @@ class ArgoProvider:
     # ── Payload builder ─────────────────────────────────────────────────────
 
     def _build_payload(self, messages: List[Dict],
-                       temperature: float) -> Dict:
+                       temperature: float,
+                       tools: Optional[List[Dict]] = None) -> Dict:
         # Sanitize messages: Argo needs role + STRING content on every turn. A
         # message with content=None or a non-string (a stray tool_calls-only
         # assistant turn, a bad restored-session entry) can make the gateway return
@@ -241,20 +257,66 @@ class ArgoProvider:
         else:
             payload["max_completion_tokens"] = 16000
 
-        # NOTE: Do NOT pass tools in the API payload.
-        # Argo Gateway returns string responses (not dict) which strips
-        # native tool_calls. Tools are listed in the system prompt instead,
-        # and the model uses TOOL_CALL: / ARGUMENTS: text format.
+        # Native tool calling (opt-in via APEXA_NATIVE_TOOLS). The Aug-2026 Argo
+        # docs confirm /chat tool calling is now functional for ALL vendors — the
+        # older "Argo strips native tool_calls" assumption no longer holds. When
+        # the flag is OFF we omit tools entirely, so the payload is byte-for-byte
+        # the text-based path and the model uses TOOL_CALL: / ARGUMENTS: format.
+        if tools and _native_tools_enabled():
+            payload["tools"] = self._to_vendor_tools(tools)
 
         return payload
+
+    def _to_vendor_tools(self, tools: List[Dict]) -> List[Dict]:
+        """Convert APEXA's internal OpenAI-format tool defs into the per-vendor
+        tool schema the active model requires (each Argo LLM vendor wants its own
+        shape; the caller must format them — see the Argo Tool Calling Templates).
+
+        Input entries look like:
+            {"type":"function","function":{"name","description","parameters":<jsonschema>}}
+        """
+        model = self.model
+        if model.startswith("claude"):
+            # Anthropic tool schema: flat {name, description, input_schema}.
+            out: List[Dict] = []
+            for t in tools:
+                fn = t.get("function", t)
+                out.append({
+                    "name":        fn.get("name", ""),
+                    "description": fn.get("description", ""),
+                    "input_schema": fn.get("parameters", {"type": "object"}),
+                })
+            return out
+        if model.startswith("gemini"):
+            # Gemini function declarations; Argo wraps these into Google
+            # Function/Tool objects. (Best-effort per the doc — unverified;
+            # claude* is the primary target.)
+            out = []
+            for t in tools:
+                fn = t.get("function", t)
+                out.append({
+                    "name":        fn.get("name", ""),
+                    "description": fn.get("description", ""),
+                    "parameters":  fn.get("parameters", {"type": "object"}),
+                })
+            return out
+        # OpenAI family (gpt*, gpto*, gpt55): already in the correct shape.
+        return tools
 
     # ── Response parsing ────────────────────────────────────────────────────
 
     @staticmethod
-    def _parse_tool_calls(raw: List[Dict]) -> List[ToolCall]:
+    def _parse_tool_calls(raw) -> List[ToolCall]:
         """Normalise per-provider native tool-call shapes into ToolCall. Static
         so both ArgoProvider (blocking /chat/) and StreamingAnthropicProvider
         (streaming /messages/) can share the parser."""
+        # Gemini returns tool_calls as a single DICT ({"id":null,"name","args"})
+        # rather than a list — the other vendors return a list. Normalise so the
+        # loop below never iterates dict keys and crashes on .get().
+        if isinstance(raw, dict):
+            raw = [raw]
+        if not raw:
+            return []
         calls: List[ToolCall] = []
         for i, tc in enumerate(raw):
             if "function" in tc:               # OpenAI format
@@ -327,8 +389,9 @@ class ArgoProvider:
     # ── Public API ──────────────────────────────────────────────────────────
 
     async def chat(self, messages: List[Dict],
-                   temperature: float = 0.7) -> AgentResponse:
-        payload  = self._build_payload(messages, temperature)
+                   temperature: float = 0.7,
+                   tools: Optional[List[Dict]] = None) -> AgentResponse:
+        payload  = self._build_payload(messages, temperature, tools)
         if os.environ.get("APEXA_DEBUG"):
             debug_payload = {k: v for k, v in payload.items() if k != "messages"}
             print(f"  [debug] Argo payload: {debug_payload}", file=sys.stderr)
@@ -511,7 +574,11 @@ class StreamingAnthropicProvider:
         return payload
 
     async def chat(self, messages: List[Dict],
-                   temperature: float = 0.7) -> AgentResponse:
+                   temperature: float = 0.7,
+                   tools: Optional[List[Dict]] = None) -> AgentResponse:
+        # tools is accepted for interface parity with ArgoProvider but IGNORED:
+        # the /streaming endpoint's tool calling works only for OpenAI models,
+        # and this provider is Claude-only (Aug-2026 Argo docs).
         payload    = self._build_payload(messages, temperature)
         prompt_est = count_message_tokens(payload.get("messages", []), self.model)
         n_messages = len(payload.get("messages", []))
@@ -1982,6 +2049,17 @@ class AgentRunner:
 
     def _assistant_message(self, resp: AgentResponse, model: str) -> Dict:
         """Format assistant message (with tool calls) for conversation history."""
+        if _native_tools_enabled():
+            # Native /chat path: feed the assistant's tool intent back as a flat
+            # STRING so the payload sanitizer (which json-dumps non-string
+            # content) can't corrupt it, and Argo's undocumented follow-up-turn
+            # format is sidestepped. Mirrors the _persist_buffer convention.
+            parts: List[str] = []
+            if resp.content:
+                parts.append(resp.content)
+            for tc in resp.tool_calls:
+                parts.append(f"TOOL_CALL: {tc.name}\nARGUMENTS: {json.dumps(tc.arguments)}")
+            return {"role": "assistant", "content": "\n".join(parts)}
         if model.startswith("claude"):
             blocks: List[Dict] = []
             if resp.content:
@@ -2014,6 +2092,14 @@ class AgentRunner:
     def _tool_result_message(self, tc: ToolCall, result: str,
                              model: str) -> Dict:
         """Format tool result for next API call (model-specific)."""
+        if _native_tools_enabled():
+            # Native /chat path: flat-text user turn for ALL vendors — survives
+            # the payload sanitizer and matches the flat-text assistant turn
+            # above. (Argo /chat flattens everything to {role, content:str}.)
+            return {
+                "role":    "user",
+                "content": f"[Tool Result for {tc.name}]\n{result}",
+            }
         if model.startswith("claude"):
             return {
                 "role": "user",
@@ -2293,7 +2379,10 @@ class AgentRunner:
         _empty_strikes = 0    # empty-response guard: model returned nothing this turn
 
         for _ in range(max_iterations):
-            response = await provider.chat(messages, agent.temperature)
+            # `tools` is passed unconditionally; ArgoProvider only attaches it to
+            # the payload when APEXA_NATIVE_TOOLS is set, so the OFF path is
+            # byte-for-byte identical to the text-based flow.
+            response = await provider.chat(messages, agent.temperature, tools=tools)
 
             # ── Mode 1: Native API tool_calls ──
             if response.tool_calls:
