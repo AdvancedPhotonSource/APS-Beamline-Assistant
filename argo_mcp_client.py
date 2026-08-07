@@ -2677,13 +2677,18 @@ class APEXAClient:
 
     async def cleanup(self):
         # Close each per-server stack (transport + ClientSession) first, then the
-        # shared stack. Suppress errors: a server whose tree we killed on abort is
-        # already gone, so its aclose() may raise.
+        # shared stack. Suppress Exception AND CancelledError: tearing down an mcp
+        # stdio_client cancels its internal anyio task group (blocked on the server
+        # subprocess's wait()), which surfaces as asyncio.CancelledError. That is a
+        # BaseException, so contextlib.suppress(Exception) alone would NOT catch it
+        # and it would escape as an ugly traceback on quit. A server whose process
+        # tree we already killed on abort may also raise from aclose().
         for name, stack in list(self._server_stacks.items()):
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(Exception, asyncio.CancelledError):
                 await stack.aclose()
         self._server_stacks.clear()
-        await self.exit_stack.aclose()
+        with contextlib.suppress(Exception, asyncio.CancelledError):
+            await self.exit_stack.aclose()
 
 async def main():
     import sys
