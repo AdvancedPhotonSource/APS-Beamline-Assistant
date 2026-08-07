@@ -86,12 +86,32 @@ retrieval returns garbage), pre-stage that model's cache the same way, and re-in
 
 ## 2. Data on another machine (e.g. `copland`)
 
-APEXA's tools operate **only on the local filesystem** — there is no remote-shell
-tool, by design (an agent that can SSH anywhere is a safety problem at a beamline).
-So APEXA cannot reach data sitting on `copland` (or any other host) directly.
+There are two ways to work with data that lives on another host (e.g. data on
+`copland` while APEXA runs on `chiltepin`):
 
-To process remote data today, make it appear as a **local path**, then point APEXA
-at that path:
+### Run analysis remotely over SSH — `run_remote_command` (recommended for copland)
+
+APEXA can run commands **on the remote host where the data already is**, via the
+`run_remote_command` core tool — no copy needed:
+
+```
+ssh copland 'cd /gdata/dm/1ID/2026/pokharel_jul26 && ff_MIDAS.py -paramFile ff.txt'
+```
+
+- Set `APEXA_ANALYSIS_HOST=copland` in `.env` (or pass `host=` per call).
+- **Requires key-based SSH** from the APEXA host: `ssh-copy-id copland`, then
+  confirm `ssh copland true` returns with no password prompt. APEXA runs
+  non-interactively, so a password prompt fails fast (rc=255) with a hint rather
+  than hanging.
+- Runs through a remote **login shell** so the remote MIDAS env is sourced; the
+  same command allowlist as local `run_command` applies.
+- NOTE: the 53 *typed* MIDAS tools still execute on the local host — this tool is
+  the agent driving the MIDAS CLI directly on the remote host.
+
+### Or make the data local — mount / stage
+
+To use the typed MIDAS tools against remote data, make it appear as a **local
+path**, then point APEXA at that path:
 
 **Option A — mount it (preferred; no copy, no extra disk):**
 ```bash

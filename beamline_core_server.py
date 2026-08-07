@@ -950,6 +950,109 @@ async def run_command(command: str, working_dir: str = None, timeout: int = 120)
         return format_result({"error": f"Error executing command: {str(e)}"})
 
 @mcp.tool()
+async def run_remote_command(command: str, host: str = "", remote_dir: str = None,
+                             timeout: int = 600) -> str:
+    """Execute a shell command on a REMOTE analysis host over SSH.
+
+    Like run_command, but the command runs on another machine — for running
+    analysis where the beamline data already lives (e.g. `copland`), instead of
+    copying the data to this machine. The command is executed through a remote
+    LOGIN shell (`bash -lc`), so the remote user's PATH/profile is sourced and
+    MIDAS executables resolve exactly as they would in an interactive session
+    there.
+
+    SSH MUST BE KEY-BASED. This runs non-interactively (BatchMode=yes); a
+    password prompt would hang, so instead it fails fast (return_code 255) with
+    an actionable error. Set up once with `ssh-copy-id <user>@<host>`.
+
+    The same allowlist as run_command is applied to `command` before it is sent,
+    so bash/python/MIDAS binaries/ls/rsync/grep/… are permitted and unknown
+    executables are refused — the guardrail travels with the command to the
+    remote host.
+
+    Args:
+        command: Shell command to run on the remote host. Full bash syntax
+                 supported (pipes, &&, redirects). Examples:
+                   "ls -la /gdata/dm/1ID/2026/pokharel_jul26/data/ge5"
+                   "cd /gdata/.../pokharel_jul26 && ff_MIDAS.py -paramFile ff.txt"
+                   "nproc && df -h /gdata"
+        host: Remote host, e.g. "copland" or "user@copland". Defaults to
+              $APEXA_ANALYSIS_HOST, else "copland".
+        remote_dir: Directory to `cd` into on the remote host before running.
+        timeout: Max seconds (default 600; remote analysis can be long).
+
+    Returns:
+        JSON with stdout, stderr, return_code, success, host, command.
+    """
+    try:
+        target = host or os.environ.get("APEXA_ANALYSIS_HOST", "copland")
+
+        if not is_command_allowed(command):
+            blocked = _get_blocked_commands(command)
+            return format_result({
+                "error": f"Command not allowed: {', '.join(blocked) if blocked else command.split()[0]}",
+                "detail": "Every executable in the remote command must be in the allowed list.",
+                "allowed_commands": "Use check_environment to see allowed commands"
+            })
+
+        # Build the remote script: optional cd, then the command, run in a login
+        # shell so the remote PATH/MIDAS env is sourced. shlex.quote keeps the
+        # whole thing a single safe argv element for the LOCAL ssh invocation.
+        inner = f"cd {shlex.quote(remote_dir)} && {command}" if remote_dir else command
+        remote_exec = f"bash -lc {shlex.quote(inner)}"
+
+        ssh_cmd = [
+            "ssh",
+            "-o", "BatchMode=yes",            # never prompt — fail instead of hang
+            "-o", "ConnectTimeout=10",
+            "-o", "StrictHostKeyChecking=accept-new",
+            target,
+            remote_exec,
+        ]
+
+        result = subprocess.run(
+            ssh_cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+
+        # ssh exit 255 = ssh-layer failure (auth/connectivity), not the remote
+        # command's own exit code. Classify it so the agent gets an actionable
+        # message instead of a bare non-zero.
+        if result.returncode == 255:
+            return format_result({
+                "tool": "run_remote_command",
+                "host": target,
+                "command": command,
+                "return_code": 255,
+                "stderr": result.stderr,
+                "success": False,
+                "error": f"SSH to '{target}' failed (auth or connectivity). "
+                         f"This runs non-interactively — set up key-based SSH: "
+                         f"`ssh-copy-id {target}` and confirm `ssh {target} true` "
+                         f"works with no password prompt.",
+            })
+
+        return format_result({
+            "tool": "run_remote_command",
+            "host": target,
+            "command": command,
+            "remote_dir": remote_dir,
+            "return_code": result.returncode,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "success": result.returncode == 0,
+        })
+
+    except subprocess.TimeoutExpired:
+        return format_result({
+            "error": f"Remote command timed out after {timeout} seconds on '{host or os.environ.get('APEXA_ANALYSIS_HOST', 'copland')}'"
+        })
+    except Exception as e:
+        return format_result({"error": f"Error executing remote command: {str(e)}"})
+
+@mcp.tool()
 async def check_environment() -> str:
     """Check system environment and available tools.
 
