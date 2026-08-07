@@ -714,8 +714,9 @@ class ProactiveSuggestions:
                 return ProactiveSuggestions.suggest_after_phase_id(["phase"])
 
         elif "detect_diffraction_rings" in tool_name:
-            # Try to extract number of rings
-            import re
+            # Try to extract number of rings (uses module-level `re`; a local
+            # `import re` here would make `re` function-local for the WHOLE method
+            # and leave the run_ff_hedm branch below with an unbound `re`).
             match = re.search(r'(\d+)\s+rings?', result.lower())
             num_rings = int(match.group(1)) if match else 5
             return ProactiveSuggestions.suggest_after_ring_detection(num_rings)
