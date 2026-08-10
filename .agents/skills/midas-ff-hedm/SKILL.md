@@ -287,6 +287,26 @@ Do NOT skip this. The gate is enforced by APEXA's Analysis agent (`use_planning=
 
 ---
 
+## Parameter pitfalls — silent-corruption traps
+
+These write no error and often exit 0, but silently corrupt the run. The
+deterministic linter (`diagnose_parameter_file` → `handbook_traps`, and the
+pre-dispatch gate inside `run_ff_hedm_full_workflow`) enforces the unambiguous
+ones — a `⛔ error` trap BLOCKS the run until fixed. Know them anyway; set the
+values right the first time.
+
+| Parameter | Trap | Correct |
+|---|---|---|
+| **Width** | Ring half-width is in **µm** (default **1500**). Entering pixels (e.g. `Width 7.5`) makes a ~0.04 px band that rejects nearly every peak → empty `InputAll.csv` → aborted run. **⛔ blocks.** | ~1500 µm (7.5 px × 200 µm/px). *FF Parameters Reference* |
+| **MarginRadius** | Also **µm** (default **500**). Same px-for-µm mistake. **⛔ blocks.** | ~500 µm. *FF Parameters Reference* |
+| **LatticeConstant + SpaceGroup** | Left as the **calibrant's** on a sample run — "the single most common copy-paste error." CeO₂ 5.4116 → the indexer looks for the wrong rings. | Replace with the **sample's**: e.g. gold 4.0782 (both SG 225). *FF §6* |
+| **ImTransOpt** | Must **match the calibration**. A mismatch flips/transposes the detector frame → peaks land on the wrong rings. | Copy ImTransOpt from the calibration param file verbatim. *FF §6* |
+| **RingThresh** | Copied from a **template** instead of the data → 0 peaks. | Run `calibrate_ring_thresholds` on the zarr, paste the per-ring values. *FF §6b* |
+| **darkLoc / darkDataset** | A standalone dark `.h5` stores its frame at **`exchange/data`**; the integrator default `exchange/dark` reads nothing → all-zero dark → threshold-invariant 0-peak output. | Set BOTH to `exchange/data`. *FF §3d* |
+| **OmegaStart / ω-sign** | Wrong sign silently mirrors orientations. | `-1` for an aero stage; confirm against the scan direction. *FF §2* |
+
+---
+
 ## Workflow integration
 
 Typical APEXA session for FF-HEDM (FF Handbook order):

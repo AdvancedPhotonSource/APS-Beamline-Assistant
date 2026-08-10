@@ -66,6 +66,13 @@ run_ff_hedm_full_workflow(
 - **Before the run (FF §6b):** `calibrate_ring_thresholds(zarr_file=<...>.MIDAS.zip)`
   → data-derived `RingThresh` (never copy from a template). Read
   `diagnose_parameter_file` → `handbook_traps` for the silent-corruption checklist.
+- **Silent-corruption traps (full table in [[midas-ff-hedm]]):** `Width` and
+  `MarginRadius` are in **µm** (defaults 1500 / 500 — never pixels; the px-for-µm
+  mistake `Width 7.5` → empty `InputAll.csv`); `LatticeConstant`+`SpaceGroup` must
+  be the **sample's**, not the calibrant's; `ImTransOpt` must match the calibration;
+  a standalone dark `.h5` frame lives at `exchange/data`. The µm unit errors are
+  **⛔ hard-blocked** before dispatch — override with `ignore_handbook_traps=True`
+  only after review.
 - **After the run (FF §9):** `generate_ff_reconstruction_report(run_dir=<...>/LayerNr_1)`
   → self-contained `report.html` (needs `Grains.csv`).
 

@@ -656,6 +656,7 @@ async def run_ff_hedm_full_workflow(
     grains_seed_file: str = "",
     detectors_json: str = "",
     process_grains: bool = True,
+    ignore_handbook_traps: bool = False,
 ) -> str:
     """Run complete FF-HEDM grain reconstruction using midas-pipeline.
 
@@ -705,6 +706,13 @@ async def run_ff_hedm_full_workflow(
                         0.6.0), so process_grains is auto-skipped for python and
                         the grain count comes from IndexBest.bin — re-run with
                         c-omp to get Grains.csv + the reconstruction report.
+        ignore_handbook_traps: Override the pre-dispatch handbook lint. By default
+                        the run is BLOCKED if the parameter file has an unambiguous
+                        unit/parameter error (e.g. Width/MarginRadius entered in
+                        pixels instead of µm → empty InputAll.csv). Set True only
+                        after reviewing the reported `handbook_traps` and confirming
+                        the values are intentional. Softer `warning`/`info` traps
+                        never block regardless of this flag.
 
     Returns:
         JSON with status, layer-by-layer grain counts, output file paths
@@ -765,6 +773,36 @@ async def run_ff_hedm_full_workflow(
         if not valid:
             return format_result({"tool": "run_ff_hedm_full_workflow",
                                   "status": "error", "error": param_path})
+
+        # ── Handbook lint gate (deterministic enforcement layer) ─────────────
+        # Runs BEFORE any MIDAS dispatch. `error`-severity traps are unambiguous
+        # unit/parameter mistakes that silently corrupt an irreversible run
+        # (e.g. Width/MarginRadius in px → empty InputAll.csv); block unless the
+        # caller explicitly overrides. `warning`/`info` traps are surfaced but
+        # never block. Fail-open on lint exceptions — never break a run because
+        # the linter itself errored.
+        try:
+            ff_traps = _lint_handbook_traps(param_path, "ff")
+        except Exception:
+            ff_traps = []
+        _blockers = [t for t in ff_traps if t.get("severity") == "error"]
+        if _blockers and not ignore_handbook_traps:
+            for _t in ff_traps:
+                _mark = {"error": "⛔", "warning": "⚠"}.get(_t["severity"], "ℹ")
+                _sec = f" [{_t['section']}]" if _t.get("section") else ""
+                print(f"  {_mark} {_t['key']}{_sec}: {_t['message']}", file=sys.stderr)
+            return format_result({
+                "tool": "run_ff_hedm_full_workflow",
+                "status": "error",
+                "error": (
+                    "Blocked by handbook lint before dispatch — the parameter file "
+                    "has an unambiguous unit/parameter error that would corrupt the "
+                    "run (see handbook_traps). Fix the parameter file, or pass "
+                    "ignore_handbook_traps=True to override if the values are "
+                    "intentional. NOTHING was run."
+                ),
+                "handbook_traps": ff_traps,
+            })
 
         _pipeline_bin = _shutil.which("midas-pipeline")
         if not _pipeline_bin:
@@ -1026,6 +1064,7 @@ async def run_ff_hedm_full_workflow(
             "report_ready": any(l.get("report_ready") for l in layer_outputs),
             "grains_note": report_note,
             "run_note": run_note,
+            "handbook_traps": ff_traps,
         })
 
     except subprocess.TimeoutExpired:
@@ -2678,7 +2717,7 @@ async def create_midas_parameter_file(
             print("[create_midas_parameter_file] Handbook traps (FF/NF source of truth):",
                   file=sys.stderr)
             for t in traps:
-                mark = "⚠" if t["severity"] == "warning" else "ℹ"
+                mark = {"error": "⛔", "warning": "⚠"}.get(t["severity"], "ℹ")
                 sec = f" [{t['section']}]" if t.get("section") else ""
                 print(f"  {mark} {t['key']}{sec}: {t['message']}", file=sys.stderr)
 
@@ -8622,7 +8661,7 @@ async def diagnose_parameter_file(
             if traps:
                 lines = ["", "## Handbook traps (APEXA — FF/NF Handbook source of truth)"]
                 for t in traps:
-                    mark = "⚠" if t["severity"] == "warning" else "ℹ"
+                    mark = {"error": "⛔", "warning": "⚠"}.get(t["severity"], "ℹ")
                     sec = f" [{t['section']}]" if t.get("section") else ""
                     lines.append(f"{mark} {t['key']}{sec}: {t['message']}")
                 diag_text = diag_text + "\n" + "\n".join(lines)
@@ -8900,6 +8939,23 @@ def _lint_handbook_traps(param_path, pipeline: str = "ff", source_h5: str = "") 
                     "sample size (FF §6). Setting it to the sample size drops grains "
                     "at the edges. Use a bound comfortably larger than the beam-lit "
                     "volume.", "FF §6")
+
+        # Width / MarginRadius are in MICRONS (Width default 1500, MarginRadius
+        # default 500) — a value < ~50 almost certainly means pixels were entered
+        # instead of µm. Classic failure: `Width 7.5` (= 0.0375 px band) rejects
+        # essentially every peak → empty InputAll.csv → the FF run aborts. This is
+        # an unambiguous unit error, so it is "error" severity (blocks dispatch).
+        for k, label, default in (("width", "Width", 1500),
+                                  ("marginradius", "MarginRadius", 500)):
+            v = first_float(k)
+            if v is not None and 0 < v < 50:
+                add("error", label,
+                    f"{label}={v} is far below its µm default ({default}). {label} "
+                    "is in MICRONS, not pixels — at ~200 µm/px that is only "
+                    f"~{v / 200:.3g} px, a ring band so narrow it rejects nearly all "
+                    "peaks (empty InputAll.csv, aborted run). You likely entered "
+                    f"pixels; use ~{default} µm.",
+                    "FF Parameters Reference (µm units)")
 
         # §6 — a calibrant LatticeConstant left on a sample run.
         lc = params.get("latticeconstant") or params.get("latticeparameter")
@@ -9231,41 +9287,11 @@ _CAPABILITY_GROUPS = {
 # right skill to every recommendation so the agent loads the canonical procedure
 # (not just the tool) when the user exposes data. First token of the tool string
 # is matched, so "read_grains_summary / compute_grain_stress" resolves on the head.
-_SKILL_FOR_TOOL = {
-    # calibration
-    "midas_auto_calibrate": "midas-calibrate",
-    "run_ff_calibration": "midas-calibrate",
-    "estimate_parameters_from_image": "midas-calibrate",
-    # integration
-    "midas_integrate_series": "midas-integrate",
-    "midas_batch_integrate": "midas-integrate",
-    "midas_integrate_2d_to_1d": "midas-integrate",
-    # FF-HEDM
-    "run_ff_hedm_full_workflow": "midas-ff-hedm",
-    "run_ff_pipeline": "midas-ffpipeline",
-    "refine_grain_lattice": "midas-ffpipeline",
-    # NF / PF / general HEDM
-    "run_nf_hedm_reconstruction": "midas-hedm",
-    "convert_nf_to_dream3d": "midas-hedm",
-    "extract_grain_centroids": "midas-hedm",
-    "preprocess_nf_data": "midas-hedm",
-    "run_pf_hedm_workflow": "midas-hedm",
-    "run_forward_simulation": "midas-hedm",
-    "match_grains": "midas-hedm",
-    "calculate_misorientation": "midas-hedm",
-    "read_grains_summary": "midas-hedm",
-    "compute_grain_stress": "midas-hedm",
-    "analyze_slip_systems": "midas-hedm",
-    # phase / refinement
-    "run_gsas_refinement": "midas-gsasii",
-    # inspect / validate
-    "recommend_workflow": "midas-validate",
-    "inspect_dataset_file": "midas-validate",
-    "validate_parameter_file": "midas-validate",
-    "diagnose_parameter_file": "midas-validate",
-    # visualize
-    "run_midas_viewer": "midas-visualize",
-}
+# tool name -> Agent Skill dir. Single source of truth lives in skill_registry
+# (also imported by the agent loop, which pre-loads the SKILL.md body into a
+# specialist's system prompt). Imported here so recommend_workflow keeps naming
+# the right skill without the map drifting between the two consumers.
+from skill_registry import SKILL_FOR_TOOL as _SKILL_FOR_TOOL
 
 
 # One-line index of the Agent Skills, returned in the capability summary so the

@@ -42,6 +42,7 @@ from apexa_timing import (
     log_llm_call, count_message_tokens, count_tokens,
     record_llm_call, current_query_id,
 )
+from skill_registry import skill_context_for_tools
 
 # ── Compact directory listing ───────────────────────────────────────────────
 
@@ -2331,6 +2332,21 @@ class AgentRunner:
                 else:
                     tool_entries.append(f"  - {name}: {desc}")
             system_content += f"\n\nYour available tools:\n" + "\n".join(tool_entries)
+
+        # Pre-load the canonical Agent Skill(s) for this specialist's tools into
+        # the system prompt — the "learning" layer. This lands the verified
+        # handbook procedure (exact flags/units/traps) in context BEFORE the model
+        # edits a parameter file or fires a tool, closing the gap where skills
+        # were only *named* (in recommend_workflow) but never read. Empty for the
+        # unified agent (tool_names=[]); that path relies on the deterministic
+        # lint gate + RAG instead. Transient guidance: it lives only in the
+        # system prompt, never in the persisted transcript buffer.
+        try:
+            skill_block = skill_context_for_tools(agent.tool_names)
+            if skill_block:
+                system_content += skill_block
+        except Exception:
+            pass  # never let skill loading break a query
 
         messages = [{"role": "system", "content": system_content}]
         # Compacted summary of older turns (from the orchestrator). Injected as
