@@ -240,20 +240,28 @@ class ArgoProvider:
         # Max tokens and params per model family (Argo model list, 2026 update)
         if self.model.startswith("claude"):
             payload["max_tokens"] = 21000
-            # Opus 4.8 / 4.7: no sampling params at all (temperature/top_p/top_k
+            # Opus 5 / 4.8 / 4.7: no sampling params at all (temperature/top_p/top_k
             # silently removed by Argo). 1M context, 128K output; thinking via
-            # output_config if ever needed.
-            if self.model in ("claudeopus48", "claudeopus47"):
+            # output_config if ever needed. (Opus 5 param rule not re-listed in the
+            # Aug-2026 Argo doc but sits with 4.8/4.7 — same no-sampling family.)
+            if self.model in ("claudeopus5", "claudeopus48", "claudeopus47"):
                 payload.pop("temperature", None)
-            # Sonnet 4.6/4.5, Haiku 4.5: accept AT MOST ONE of temperature/top_p
+            # Sonnet 5/4.6/4.5, Haiku 4.5: accept AT MOST ONE of temperature/top_p
             # (Argo drops top_p if both sent) — send temperature only, no top_p.
-            elif self.model in ("claudesonnet46", "claudesonnet45", "claudehaiku45"):
+            # (Sonnet 5 param rule not detailed in the Aug-2026 doc; follows the
+            # Sonnet sub-family convention — temperature only.)
+            elif self.model in ("claudesonnet5", "claudesonnet46", "claudesonnet45", "claudehaiku45"):
                 pass
             else:
                 # Opus 4.6/4.5/4.1, Sonnet 4/3.7: require temperature + top_p.
                 payload["top_p"] = 0.9
-        elif self.model == "gpt55":
+        elif self.model == "gpt55" or self.model.startswith("gpt56"):
             # GPT-5.5: temperature must be exactly 1; top_p + max_completion_tokens ok.
+            # GPT-5.6 (sol/terra/luna): the Aug-2026 Argo doc leaves the sampling
+            # rule as "..." (undocumented). Mirror gpt55 and force temperature=1 —
+            # temperature=1 is valid whether or not gpt56 restricts it, so this
+            # can't 400 on temperature (unlike sending an arbitrary temp). Uses
+            # max_completion_tokens (no max_tokens), same as the rest of GPT-5.x.
             payload["temperature"] = 1
             payload["top_p"] = 0.9
             payload["max_completion_tokens"] = 16000
@@ -270,8 +278,9 @@ class ArgoProvider:
             payload["top_p"] = 0.9
             payload["max_completion_tokens"] = 16000
         elif self.model.startswith("gemini"):
-            # gemini35flash, gemini31flashlite, gemini25pro/flash: Argo max_tokens
-            # maps to Gemini max_output_tokens; temperature accepted.
+            # gemini35flash, gemini31flashlite: Argo max_tokens maps to Gemini
+            # max_output_tokens; temperature accepted. (Gemini 2.5 pro/flash were
+            # removed — Argo marked them discontinue-use.)
             payload["max_tokens"] = 16000
         else:
             payload["max_completion_tokens"] = 16000
@@ -2773,43 +2782,15 @@ class AgentRunner:
                             })
                             continue
 
-                        # ── Destructive command gate ─────────────────────────
-                        # Detect rm/rmdir/unlink in run_command arguments.
-                        # Deletion is irreversible on beamline scratch storage
-                        # (no recycle bin, no undo).  Require confirmation:
-                        # the model must list EXACTLY what will be deleted and
-                        # ask once before any rm executes.
-                        # Exception: if the command is already preceded by a
-                        # confirmation marker in the prose (CONFIRMED: or
-                        # user-typed "yes, delete" / "go ahead" in prior turn),
-                        # allow it through.
-                        _RM_RE = re.compile(r'\brm\b|\brmdir\b|\bunlink\b', re.I)
-                        if _RM_RE.search(cmd_str):
-                            # rm/rmdir/unlink are NOT in ALLOWED_COMMANDS in
-                            # beamline_core_server.py — the tool will return
-                            # "Command not allowed: rm" regardless. Block here
-                            # early so the model doesn't hallucinate success
-                            # after receiving that error, and redirect to the
-                            # correct workflow.
-                            print(f"  \033[31m⛔ destructive gate:\033[0m rm blocked — not in ALLOWED_COMMANDS")
-                            messages.append({
-                                "role": "user",
-                                "content": (
-                                    "⛔ rm/rmdir IS NOT ALLOWED via run_command.\n\n"
-                                    f"Your command `{tc.arguments.get('command', '')}` will fail "
-                                    "because `rm` is not in the allowed command list for safety reasons. "
-                                    "Do NOT retry with rm — it will always be rejected.\n\n"
-                                    "To delete files on this beamline system, the correct approach is:\n"
-                                    "1. Tell the user EXACTLY which files you want to delete "
-                                    "(use find or ls via run_command to list them first)\n"
-                                    "2. Ask the user to delete them manually from the terminal:\n"
-                                    "   `rm -f /path/*.corr.csv /path/*.checkpoint.txt`\n"
-                                    "3. Or ask if there is a dedicated cleanup script for this workflow.\n\n"
-                                    "Do NOT claim files were deleted. They were NOT deleted."
-                                ),
-                            })
-                            forced_break = True
-                            break
+                        # ── Deletion permission gate ─────────────────────────
+                        # rm/rmdir/unlink are now ENABLED but gated by a human
+                        # confirmation at the shared execution chokepoint
+                        # (APEXAClient.execute_tool_call, via run_query's
+                        # permission_callback). That gate covers BOTH this text
+                        # path and the native tool_calls path, so no per-mode
+                        # regex block is needed here — deletions flow through to
+                        # to_execute and the chokepoint prompts the user before
+                        # anything runs (fail-safe DENY if no UI can confirm).
 
                     to_execute.append(tc)
 

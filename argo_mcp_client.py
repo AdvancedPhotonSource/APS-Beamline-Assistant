@@ -1512,6 +1512,24 @@ class SmartCache:
         except Exception:
             pass  # Non-critical if caching fails
 
+# Destructive-command detector for the deletion permission gate. Fires only when
+# rm/rmdir/unlink appears in COMMAND position — at the start, after a shell
+# operator (; & | newline ` ( ), after `xargs`, or as a `bash -c/-lc` script —
+# so it catches every real deletion path (incl. shell-wrapped and piped) but NOT
+# `rm` used as a plain argument or substring (e.g. `grep rm f`, `ls /var/rm`).
+# Errs toward firing on ambiguous quoted forms (safe direction for a destructive
+# gate). See execute_tool_call's gate + run_query's permission_callback.
+_DELETE_CMD_RE = re.compile(
+    r'(?:^|[;&|`\n(]|\bxargs\s+(?:-\S+\s+)*|-\w*c\s*["\']?)\s*(rm|rmdir|unlink)\b',
+    re.I,
+)
+
+
+def _is_delete_command(cmd: str) -> bool:
+    """True if a shell command would delete files (rm/rmdir/unlink in command position)."""
+    return bool(_DELETE_CMD_RE.search(cmd or ""))
+
+
 class APEXAClient:
     def __init__(self):
         self.sessions = {}
@@ -1542,7 +1560,7 @@ class APEXAClient:
 
         # Determine environment based on model (dev models require dev endpoint)
         self.anl_username = os.getenv("ANL_USERNAME")
-        self.selected_model = os.getenv("ARGO_MODEL", "gpt55")
+        self.selected_model = os.getenv("ARGO_MODEL", "claudeopus5")
 
         # All current models on PROD (March 2026 Argo update)
         # Future beta models: add to DEV_ONLY_MODELS in apexa_agents.py
@@ -1553,13 +1571,19 @@ class APEXAClient:
         self._available_tools: List[Dict[str, Any]] = []   # pre-built tool definitions
         self.orchestrator:     Optional[OrchestratorAgent] = None
 
+        # Deletion permission gate: UI supplies an async callback
+        # (tool_name, arguments, command) -> bool that prompts a human before any
+        # rm/rmdir/unlink runs. Set per-query in run_query (single beamline user →
+        # queries are serialized, so a single shared attribute is safe). None →
+        # fail-safe DENY (no interface can confirm → deletion is blocked).
+        self.permission_callback = None
+
         if not self.anl_username:
             raise ValueError("ANL_USERNAME must be set in environment (.env file)")
 
         self.available_models = {
             "OpenAI": {
                 "gpt4o":       "GPT-4o (128K ctx, 16K out) — fastest",
-                "gpt4olatest": "GPT-4o latest (128K ctx, 16K out)",
                 "gpt41":       "GPT-4.1 (1M ctx, 16K out)",
                 "gpt41mini":   "GPT-4.1 Mini (1M ctx, 16K out)",
                 "gpt41nano":   "GPT-4.1 Nano (1M ctx, 16K out)",
@@ -1571,14 +1595,19 @@ class APEXAClient:
                 "gpt51":       "GPT-5.1 (400K ctx, 128K out)",
                 "gpt52":       "GPT-5.2 (400K ctx, 128K out)",
                 "gpt54":       "GPT-5.4 (1M ctx, 128K out) — best all-round; temp ok",
-                "gpt55":       "GPT-5.5 (1M ctx, 128K out) — DEFAULT; temp=1 only; ~2× gpt54 cost",
+                "gpt55":       "GPT-5.5 (1M ctx, 128K out) — temp=1 only; ~2× gpt54 cost",
+                "gpt56sol":    "GPT-5.6 Sol (1.05M ctx, 128K out) — NEW; frontier GPT-5.6",
+                "gpt56terra":  "GPT-5.6 Terra (1.05M ctx, 128K out) — NEW; mini tier (intelligence/cost balance)",
+                "gpt56luna":   "GPT-5.6 Luna (1.05M ctx, 128K out) — NEW; nano tier (cost-sensitive, high-volume)",
             },
             "Anthropic": {
-                "claudeopus48":  "Claude Opus 4.8 (1M ctx, 128K out) — newest; best planning/reasoning; no sampling params",
+                "claudeopus5":   "Claude Opus 5 (1M ctx, 128K out) — NEWEST Opus; agentic coding/enterprise; no sampling params",
+                "claudeopus48":  "Claude Opus 4.8 (1M ctx, 128K out) — best planning/reasoning; no sampling params",
                 "claudeopus47":  "Claude Opus 4.7 (1M ctx, 128K out) — no sampling params",
                 "claudeopus46":  "Claude Opus 4.6 (200K ctx, 128K out) — requires temp+top_p",
                 "claudeopus45":  "Claude Opus 4.5 (200K ctx, 64K out)",
                 "claudeopus41":  "Claude Opus 4.1 (200K ctx, 32K out)",
+                "claudesonnet5": "Claude Sonnet 5 (newest Sonnet) — temp only, no top_p",
                 "claudesonnet46":"Claude Sonnet 4.6 (1M ctx, 64K out) — temp only, no top_p",
                 "claudesonnet45":"Claude Sonnet 4.5 (200K ctx, 64K out) — temp only, no top_p",
                 "claudehaiku45": "Claude Haiku 4.5 (200K ctx, 64K out) — temp only, no top_p",
@@ -1586,8 +1615,6 @@ class APEXAClient:
             "Google": {
                 "gemini35flash":    "Gemini 3.5 Flash (1M ctx, 65K out)",
                 "gemini31flashlite":"Gemini 3.1 Flash Lite (1M ctx, 65K out)",
-                "gemini25pro":      "Gemini 2.5 Pro (1M ctx, 65K out) — deprecating soon",
-                "gemini25flash":    "Gemini 2.5 Flash (1M ctx, 64K out) — deprecating soon",
             }
         }
 
@@ -1804,6 +1831,33 @@ class APEXAClient:
                         print(f"  Path resolved: {val} -> {resolved}", file=sys.stderr)
                     arguments[key] = resolved
 
+        # ===== DELETION PERMISSION GATE =====
+        # rm/rmdir/unlink are irreversible on beamline scratch (no recycle bin).
+        # This is the single chokepoint every tool-calling path funnels through
+        # (Mode 1 native tool_calls, Mode 2 text, orchestrator fast-path, and the
+        # FF-HEDM workflow graph), so the human-approval check lives here. The UI
+        # supplies self.permission_callback (set per-query in run_query). Fail-safe:
+        # no callback / callback error / non-yes → DENY (nothing runs; return an
+        # explicit "not run" string so the model can't hallucinate success).
+        if tool_name in ("run_command", "run_remote_command"):
+            _cmd = str(arguments.get("command", ""))
+            if _is_delete_command(_cmd):
+                cb = self.permission_callback
+                approved = False
+                if cb is not None:
+                    try:
+                        approved = bool(await cb(tool_name, arguments, _cmd))
+                    except Exception as e:
+                        print(f"  \033[31m⛔ permission check failed ({e}); denying\033[0m")
+                        approved = False
+                if not approved:
+                    reason = ("no confirmation channel in this interface"
+                              if cb is None else "denied by user")
+                    print(f"  \033[31m⛔ deletion blocked ({reason}):\033[0m {_cmd}")
+                    return (f"⛔ Deletion NOT run ({reason}). The command `{_cmd}` was "
+                            "blocked before execution. The files were NOT deleted. Do "
+                            "not retry or claim success; ask the user how to proceed.")
+
         _t0 = _time.monotonic()
         try:
             session = self.sessions[server_name]
@@ -1838,32 +1892,42 @@ class APEXAClient:
             self._busy_server = None
 
     async def run_query(self, query: str, use_history: bool = True,
-                        on_tool_result=None) -> str:
+                        on_tool_result=None, permission_callback=None) -> str:
         """Route query through the multi-agent orchestrator (Phase 2 entry point).
 
         Wrapped in ``query_scope`` so Tier-2 instrumentation emits one summary
         JSONL row per user query (round-trip count, LLM time, tool time,
         wall-clock). See docs/INSTRUMENTATION.md.
+
+        ``permission_callback`` — optional async ``(tool_name, arguments, command)
+        -> bool`` used by the deletion gate in ``execute_tool_call`` to prompt a
+        human before any rm/rmdir/unlink. Set on the client for the duration of
+        this query (restored afterward) so the gate sees it on every tool path.
         """
         if not self.orchestrator:
             return "Error: Not connected to any MCP servers."
         # APEXA_PROVIDER=streaming + a Claude model → Anthropic-native streaming
         # for real TTFT/TPOT metrics; otherwise Argo /chat/ blocking.
         provider = select_provider(self.anl_username, self.selected_model)
-        with query_scope(query=query) as _qctx:
-            result = await self.orchestrator.process(
-                query, provider, use_history,
-                on_tool_result=on_tool_result,
-            )
-            # Late-bind the agent name — the orchestrator only knows which
-            # specialist it routed to after process() returns.
-            try:
-                last = getattr(self.orchestrator, "_last_agent", None)
-                if last is not None:
-                    _qctx.agent = getattr(last, "name", "") or ""
-            except Exception:
-                pass
-            return result
+        _prev_perm_cb = self.permission_callback
+        self.permission_callback = permission_callback
+        try:
+            with query_scope(query=query) as _qctx:
+                result = await self.orchestrator.process(
+                    query, provider, use_history,
+                    on_tool_result=on_tool_result,
+                )
+                # Late-bind the agent name — the orchestrator only knows which
+                # specialist it routed to after process() returns.
+                try:
+                    last = getattr(self.orchestrator, "_last_agent", None)
+                    if last is not None:
+                        _qctx.agent = getattr(last, "name", "") or ""
+                except Exception:
+                    pass
+                return result
+        finally:
+            self.permission_callback = _prev_perm_cb
 
     def _autosave_session(self):
         """Persist the live conversation to the _autosave slot.
@@ -1966,6 +2030,21 @@ class APEXAClient:
                                       sessions_provider=self.context.list_sessions),
             enable_history_search=True,
         )
+
+        async def _cli_permission(tool_name: str, arguments: dict, command: str) -> bool:
+            """Blocking y/N confirmation before APEXA deletes files (Claude-Code-style).
+
+            Passed to run_query → set as self.permission_callback → invoked by the
+            deletion gate in execute_tool_call. Runs on the same event loop as the
+            in-flight query, so it truly blocks tool execution until the user answers.
+            """
+            print(f"\n  \033[33m⚠  APEXA wants to DELETE files:\033[0m\n     {command}")
+            try:
+                ans = (await pt_session.prompt_async("  Proceed with deletion? (y/N): ")).strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                print("  \033[31m⛔ deletion cancelled\033[0m")
+                return False
+            return ans in ("y", "yes")
 
         def _prompt_text() -> FormattedText:
             """Prompt shows the active session name (unless it's the scratch slot)."""
@@ -2495,7 +2574,7 @@ class APEXAClient:
 
                     if not plot_type:
                         # Unrecognized plot subcommand — let APEXA handle it naturally
-                        response = await self.run_query(user_input)
+                        response = await self.run_query(user_input, permission_callback=_cli_permission)
                         print(f"\n{clean_markdown(response)}\n")
                         continue
 
@@ -2653,7 +2732,8 @@ class APEXAClient:
                     # Windows (no signal handler) Ctrl-C raises KeyboardInterrupt at
                     # this await. Either way we abort + kill the busy compute and
                     # return to the prompt instead of exiting the CLI.
-                    self._active_task = asyncio.create_task(self.run_query(user_input))
+                    self._active_task = asyncio.create_task(
+                        self.run_query(user_input, permission_callback=_cli_permission))
                     try:
                         response = await self._active_task
                     except (asyncio.CancelledError, KeyboardInterrupt):

@@ -74,6 +74,11 @@ ALLOWED_COMMANDS = {
     'ls', 'pwd', 'cat', 'head', 'tail', 'less', 'more',
     'grep', 'find', 'wc', 'sort', 'uniq', 'diff', 'sed', 'awk',
     'cp', 'mv', 'mkdir', 'rmdir', 'touch', 'chmod', 'ln', 'readlink',
+    # Deletion (rm/unlink; rmdir above). ENABLED so an APPROVED deletion actually
+    # executes — the real safeguard is the client-side human permission gate in
+    # APEXAClient.execute_tool_call (this server subprocess cannot prompt a human),
+    # not this allowlist. Same spirit as the motor server's hardware gate.
+    'rm', 'unlink',
     'echo', 'date', 'hostname', 'uname', 'whoami', 'env', 'which',
     'file', 'stat', 'tree', 'du', 'df', 'free', 'ps', 'nproc', 'lscpu', 'uptime',
     # Read-only text/binary inspection + comparison utilities (safe, no mutation)

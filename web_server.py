@@ -774,15 +774,48 @@ async def websocket_endpoint(websocket: WebSocket):
     """WebSocket endpoint for real-time communication"""
     await manager.connect(websocket)
     print(f"WebSocket client connected. Total connections: {len(manager.active_connections)}")
-    
-    try:
-        while True:
-            data = await websocket.receive_text()
-            message_data = json.loads(data)
-            print(f"Received WebSocket message: {message_data}")
-            
-            # Handle different message types
-            if message_data["type"] == "chat":
+
+    _ansi_re = re.compile(r'\x1b\[[0-9;]*m')
+
+    # Deletion-confirmation round-trip: the agent's permission gate sends a
+    # `confirm_required` message and awaits a Future keyed by confirm_id; the WS
+    # receive loop resolves it when the browser replies `confirm_response`. The
+    # frontend (chatStore.ts + ConfirmModal) already implements this contract.
+    pending_confirms: Dict[str, asyncio.Future] = {}
+
+    async def _web_permission(tool_name: str, arguments: dict, command: str) -> bool:
+        """Prompt the browser to approve a file deletion; block until it answers.
+
+        Passed to run_query → set as mcp_client.permission_callback → invoked by
+        the deletion gate in APEXAClient.execute_tool_call. Fail-safe DENY on
+        timeout / disconnect / any error.
+        """
+        cid = uuid.uuid4().hex
+        fut = asyncio.get_event_loop().create_future()
+        pending_confirms[cid] = fut
+        try:
+            await manager.send_personal_message({
+                "type": "confirm_required",
+                "confirm_id": cid,
+                "action": "delete files",
+                "detail": command,
+                "danger": True,
+                "safety": "This permanently deletes files on beamline storage (no undo).",
+            }, websocket)
+            return bool(await asyncio.wait_for(fut, timeout=300))
+        except Exception:
+            return False
+        finally:
+            pending_confirms.pop(cid, None)
+
+    async def _handle_chat(message_data):
+        """Process one chat message end-to-end (context build → run_query → reply).
+
+        Launched as a task so the receive loop keeps reading — that lets a
+        `confirm_response` arrive and resolve _web_permission's Future while a
+        deletion-bearing query is mid-flight.
+        """
+        if True:  # noqa: retains original block indentation after extraction to a task fn
                 if mcp_client:
                     try:
                         # Build context about currently loaded images
@@ -847,8 +880,6 @@ async def websocket_endpoint(websocket: WebSocket):
 
                         print(f"Sending to AI with context: {user_message[:500]}...")  # Debug log
 
-                        _ansi_re = re.compile(r'\x1b\[[0-9;]*m')
-
                         async def _on_tool_result(tool_name: str, arguments: dict, result: str):
                             try:
                                 clean = _ansi_re.sub('', result)
@@ -862,7 +893,8 @@ async def websocket_endpoint(websocket: WebSocket):
                                 print(f"Warning: tool_result WS send failed: {e}")
 
                         response = await mcp_client.run_query(
-                            user_message, on_tool_result=_on_tool_result
+                            user_message, on_tool_result=_on_tool_result,
+                            permission_callback=_web_permission,
                         )
                         clean_response = _ansi_re.sub('', response)
                         # FF-HEDM graph mode (APEXA_WORKFLOW_MODE=graph): if this turn
@@ -899,17 +931,42 @@ async def websocket_endpoint(websocket: WebSocket):
                         "type": "error",
                         "message": "MCP client not available"
                     }, websocket)
-            
-            elif message_data["type"] == "change_model":
+
+    try:
+        while True:
+            data = await websocket.receive_text()
+            message_data = json.loads(data)
+            print(f"Received WebSocket message: {message_data}")
+
+            mtype = message_data.get("type")
+            # Handle different message types
+            if mtype == "chat":
+                # Fire-and-forget so the receive loop keeps reading — required so a
+                # `confirm_response` (deletion approval) can arrive and resolve the
+                # permission Future while this query is still running.
+                asyncio.create_task(_handle_chat(message_data))
+
+            elif mtype == "confirm_response":
+                # Browser answered a `confirm_required` prompt (see _web_permission).
+                fut = pending_confirms.get(message_data.get("confirm_id"))
+                if fut is not None and not fut.done():
+                    fut.set_result(bool(message_data.get("approved")))
+
+            elif mtype == "change_model":
                 if mcp_client:
                     mcp_client.selected_model = message_data["model"]
                     await manager.send_personal_message({
                         "type": "model_changed",
                         "model": message_data["model"]
                     }, websocket)
-                    
+
     except WebSocketDisconnect:
         manager.disconnect(websocket)
+        # Fail-safe: unblock any pending deletion prompts as DENY so orphaned
+        # run_query tasks don't hang for the full timeout after a disconnect.
+        for _fut in pending_confirms.values():
+            if not _fut.done():
+                _fut.set_result(False)
         print(f"WebSocket client disconnected. Total connections: {len(manager.active_connections)}")
 
 @app.get("/api/status")
@@ -929,7 +986,7 @@ async def get_available_models():
     """Get available AI models for the frontend model selector"""
     if mcp_client:
         return {"models": mcp_client.available_models, "selected": mcp_client.selected_model}
-    return {"models": {}, "selected": os.getenv("ARGO_MODEL", "gpt55")}
+    return {"models": {}, "selected": os.getenv("ARGO_MODEL", "claudeopus5")}
 
 @app.get("/api/files")
 async def list_uploaded_files():

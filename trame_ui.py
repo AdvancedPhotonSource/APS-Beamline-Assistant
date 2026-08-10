@@ -745,7 +745,7 @@ def build_ui():
             # Model selector
             v3.VSelect(
                 v_model=("selected_model",),
-                items=("Object.keys(available_models).length > 0 ? Object.keys(available_models) : ['gpt4o', 'gpt41', 'claudesonnet46', 'claudeopus46', 'gemini25pro']",),
+                items=("Object.keys(available_models).length > 0 ? Object.keys(available_models) : ['claudeopus5', 'gpt55', 'gpt56sol', 'claudesonnet46', 'gemini35flash']",),
                 density="compact",
                 variant="outlined",
                 hide_details=True,
