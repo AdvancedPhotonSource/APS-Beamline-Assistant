@@ -7,6 +7,20 @@ versioning. Until v1.0.0, breaking changes may land in minor versions.
 
 ## [Unreleased]
 
+### Changed — track the current MIDAS package stack (suite 0.7.3)
+- Bumped the MIDAS pin `midas-suite[...]>=0.4.0` → `>=0.7.3` and added the `nf`
+  extra (APEXA has NF tools). The stale `>=0.4.0` floor let a locked/offline
+  install resolve *below* the suite's own correctness floors — most critically
+  `midas-process-grains>=0.7.0`, where the grain-selection keys
+  (`Completeness`/`ConfidenceTol`) were silently parsed then **discarded**
+  (23710 vs 6132 grains) and `GrainRadius` came out 5.5× low. Also floors
+  `midas-fit-grain>=0.7.0`, `midas-pipeline>=0.8.2`, `midas-nf-pipeline>=0.6.1`.
+  No APEXA CLI/flag changes were needed: `midas-pipeline run --scan-mode ff|pf`
+  and the NF `run`/`refine-params` subcommands are unchanged. Package count
+  ~34 → 36. See CLAUDE.md "Package release" for the new sub-packages
+  (`midas-joint-ff-calibrate`, `midas-invert`, `midas-uq`, …) that are candidates
+  for future dedicated MCP tools.
+
 ### Added — FF-HEDM workflow graph + idempotency guard
 - **Idempotency guard** (`_idempotency.py`) on the four heavy MIDAS tools
   (`midas_auto_calibrate`, `run_ff_hedm_full_workflow`,

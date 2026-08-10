@@ -363,7 +363,7 @@ dependencies = [
     { name = "langgraph-checkpoint-sqlite" },
     { name = "matplotlib" },
     { name = "mcp" },
-    { name = "midas-suite", extra = ["defect", "dfxm", "ff", "grain-odf", "pdf", "pf-odf", "pink", "ultrafast", "xaf"], marker = "sys_platform != 'win32'" },
+    { name = "midas-suite", extra = ["defect", "dfxm", "ff", "grain-odf", "nf", "pdf", "pf-odf", "pink", "ultrafast", "xaf"], marker = "sys_platform != 'win32'" },
     { name = "mp-api" },
     { name = "numpy" },
     { name = "openpyxl" },
@@ -423,7 +423,7 @@ requires-dist = [
     { name = "lmfit", marker = "extra == 'extra'", specifier = ">=1.3.4" },
     { name = "matplotlib", specifier = ">=3.10.6" },
     { name = "mcp", specifier = ">=1.14.1" },
-    { name = "midas-suite", extras = ["ff", "pdf", "defect", "dfxm", "xaf", "ultrafast", "grain-odf", "pf-odf", "pink"], marker = "sys_platform != 'win32'", specifier = ">=0.4.0" },
+    { name = "midas-suite", extras = ["ff", "nf", "pdf", "defect", "dfxm", "xaf", "ultrafast", "grain-odf", "pf-odf", "pink"], marker = "sys_platform != 'win32'", specifier = ">=0.7.3" },
     { name = "mp-api", specifier = ">=0.41.0" },
     { name = "numpy", specifier = ">=2.3.3" },
     { name = "openpyxl", specifier = ">=3.1.0" },
@@ -2183,7 +2183,7 @@ wheels = [
 
 [[package]]
 name = "midas-2d"
-version = "0.1.0"
+version = "0.3.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "midas-hkls", marker = "sys_platform != 'win32'" },
@@ -2192,9 +2192,9 @@ dependencies = [
     { name = "numpy", marker = "sys_platform != 'win32'" },
     { name = "torch", marker = "sys_platform != 'win32'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/d5/e1/6ca502c79165c380f4cee49e7a2018c553838c5c4791bb4e42e15ca4ac9f/midas_2d-0.1.0.tar.gz", hash = "sha256:bce17e55bcae90e673239357a5a03e101960ccf22133387bd64ec3f06abc4c82", size = 64058, upload-time = "2026-07-29T19:07:53.104Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/cc/60/0fe48726d3492fdfc6ad2af32b17cc352ea153bcff524dd948a63a28a817/midas_2d-0.3.2.tar.gz", hash = "sha256:00588be589871fba34c1bb024b839fc4eb0621bbc9daed60aab7515e0a677f94", size = 115506, upload-time = "2026-08-07T22:20:51.211Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/bc/d6/5f5264811d7e05f88a70515d2498d83b5cf06b679f7fd47a0012edd9126b/midas_2d-0.1.0-py3-none-any.whl", hash = "sha256:ad88307a099f8a08e5108ea4e724f133b019ed454eacdbfb7914b286a832ca59", size = 63677, upload-time = "2026-07-29T19:07:51.701Z" },
+    { url = "https://files.pythonhosted.org/packages/3d/40/2e593bba209b3301a91432be96233141e82ed5d8d5e2b42ed954bf69ab04/midas_2d-0.3.2-py3-none-any.whl", hash = "sha256:2f2064b25b0fe555264b922760f3e3cb7a93e46a9930a95b68f54cb22bc1e42e", size = 104145, upload-time = "2026-08-07T22:20:49.823Z" },
 ]
 
 [[package]]
@@ -2221,7 +2221,7 @@ wheels = [
 
 [[package]]
 name = "midas-calibrate-v2"
-version = "0.5.2"
+version = "0.5.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "h5py", marker = "sys_platform != 'win32'" },
@@ -2237,14 +2237,14 @@ dependencies = [
     { name = "tifffile", marker = "sys_platform != 'win32'" },
     { name = "torch", marker = "sys_platform != 'win32'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/34/25/0766f5eb906bd50ee3a233d164a87db59aa21bc5e453d67cfb084fc49f4e/midas_calibrate_v2-0.5.2.tar.gz", hash = "sha256:7b782fc167d78f32e1fb7aa9daffc22b4b71f6085469226f8c699ab7a7b7a1d5", size = 220370, upload-time = "2026-07-17T07:02:57.289Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ad/7d/b5cc82fca3f0d479efc2da481eef700a3fbd52950bbc9927c1be109fb745/midas_calibrate_v2-0.5.3.tar.gz", hash = "sha256:1de0e4356b33f380cda670f689efd0a3a1b3eedccce000ea7999946486b375cf", size = 226929, upload-time = "2026-07-31T16:34:23.068Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b8/20/82f5170380e753759e29adcf3119a2da6f24b56c18ea6d27b83d1571bb36/midas_calibrate_v2-0.5.2-py3-none-any.whl", hash = "sha256:20fd2d4e0ae7bdc3bc51ed535354c43c84794802cddcac00050aff9b99e408f6", size = 238065, upload-time = "2026-07-17T07:02:55.626Z" },
+    { url = "https://files.pythonhosted.org/packages/3d/1c/7e7820d7db5c1b120c31644b936b327711eab0c169ad26c9cfff4e2dea3f/midas_calibrate_v2-0.5.3-py3-none-any.whl", hash = "sha256:50aa272878e1def44eb02a64d84ede58e501b7dc37d43c3f2883d79bcda16a8f", size = 243186, upload-time = "2026-07-31T16:34:21.406Z" },
 ]
 
 [[package]]
 name = "midas-defect"
-version = "0.1.0"
+version = "0.1.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "midas-diffract", marker = "sys_platform != 'win32'" },
@@ -2261,14 +2261,14 @@ dependencies = [
     { name = "torch", marker = "sys_platform != 'win32'" },
     { name = "zarr", marker = "sys_platform != 'win32'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/6d/c8/e8f6cd01eed7b26127137a433ba21f10fa5cf33d9bebb18c0de5c3255a70/midas_defect-0.1.0.tar.gz", hash = "sha256:5e807149a8ed2e7385ba4948197d2ff9717e00580a213140c8f12558f9c6844a", size = 195348, upload-time = "2026-07-29T18:33:24.555Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/54/8e/240d71ba63dff935db2735eac3c8ae7f70a0765f7dda44fb7c3bc31a7c7c/midas_defect-0.1.2.tar.gz", hash = "sha256:98de50f30141732700fb4567b30d73cd3655b56a165a73d40c6127d631462af1", size = 197019, upload-time = "2026-08-07T21:53:27.007Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/57/14/03c910717af315ff0d8c7508efdce0a76af2baf33d8d81921e9d094cf436/midas_defect-0.1.0-py3-none-any.whl", hash = "sha256:c9735d2b90f1ece4eb66563c6ce7eb62bbb5f60609e8dc38ec1593e1d3789a28", size = 116739, upload-time = "2026-07-29T18:33:23.339Z" },
+    { url = "https://files.pythonhosted.org/packages/86/81/5f7084cd7779b167a8b83322f7053d4ca078b7b5801bf26aa167d0410e5d/midas_defect-0.1.2-py3-none-any.whl", hash = "sha256:d00307116865369fd746cc099b6e007bf7bb90ef6c2163bf71446a4d3ed31606", size = 117759, upload-time = "2026-08-07T21:53:25.674Z" },
 ]
 
 [[package]]
 name = "midas-dfxm"
-version = "0.1.0"
+version = "0.3.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "midas-2d", marker = "sys_platform != 'win32'" },
@@ -2280,14 +2280,14 @@ dependencies = [
     { name = "numpy", marker = "sys_platform != 'win32'" },
     { name = "torch", marker = "sys_platform != 'win32'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f7/4d/d1f72be76f2fe97a0d56f81ea1d7d790944e300ae23fc6256ebff921c22d/midas_dfxm-0.1.0.tar.gz", hash = "sha256:13bbdf3a3ba7e43275a40ac8bce601bbdb1a76f36b6f63761c2350a16fb6275a", size = 94962, upload-time = "2026-07-29T19:13:56.85Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/cb/65/8c933415e884ffe0c91328ae03d4da6826e024ff1e77ca574b9a18b22fd4/midas_dfxm-0.3.2.tar.gz", hash = "sha256:6bac6c6262cda643c7d733b7c4bc78d5500d1daef39fbd01510f11eca01faa41", size = 165338, upload-time = "2026-08-07T22:18:59.695Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/99/05/86fa4af54ea1b722ed2fd53c4dd4ed64875ea37b12bf40c02ac1c9f6ccec/midas_dfxm-0.1.0-py3-none-any.whl", hash = "sha256:7f39cd1ef024a174dd5e507c344290d722baa4e419382b22160a460fa4c9e0d0", size = 81585, upload-time = "2026-07-29T19:13:55.093Z" },
+    { url = "https://files.pythonhosted.org/packages/ef/9d/a32a082c2180e1961868d1e7002cbe1b01bb255244b7adeb5c4d3d28947d/midas_dfxm-0.3.2-py3-none-any.whl", hash = "sha256:385b0068773d19a7e2e00d8df7648585f440f35c49c6fe77068adb4ba3b101ab", size = 141482, upload-time = "2026-08-07T22:18:58.147Z" },
 ]
 
 [[package]]
 name = "midas-diffract"
-version = "0.6.0"
+version = "0.7.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "midas-distortion", marker = "sys_platform != 'win32'" },
@@ -2295,9 +2295,9 @@ dependencies = [
     { name = "numpy", marker = "sys_platform != 'win32'" },
     { name = "torch", marker = "sys_platform != 'win32'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/9d/79/81cf9c7582f4900aa18f26bc45de6652a89ef9b0271f78fbc8b0330e0835/midas_diffract-0.6.0.tar.gz", hash = "sha256:ea286112204bdac9d1a37adb6429098d928d600435e17942ae6bfc71c7b34dc4", size = 82188, upload-time = "2026-06-23T20:45:29.196Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a7/64/86b33ab6a7111132b879e297af4e0c8e4071432bb4d1f4b5e3b8c897122e/midas_diffract-0.7.0.tar.gz", hash = "sha256:94cdc54d50ed935979eb9a7d3f50a5cfede5f88b1afb483b9ac0006897a441d4", size = 87790, upload-time = "2026-07-31T19:32:03.615Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/25/1a/96535ec21e129fc11206b81efdf51ad08ba43cfc056cbe022240f885b777/midas_diffract-0.6.0-py3-none-any.whl", hash = "sha256:8b16477473e6ee08fdda729556d3617c7fca378d87dcecdfdf37f0838644b3a4", size = 51775, upload-time = "2026-06-23T20:45:27.831Z" },
+    { url = "https://files.pythonhosted.org/packages/a4/9c/241c2cde828e773d277713d84ccaffcd91c2f7b50bd7797374864522cee7/midas_diffract-0.7.0-py3-none-any.whl", hash = "sha256:005afa5f8b2b38f057ec6ba0710875ce39742c818c0c6a8cb17f661999acf185", size = 53790, upload-time = "2026-07-31T19:32:02.333Z" },
 ]
 
 [[package]]
@@ -2314,7 +2314,7 @@ wheels = [
 
 [[package]]
 name = "midas-ff-pipeline"
-version = "0.4.0"
+version = "0.4.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "h5py", marker = "sys_platform != 'win32'" },
@@ -2334,14 +2334,14 @@ dependencies = [
     { name = "torch", marker = "sys_platform != 'win32'" },
     { name = "zarr", marker = "sys_platform != 'win32'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/af/61/7d4571e9cb400cfba908036e6709b410c8ee73122df0de113516def863ca/midas_ff_pipeline-0.4.0.tar.gz", hash = "sha256:19a392353b8dc25144ae4f89ea6bf8ba7eacbb90c0aad7adf080d8a79f20a6d7", size = 72658, upload-time = "2026-05-29T05:19:26.376Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/5d/6d/b93dab73d8883a2fee96ea5bafe278a49a111019a25ab4c032ae3cc2df35/midas_ff_pipeline-0.4.3.tar.gz", hash = "sha256:2eadcde3f1a7027754b5014c82e6a969b6ca49ae3272173806b431144ac3db97", size = 73005, upload-time = "2026-08-10T04:05:35.977Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/db/76/7bb5d8268450b2824651f0327cf50989345e6c41e1be6ecbc67bb082de1a/midas_ff_pipeline-0.4.0-py3-none-any.whl", hash = "sha256:5711fca2e9637a5e1d614e913267f6a9210615e3374f0a21c599a9c9365da658", size = 78698, upload-time = "2026-05-29T05:19:25.086Z" },
+    { url = "https://files.pythonhosted.org/packages/f7/18/72b5dee5651f8bbb5b3d49ea5a2cadc24bfbab70266969166f3f4caa1787/midas_ff_pipeline-0.4.3-py3-none-any.whl", hash = "sha256:31c1ba9285743b70670eae1751d2bc23c07d23e56b689ddedd7999e9e936939c", size = 78705, upload-time = "2026-08-10T04:05:34.4Z" },
 ]
 
 [[package]]
 name = "midas-fit-grain"
-version = "0.5.6"
+version = "0.7.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "midas-diffract", marker = "sys_platform != 'win32'" },
@@ -2350,7 +2350,7 @@ dependencies = [
     { name = "scipy", marker = "sys_platform != 'win32'" },
     { name = "torch", marker = "sys_platform != 'win32'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/91/f6/7fe8d520c2c998c96595afb11778db0923d5100cc22e6d6e299d3f587723/midas_fit_grain-0.5.6.tar.gz", hash = "sha256:23672644f58a4b9aa77768e2d017f39950e758b1aa5a6bd371ff8f0b1b581e39", size = 156770, upload-time = "2026-07-29T19:43:18.195Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/26/ee/2b51097c52faf3709535faf4f1b06ab448f8642434eda1794a32c57a204d/midas_fit_grain-0.7.0.tar.gz", hash = "sha256:4659feae47a312a5a85f52518d82430cca36f56a2fb92402c56ca88aafb0e229", size = 201630, upload-time = "2026-08-07T21:18:30.651Z" }
 
 [[package]]
 name = "midas-grain-odf"
@@ -2371,14 +2371,14 @@ wheels = [
 
 [[package]]
 name = "midas-hkls"
-version = "0.5.0"
+version = "0.7.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy", marker = "sys_platform != 'win32'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/9d/77/b8a5b83ef62d543c2f1c54999d1c70df1850aa215e75862fae1a033ce4c5/midas_hkls-0.5.0.tar.gz", hash = "sha256:83224edf361707c9f1284703ecb565ec7fec9c14fb38ea8596bc3f4e72738f1c", size = 576512, upload-time = "2026-05-19T21:34:26.384Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/63/7a/38c86d6f572994dfe559700d753af7bea6403d758e510e2b15346e34bbc4/midas_hkls-0.7.0.tar.gz", hash = "sha256:29e86fab6437cf3fc106c04e77051c41472e0d1ef0cc69bd50135a573e5c7fed", size = 585278, upload-time = "2026-08-03T14:58:18.375Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/01/27/876172f738ada14141af7845a0f3b61bbaa54a30c8910da2507b270be6e2/midas_hkls-0.5.0-py3-none-any.whl", hash = "sha256:e9e41ccd357c9dd77a7bcb981b6033ebc83907c4a0b349f27c6783c4cf7af224", size = 566197, upload-time = "2026-05-19T21:34:24.646Z" },
+    { url = "https://files.pythonhosted.org/packages/c5/72/2b8c20b68159f7c500a82786b649f2b694e24851ddc1e0d004aaf6d732a0/midas_hkls-0.7.0-py3-none-any.whl", hash = "sha256:c3f330f00ad9e82b9e4dad5c388ba0e242ea0627889f1ef7cf1b94815512f824", size = 573039, upload-time = "2026-08-03T14:58:16.604Z" },
 ]
 
 [package.optional-dependencies]
@@ -2469,7 +2469,7 @@ wheels = [
 
 [[package]]
 name = "midas-nf-fitorientation"
-version = "0.3.2"
+version = "0.8.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "midas-diffract", marker = "sys_platform != 'win32'" },
@@ -2478,14 +2478,14 @@ dependencies = [
     { name = "scipy", marker = "sys_platform != 'win32'" },
     { name = "torch", marker = "sys_platform != 'win32'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c9/aa/72cbfdc35c259efb6189e1766932ab544aeee7df8fca52b00dc5af72ba49/midas_nf_fitorientation-0.3.2.tar.gz", hash = "sha256:bc3aa98dba43c96ce43a90163f9f37fd53b0eefb4247b69aa36c046ed6d84094", size = 84853, upload-time = "2026-05-21T01:58:50.615Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/35/13/f4e12da6c955e40694b48550979f2276cd086613722d4ebc91153ffe3093/midas_nf_fitorientation-0.8.0.tar.gz", hash = "sha256:c6c037ccf200cb540432b2189f1f190c5832d31c9754125595c193d0ca0aff33", size = 122485, upload-time = "2026-08-04T14:26:28.089Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e1/4e/5229c196088c8c07b260bef1e8fe84391b9ef029e57b0798a96a119f547a/midas_nf_fitorientation-0.3.2-py3-none-any.whl", hash = "sha256:d034ba0ee56733466a08ad386d3b489f913bd92d0712ff023d2505f7b9a5ab86", size = 75090, upload-time = "2026-05-21T01:58:49.164Z" },
+    { url = "https://files.pythonhosted.org/packages/bb/50/03b00ff4fb0fa803833072c8134268f1cf474efedd96a11280a8b46e1107/midas_nf_fitorientation-0.8.0-py3-none-any.whl", hash = "sha256:4e24cb8e012aa7a6dc0263e566741646d42a9d16afc6feb32ecbc219435ed84a", size = 96105, upload-time = "2026-08-04T14:26:26.949Z" },
 ]
 
 [[package]]
 name = "midas-nf-pipeline"
-version = "0.1.1"
+version = "0.6.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "h5py", marker = "sys_platform != 'win32'" },
@@ -2497,14 +2497,14 @@ dependencies = [
     { name = "numpy", marker = "sys_platform != 'win32'" },
     { name = "tqdm", marker = "sys_platform != 'win32'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/64/14/a2f7c2d10ff9035518af842ba55cb466e3a755349d9d2520c65ebb29d658/midas_nf_pipeline-0.1.1.tar.gz", hash = "sha256:11088359f77c5909fd4d9614827cdd6bc591e62b5e64904b6ad03a0e67e0c623", size = 45368, upload-time = "2026-05-21T01:59:43.753Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/10/36/1e2734501342742ae0cb051bcd058c594f677869ba5f9771868bb7aa509f/midas_nf_pipeline-0.6.1.tar.gz", hash = "sha256:c2dc4ce78771a8d126c0156b5723f19f8877d1f3ca6b0f61761289cc918001a9", size = 56636, upload-time = "2026-08-10T02:30:08.172Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b0/9a/bc816bfe24d66d64dbbdbf6ff0d89d62d58df9acffdc2f87949922660d63/midas_nf_pipeline-0.1.1-py3-none-any.whl", hash = "sha256:1f92d03d5a77bc542087179d27f605b4f17e4ad71b8b64534756155bcd77bd20", size = 41866, upload-time = "2026-05-21T01:59:42.475Z" },
+    { url = "https://files.pythonhosted.org/packages/c6/4f/620a9d76c6c205f6a39668b60e9bb4a0c80850313380643298ed10359160/midas_nf_pipeline-0.6.1-py3-none-any.whl", hash = "sha256:3db082e1ac2e00e87528a09238df97cfcc66ffdf49076cbc9df5a0ddbacb02ea", size = 49828, upload-time = "2026-08-10T02:30:06.633Z" },
 ]
 
 [[package]]
 name = "midas-nf-preprocess"
-version = "0.1.2"
+version = "0.6.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "midas-diffract", marker = "sys_platform != 'win32'" },
@@ -2513,18 +2513,18 @@ dependencies = [
     { name = "tifffile", marker = "sys_platform != 'win32'" },
     { name = "torch", marker = "sys_platform != 'win32'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/75/77/29ef2518723bea66d45db8b64e90778190d972d5b16e21f11bc00c54e610/midas_nf_preprocess-0.1.2.tar.gz", hash = "sha256:e480dafb5cbba2019f65e57ca4d0155b25e980388a30045e45d5d062a9e099e3", size = 52774, upload-time = "2026-05-21T01:59:53.309Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a3/34/cee6df65022ff76e56ac944143081c86b66199ce09beb66d01e5e0cf863b/midas_nf_preprocess-0.6.0.tar.gz", hash = "sha256:b577bbd6dbdd3b7c89df8d31490905528d99c8f2dc92404f97f82f4014749126", size = 83045, upload-time = "2026-08-04T14:25:17.229Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b2/11/e1fe63b74bfdc05922b72f7b161f020f6789c9a2a29d3be649082f248666/midas_nf_preprocess-0.1.2-py3-none-any.whl", hash = "sha256:ca47af366d51f5653013150e1fd7fd8d131b6b72f4e470776268d6f9e0ef7abb", size = 67403, upload-time = "2026-05-21T01:59:51.575Z" },
+    { url = "https://files.pythonhosted.org/packages/28/80/963a6a01d5b1b51864dd09eb96d222914230a906f18585339babe99b0c70/midas_nf_preprocess-0.6.0-py3-none-any.whl", hash = "sha256:7d9996f57de6d61c4556e265206419c61a9e120deec8b87bacc6dd7290a482cc", size = 101233, upload-time = "2026-08-04T14:25:15.693Z" },
 ]
 
 [[package]]
 name = "midas-params"
-version = "0.3.5"
+version = "0.7.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/9b/61/57aba86d0fb729167cfcde023871efd2aed936f94ab0e022f57db8b6c6e9/midas_params-0.3.5.tar.gz", hash = "sha256:eec8d66c0ca7053a7c765212c1e228d497d44bf8c5dfa36e41c17949b3d9e5b0", size = 86330, upload-time = "2026-07-17T07:03:37.188Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d1/98/4cff2df816513758254f406ae2a61efe606e8a6d6bcc005e3d9c9be94cc6/midas_params-0.7.0.tar.gz", hash = "sha256:1f633628ed177a089b53f35e600910fe00f9b9ba27fc82769c7af007b3db2ab6", size = 92770, upload-time = "2026-08-04T14:26:12.458Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/cb/8a/c7a13b108559259652578c0110d42c961deceed60d6890297f1d23ac4f33/midas_params-0.3.5-py3-none-any.whl", hash = "sha256:7538539fd8113356ff5f7a781aa0e2ee658cb8b4e7c3dd65fc818c728179fdc5", size = 95551, upload-time = "2026-07-17T07:03:35.706Z" },
+    { url = "https://files.pythonhosted.org/packages/25/0a/d7299cf0215982db1fb60009a0605580acebfea6bf6e68bca03be6da5756/midas_params-0.7.0-py3-none-any.whl", hash = "sha256:57fe5aa95c655618a44865e5e63f03c3a3a6070333ef979b4cd3b94235856326", size = 102725, upload-time = "2026-08-04T14:26:10.815Z" },
 ]
 
 [[package]]
@@ -2541,7 +2541,7 @@ wheels = [
 
 [[package]]
 name = "midas-pdf"
-version = "0.1.0"
+version = "0.1.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "midas-hkls", marker = "sys_platform != 'win32'" },
@@ -2549,14 +2549,14 @@ dependencies = [
     { name = "numpy", marker = "sys_platform != 'win32'" },
     { name = "torch", marker = "sys_platform != 'win32'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f8/33/b5bb2169828a384871a1e873dd72242013507d07b76741ee9e64e46ef530/midas_pdf-0.1.0.tar.gz", hash = "sha256:1cd386c47532150f41de2fe2816986528175787275202fe1516a874edc1cca06", size = 452086, upload-time = "2026-07-29T18:12:23.829Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/00/a4/ec5a285cfbf081a0c98358c4e5c08e2f2e2e083bb9cf8744df433097686c/midas_pdf-0.1.1.tar.gz", hash = "sha256:78a63121638e4b0a8d51239c29c73bad74a923bc4dfd09d1b469b86689f62722", size = 452079, upload-time = "2026-07-31T20:02:42.741Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/85/11/9909ea681f3cbe16cdc881629656126374add3f36fd1d5bad09783ef1b4a/midas_pdf-0.1.0-py3-none-any.whl", hash = "sha256:2e913becc1e829ba8d9ac9f7d0e7111870d5e1ce152d210d9de7b26fb9329a59", size = 429230, upload-time = "2026-07-29T18:12:22.162Z" },
+    { url = "https://files.pythonhosted.org/packages/02/6d/068fe6f4f41d2f162f9d84f3abe7f1e53d5670db24766066aec9eb43308f/midas_pdf-0.1.1-py3-none-any.whl", hash = "sha256:b30db2789408e9f7657a8cf72cd21120ee602a033fbd253372c564b3afa7c2bd", size = 429231, upload-time = "2026-07-31T20:02:40.998Z" },
 ]
 
 [[package]]
 name = "midas-peakfit"
-version = "0.4.5"
+version = "0.5.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "midas-distortion", marker = "sys_platform != 'win32'" },
@@ -2566,9 +2566,9 @@ dependencies = [
     { name = "torch", marker = "sys_platform != 'win32'" },
     { name = "zarr", marker = "sys_platform != 'win32'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f8/e3/76341eb51fc2e43c97133dea894ef40e695468b5512eb35ff3940c894dc6/midas_peakfit-0.4.5.tar.gz", hash = "sha256:9e7100a3c851f50c7c7188ebc44604073aedbb89ed8009ec9ace522671e3212c", size = 106719, upload-time = "2026-07-29T19:50:07.458Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/42/94/3ad30e69693e2527e5c02355c155d61a6c7ba4aa0f2ace8fdb0094fa4767/midas_peakfit-0.5.0.tar.gz", hash = "sha256:dc4a902275a80907f67b0b60ecf725be52f9a8d54d24755890f9b268ae502313", size = 131166, upload-time = "2026-08-02T05:43:31.219Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/75/0b/8cebdcc39ff00d3845f6cbc6abf1c186cb9d9ee6585a7f1e3b8d454e40af/midas_peakfit-0.4.5-py3-none-any.whl", hash = "sha256:8de54a414c7f51530aa4df59e746cf2bb386e6fd650a63ed52e0753c0c619547", size = 106075, upload-time = "2026-07-29T19:50:06.004Z" },
+    { url = "https://files.pythonhosted.org/packages/62/d4/94d325fb035f15c5bac64ead492c85df0020dc4c54fc0e7475d3404c2197/midas_peakfit-0.5.0-py3-none-any.whl", hash = "sha256:bac8fc2bc9382b08362fa5d92cc68bee29eea0118ca9d1190830040703cf7b09", size = 124535, upload-time = "2026-08-02T05:43:29.942Z" },
 ]
 
 [[package]]
@@ -2605,7 +2605,7 @@ wheels = [
 
 [[package]]
 name = "midas-pipeline"
-version = "0.6.1"
+version = "0.8.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "fabio", marker = "sys_platform != 'win32'" },
@@ -2627,14 +2627,14 @@ dependencies = [
     { name = "torch", marker = "sys_platform != 'win32'" },
     { name = "zarr", marker = "sys_platform != 'win32'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/99/92/84c64ce124094681c20d13ffdab0cd1f80119cf094104ef71eb61100db40/midas_pipeline-0.6.1.tar.gz", hash = "sha256:9a34952a696f3154bf927e73555ecd54e51d7819fd95800b8bbeae57f3545124", size = 187945, upload-time = "2026-07-29T19:43:51.022Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/0c/f2/b96692ef7bb093a4c67c53b7a803ec003b9e026fb00cfb9e93569f42fcce/midas_pipeline-0.8.2.tar.gz", hash = "sha256:3505b804b7823952fa98d24f654f3dc25835c441e2bc2b1d0fb5b911f25351bf", size = 200738, upload-time = "2026-08-10T04:07:12.825Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/46/f9/ac2344a0ea1cfc6ec096e1e01a09f1866cf16881768b71e7bce6c9dd56bb/midas_pipeline-0.6.1-py3-none-any.whl", hash = "sha256:d4d9b2bfc5fe136bbe1d7ed4ea6731e94caeae41c14c028d32b2f100634a218b", size = 224137, upload-time = "2026-07-29T19:43:49.448Z" },
+    { url = "https://files.pythonhosted.org/packages/da/24/7ba5fe0d43960ddbcd461800e58550cd8d89a912c62cec27ae36e95d74d7/midas_pipeline-0.8.2-py3-none-any.whl", hash = "sha256:6d88df49f4bc475c2dfe9f36b41fcb630b433c50fe34c02a735707a87ba0c977", size = 235130, upload-time = "2026-08-10T04:07:11.252Z" },
 ]
 
 [[package]]
 name = "midas-process-grains"
-version = "0.6.0"
+version = "0.7.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "h5py", marker = "sys_platform != 'win32'" },
@@ -2648,9 +2648,9 @@ dependencies = [
     { name = "scipy", marker = "sys_platform != 'win32'" },
     { name = "torch", marker = "sys_platform != 'win32'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/3c/4e/9f95177da16926e7f2a86dc69369d3fd411c9c0f67a4179190d558b2200b/midas_process_grains-0.6.0.tar.gz", hash = "sha256:6912b1b2fa5ce601f689611a83e47a90b0ecccfeab8883fea0334247aba1f7e4", size = 246600, upload-time = "2026-07-17T02:31:34.657Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/07/de/00299d38d3c27f1fa494a08d7816c7f76ba61a1dbd9385a4ede5f55910ed/midas_process_grains-0.7.1.tar.gz", hash = "sha256:ca1f8dc5aded9d39ae012ca9248520a0b9d8a1a76a85de1fc5388a586e7549af", size = 262574, upload-time = "2026-08-10T02:29:56.7Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ec/aa/f55bef093d15a146fd3b1729d968c3272891a7fcb988a0a5dfc40ea08bb0/midas_process_grains-0.6.0-py3-none-any.whl", hash = "sha256:94506eb891aa4f4bf537858ecb6f8e8c9c8fbc2b7cb1870973b37debb788dfe5", size = 212400, upload-time = "2026-07-17T02:31:33.183Z" },
+    { url = "https://files.pythonhosted.org/packages/10/60/fbc9c3977eb8087cbee00199ac11249c0b8060612e2540dd46db3fff913c/midas_process_grains-0.7.1-py3-none-any.whl", hash = "sha256:2520b4350301ac5a07a32e45d32495fa598b58e55ec129b5ae044ab8a236f8c1", size = 221386, upload-time = "2026-08-10T02:29:55.518Z" },
 ]
 
 [[package]]
@@ -2681,7 +2681,7 @@ wheels = [
 
 [[package]]
 name = "midas-suite"
-version = "0.4.0"
+version = "0.7.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "midas-calibrate", marker = "sys_platform != 'win32'" },
@@ -2708,9 +2708,9 @@ dependencies = [
     { name = "midas-uq", marker = "sys_platform != 'win32'" },
     { name = "midas-zipper", marker = "sys_platform != 'win32'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/e0/ff/8eee33b0216d0fcd79c86d86a6064d43b1257c50e7b8a78e955036601e27/midas_suite-0.4.0.tar.gz", hash = "sha256:3fd423d9b7b2483f75970e2130e1046897cca72bdf4dd78ee15399c9f2300615", size = 8350, upload-time = "2026-07-29T19:18:53.993Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f8/eb/76cdc20824211c033447755856e1b684bddc1db309456f2b12f025cf37b6/midas_suite-0.7.3.tar.gz", hash = "sha256:7ba084b9616b359d613365cefff509c536a14f93da6eded9a3c89ecfdc0ca99c", size = 8665, upload-time = "2026-08-10T04:09:48.667Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/42/5a/aab859ccfdc3cc44d266caaffff1519b3c95015c0ff6b62601ccb5c9c972/midas_suite-0.4.0-py3-none-any.whl", hash = "sha256:cac6d5d23d6957f44001e1997b1e55e1a3965554db4db4d4a6a75e69f1a6844a", size = 6798, upload-time = "2026-07-29T19:18:52.498Z" },
+    { url = "https://files.pythonhosted.org/packages/24/fe/1bd2c08f4637f7e04bf7a0c38ec9d7131dae536b41a26f37dd659a3248b7/midas_suite-0.7.3-py3-none-any.whl", hash = "sha256:36459433bdbeaf9a04721dbb06b6da65797f46b6fabb1e7586bb0bf248d49f1e", size = 6812, upload-time = "2026-08-10T04:09:47.343Z" },
 ]
 
 [package.optional-dependencies]
@@ -2726,10 +2726,16 @@ ff = [
     { name = "midas-integrate", marker = "sys_platform != 'win32'" },
     { name = "midas-joint-ff-calibrate", marker = "sys_platform != 'win32'" },
     { name = "midas-params", marker = "sys_platform != 'win32'" },
+    { name = "midas-pipeline", marker = "sys_platform != 'win32'" },
     { name = "midas-stress", marker = "sys_platform != 'win32'" },
 ]
 grain-odf = [
     { name = "midas-grain-odf", marker = "sys_platform != 'win32'" },
+]
+nf = [
+    { name = "midas-nf-pipeline", marker = "sys_platform != 'win32'" },
+    { name = "midas-params", marker = "sys_platform != 'win32'" },
+    { name = "midas-stress", marker = "sys_platform != 'win32'" },
 ]
 pdf = [
     { name = "midas-pdf", marker = "sys_platform != 'win32'" },
@@ -2749,7 +2755,7 @@ xaf = [
 
 [[package]]
 name = "midas-transforms"
-version = "0.8.1"
+version = "0.8.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "midas-calibrate", marker = "sys_platform != 'win32'" },
@@ -2759,9 +2765,9 @@ dependencies = [
     { name = "torch", marker = "sys_platform != 'win32'" },
     { name = "zarr", marker = "sys_platform != 'win32'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ab/4b/b7e4b877d96e7f3762142b2bd7676595bf1da05d0822cf978e4e887181d5/midas_transforms-0.8.1.tar.gz", hash = "sha256:da96310d43ecb92623958b4ef066244045a516655cdd35d2dda99537dfe79b61", size = 134827, upload-time = "2026-07-17T07:02:41.599Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/8d/5f/1cb3ef847aefa67a453312fd909c3e45fc2b27eed9099896006621b19361/midas_transforms-0.8.2.tar.gz", hash = "sha256:b8927d60a991423a542c6701a3cb99a25afe7d0b23474dbc1facaa761aad1b36", size = 138519, upload-time = "2026-07-31T16:39:01.706Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ca/dd/a0a6cb3808b77d1a8391c415a6778724e015598eac93122574447d524503/midas_transforms-0.8.1-py3-none-any.whl", hash = "sha256:f8bd87f43afbb6e202f3444199c5c142d36b7d9afb40b3dae15f5ac41bc98a5d", size = 99827, upload-time = "2026-07-17T07:02:40.247Z" },
+    { url = "https://files.pythonhosted.org/packages/e5/cd/e1297086204ba67495fc25277ae5d87d61abc46ed7b0eda979124bf921c9/midas_transforms-0.8.2-py3-none-any.whl", hash = "sha256:0956a8562df0b7dc68872290c8875662d7807f08b3cc02d85df8638d6d870fcc", size = 101545, upload-time = "2026-07-31T16:39:00.127Z" },
 ]
 
 [[package]]
@@ -2798,7 +2804,7 @@ wheels = [
 
 [[package]]
 name = "midas-zipper"
-version = "0.1.4"
+version = "0.1.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "h5py", marker = "sys_platform != 'win32'" },
@@ -2809,9 +2815,9 @@ dependencies = [
     { name = "tqdm", marker = "sys_platform != 'win32'" },
     { name = "zarr", marker = "sys_platform != 'win32'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/0d/63/e3946bbbc1a489effc6f5b9ac43973a63f8fd65c6167867f96da46e09045/midas_zipper-0.1.4.tar.gz", hash = "sha256:21eea73e1bdb9c8726c6ca4de9cf05510df778be7bf4ef4bf35d61c7442840f8", size = 25625, upload-time = "2026-07-17T02:29:04.393Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/75/ba/629095729d612171ec5ac63f1ae05813f5c0073416bc1ebce04d15d0753f/midas_zipper-0.1.5.tar.gz", hash = "sha256:5ad80f92c9160f1974184578af190f34e147abb94f2fe27792fe20078f6803b6", size = 28189, upload-time = "2026-08-02T05:42:55.34Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/9c/b0/f0644f5a30dcd37fecd75e7040d8f83a9d72374a02a91b58618ca82a51df/midas_zipper-0.1.4-py3-none-any.whl", hash = "sha256:db8439c735f7b6323e5f6f2f7ea85fd8b282a99b29c28be43df7e5ad4baee748", size = 25046, upload-time = "2026-07-17T02:29:03.18Z" },
+    { url = "https://files.pythonhosted.org/packages/31/a5/7b3609dcdb87d4670cc4f304cb1c2a56996c686a1bb86b2545622db41927/midas_zipper-0.1.5-py3-none-any.whl", hash = "sha256:2b8a85d972ee44a36562be8aae8f92d6af995ca0f23016829f9313c74dc3ca3d", size = 26374, upload-time = "2026-08-02T05:42:54.054Z" },
 ]
 
 [[package]]

@@ -58,7 +58,13 @@ dependencies = [
     # MIDAS native stack (midas-index, midas-fit-grain, ...) compiles C/C++/CUDA and
     # has no Windows wheels — skip it on native Windows so `uv sync` installs cleanly
     # (CLI/agent/core work; run MIDAS HEDM tools under WSL2/Linux). Unchanged elsewhere.
-    "midas-suite[ff,pdf,defect,dfxm,xaf,ultrafast,grain-odf,pf-odf,pink]>=0.4.0 ; sys_platform != 'win32'",
+    # Floor at 0.7.3: the suite's own dep list floors correctness fixes that a
+    # stale >=0.4.0 pin would let a locked/offline install resolve *below* —
+    # process-grains>=0.7.0 (grain-selection keys silently parsed-then-DISCARDED:
+    # 23710 vs 6132 grains; GrainRadius 5.5x low), fit-grain>=0.7.0, pipeline>=0.8.2,
+    # nf-pipeline>=0.6.1. `nf` extra added (APEXA has NF tools: run_nf_hedm_reconstruction,
+    # refine_nf_parameters, preprocess_nf_data).
+    "midas-suite[ff,nf,pdf,defect,dfxm,xaf,ultrafast,grain-odf,pf-odf,pink]>=0.7.3 ; sys_platform != 'win32'",
     "pywebview>=6.2.1",
 ]
 
