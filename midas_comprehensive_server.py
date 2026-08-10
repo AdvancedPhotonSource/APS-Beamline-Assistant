@@ -671,8 +671,12 @@ async def run_ff_hedm_full_workflow(
         result_folder: Output directory. LayerNr_<N>/ subdirs created here.
         param_file: Path to Parameters.txt / paramstest.txt produced by
                     midas_auto_calibrate or midas-params build_paramstest.
-        data_file: Path to .MIDAS.zip archive (single detector, single layer).
-                   Leave empty if detectors_json is provided for multi-detector.
+        data_file: Optional. A pre-converted .MIDAS.zip archive (→ --zarr, skips
+                   conversion) OR a raw detector file (.ge5.h5/.h5/.ge5/.tif →
+                   --raw-dir on its folder, so the zip conversion runs). Leave
+                   empty to let the pipeline discover raw data from the parameter
+                   file's RawFolder/FileStem/StartNr/EndNr (the usual path), or if
+                   detectors_json is provided for a multi-detector run.
         n_cpus: CPU cores (default 4). Use more for production runs.
         start_layer: First layer number (default 1).
         end_layer: Last layer number (default 1 = single layer).
@@ -707,6 +711,16 @@ async def run_ff_hedm_full_workflow(
         (incl. processgrains_diagnostics.h5 and report_ready), and the exact
         midas-pipeline command that was run. When report_ready is true, chain
         generate_ff_reconstruction_report on the layer dir.
+
+        Honest-status contract (do NOT report success without fresh grains):
+        `total_grains` counts ONLY files this run wrote (fresh by mtime); a prior
+        run's Grains.csv/IndexBest.bin is reported under `stale_grains_on_disk`
+        and never inflates `total_grains`. `status` is "success" only when the
+        pipeline exited 0 AND reconstructed >0 fresh grains; it is "warning" when
+        the run exited 0 but wrote no new output (skip-all/no-op) or produced 0
+        grains — with the reason in `run_note`. `produced_fresh_output` says
+        whether this invocation wrote anything new. Cite `total_grains`/`run_note`,
+        never `stale_grains_on_disk`, when reporting a reconstruction result.
     """
     try:
         import shutil as _shutil
@@ -790,10 +804,24 @@ async def run_ff_hedm_full_workflow(
             if not valid_d:
                 return format_result({"tool": "run_ff_hedm_full_workflow",
                                       "status": "error", "error": data_path})
-            cmd += ["--zarr", data_path]
-            # When a zarr is provided directly, RawFolder/FileStem/StartNr/EndNr
-            # are not needed — skip midas-params preflight to avoid spurious errors
-            cmd += ["--skip-validation"]
+            # --zarr means a PRE-CONVERTED single-detector .MIDAS.zip that
+            # "overrides discovery" (midas-pipeline CLI). Routing a RAW detector
+            # file (.ge5.h5/.h5/.ge5/.tif) here makes the pipeline treat it as a
+            # finished zarr and SKIP the (multi-GB) zip conversion — then it fails
+            # reading raw bytes as a zarr archive. Only send true archives to
+            # --zarr; point --raw-dir at a raw file's folder so conversion runs
+            # (convert_files defaults True; FileStem/StartNr/EndNr still come from
+            # the parameter file).
+            dp_low = data_path.lower()
+            is_archive = (dp_low.endswith(".midas.zip") or dp_low.endswith(".zip")
+                          or ".zarr" in dp_low)
+            if is_archive:
+                cmd += ["--zarr", data_path]
+                # Pre-converted archive: RawFolder/FileStem/StartNr/EndNr are not
+                # needed — skip midas-params preflight to avoid spurious errors.
+                cmd += ["--skip-validation"]
+            else:
+                cmd += ["--raw-dir", str(Path(data_path).parent)]
 
         if detectors_json:
             valid_det, det_path = validate_file(detectors_json)
@@ -848,6 +876,13 @@ async def run_ff_hedm_full_workflow(
         cmd_str = " ".join(cmd)
         print(f"[FF-HEDM] {cmd_str}", file=sys.stderr)
 
+        # Stamp the run start so we can tell fresh outputs (written by THIS run)
+        # from stale Grains.csv/IndexBest.bin left by a PRIOR run — otherwise a
+        # skip-all/no-op run (which still exits 0) reports a prior run's grain
+        # count as if it were this reconstruction's result.
+        import time as _time
+        run_started = _time.time()
+
         proc = subprocess.run(
             cmd,
             capture_output=True, text=True, timeout=14400,
@@ -857,6 +892,18 @@ async def run_ff_hedm_full_workflow(
         # ── Collect outputs ──────────────────────────────────────────────────
         # Works for both c-omp backend (Grains.csv produced by process_grains)
         # and python backend (Grains.csv skipped; grain count from IndexBest.bin).
+        # Each output file is tagged fresh/stale by mtime vs run_started: only
+        # files THIS run wrote count toward total_grains, so a prior run's
+        # Grains.csv can never be reported as this reconstruction's result.
+        def _is_fresh(p: Path) -> bool:
+            # 2 s tolerance for coarse-granularity filesystems; run_started was
+            # captured before the subprocess, so any file written during the run
+            # has mtime >= run_started.
+            try:
+                return p.stat().st_mtime >= run_started - 2
+            except Exception:
+                return False
+
         layer_outputs = []
         for layer in range(start_layer, end_layer + 1):
             layer_dir = result_path / f"LayerNr_{layer}"
@@ -877,6 +924,7 @@ async def run_ff_hedm_full_workflow(
                         n = 0
                     info["grains_file"] = str(gf)
                     info["n_grains"] = n
+                    info["fresh"] = _is_fresh(gf)
                     break
 
             # 2. IndexBest.bin — always written by the indexer regardless of backend.
@@ -893,6 +941,7 @@ async def run_ff_hedm_full_workflow(
                         info["n_grains"] = solved
                         info["n_seeds"] = len(ib)
                         info["best_nMatches"] = float(ib[:, 14].max())
+                        info["fresh"] = _is_fresh(ib_path)
                         info["note"] = (
                             "process_grains skipped (python refiner); "
                             "n_grains = seeds with nMatches>0 from IndexBest.bin. "
@@ -909,19 +958,58 @@ async def run_ff_hedm_full_workflow(
 
             # 4. processgrains_diagnostics.h5 — written by process_grains; the
             #    residual/strain plate + most auto-findings in the reconstruction
-            #    report need it (FF §9). report_ready when Grains.csv exists so the
-            #    agent can chain generate_ff_reconstruction_report immediately.
+            #    report need it (FF §9). report_ready when a FRESH Grains.csv
+            #    exists so the agent can chain generate_ff_reconstruction_report.
             diag = layer_dir / "processgrains_diagnostics.h5"
             if diag.exists():
                 info["diagnostics_h5"] = str(diag)
-            info["report_ready"] = "grains_file" in info
+            info["report_ready"] = "grains_file" in info and info.get("fresh", False)
+            if "n_grains" in info and not info.get("fresh", False):
+                info["stale"] = True
+                info["note"] = (
+                    (info.get("note", "") + " ").strip()
+                    + " STALE: this file predates the current run — it is from a "
+                      "PRIOR reconstruction, not this one."
+                ).strip()
 
             layer_outputs.append(info)
 
+        # Fresh grains = only counts from files THIS run wrote. Stale on-disk
+        # counts are reported separately and never inflate total_grains.
+        fresh_grains = sum(l.get("n_grains", 0) for l in layer_outputs
+                           if l.get("fresh"))
+        stale_grains = sum(l.get("n_grains", 0) for l in layer_outputs
+                           if l.get("n_grains") and not l.get("fresh"))
+        any_fresh_output = any(l.get("fresh") for l in layer_outputs)
+
+        # Honest status: returncode 0 alone is NOT success. midas-pipeline exits 0
+        # for a skip-all/no-op run; a real reconstruction must have produced fresh
+        # output this run. Downgrade to "warning" (never claim success) when the
+        # command succeeded but wrote nothing new.
         ok = proc.returncode == 0
+        if not ok:
+            status = "error"
+            run_note = ""
+        elif fresh_grains > 0:
+            status = "success"
+            run_note = ""
+        elif any_fresh_output:
+            status = "warning"
+            run_note = (
+                "Pipeline ran and wrote output this run but reconstructed 0 grains "
+                "— check RingThresh/MinPeakSNR, the dark, and the geometry "
+                "(Lsd/BC/tilts). Not a fabricated success.")
+        else:
+            status = "warning"
+            run_note = (
+                "midas-pipeline exited 0 but produced NO new output this run — "
+                "every stage was skipped (--skip) or the run was a no-op. Any "
+                "Grains.csv/IndexBest.bin present is STALE (from a prior run) and "
+                "is NOT counted in total_grains. This is not a fresh reconstruction.")
+
         return format_result({
             "tool": "run_ff_hedm_full_workflow",
-            "status": "success" if ok else "error",
+            "status": status,
             "engine": "midas-pipeline",
             "command": cmd_str,
             "return_code": proc.returncode,
@@ -932,9 +1020,12 @@ async def run_ff_hedm_full_workflow(
             "refine_backend": refine_backend,
             "process_grains": process_grains,
             "layer_outputs": layer_outputs,
-            "total_grains": sum(l.get("n_grains", 0) for l in layer_outputs),
+            "total_grains": fresh_grains,
+            "stale_grains_on_disk": stale_grains,
+            "produced_fresh_output": any_fresh_output,
             "report_ready": any(l.get("report_ready") for l in layer_outputs),
             "grains_note": report_note,
+            "run_note": run_note,
         })
 
     except subprocess.TimeoutExpired:
@@ -985,13 +1076,26 @@ async def calibrate_ring_thresholds(
 
         rf = result_folder or str(Path(zpath).expanduser().absolute().parent)
 
-        rt_bin = _shutil.which("midas-ring-thresh")
-        if rt_bin:
-            cmd = [rt_bin, zpath, "--result-folder", rf, "--n-frames", str(n_frames)]
+        # midas-ring-thresh ships in the pip midas-suite (midas_peakfit), which is
+        # a dependency of APEXA itself → it lives in the SAME interpreter APEXA
+        # runs under (sys.executable, the uv .venv), NOT the conda midas_env that
+        # find_midas_python() returns. That conda env carries only the C++ deps
+        # (zarr/diplib/numba/h5py/skimage) and has no midas_peakfit → the old
+        # find_midas_python() fallback raised "ModuleNotFoundError: midas_peakfit"
+        # on the beamline. Prefer the console script that sits next to THIS
+        # interpreter (guaranteed correct), then any PATH script, then a direct
+        # sys.executable -c invocation. Same rule as midas_auto_calibrate (v2) and
+        # _find_midas_params_cli.
+        venv_rt = Path(sys.executable).parent / "midas-ring-thresh"
+        path_rt = _shutil.which("midas-ring-thresh")
+        if venv_rt.exists():
+            cmd = [str(venv_rt), zpath, "--result-folder", rf, "--n-frames", str(n_frames)]
+        elif path_rt:
+            cmd = [path_rt, zpath, "--result-folder", rf, "--n-frames", str(n_frames)]
         else:
-            # Fallback: invoke the module entry point via the midas-suite Python.
-            py = find_midas_python()
-            cmd = [py, "-c",
+            # Fallback: invoke the module entry point via THIS interpreter (.venv),
+            # which is guaranteed to have midas_peakfit installed.
+            cmd = [sys.executable, "-c",
                    "import sys; from midas_peakfit.ring_thresh import main; "
                    "sys.exit(main())",
                    zpath, "--result-folder", rf, "--n-frames", str(n_frames)]
