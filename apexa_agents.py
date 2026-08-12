@@ -2298,7 +2298,8 @@ class AgentRunner:
                   on_tool_result: OnToolResultFn = None,
                   history_summary: str = "",
                   transcript: Optional[List[Dict]] = None,
-                  single_mode: bool = False) -> str:
+                  single_mode: bool = False,
+                  extra_system_context: str = "") -> str:
 
         tools = self._filter_tools(agent.tool_names, all_tools)
 
@@ -2347,6 +2348,14 @@ class AgentRunner:
                 system_content += skill_block
         except Exception:
             pass  # never let skill loading break a query
+
+        # Query-matched skills for single mode: the unified agent has
+        # tool_names=[] (so the block above is empty), so the caller
+        # (_process_single_loop) pre-computes the relevant skill block by
+        # matching the query against the orchestrator keyword map and passes it
+        # in here. Same "learning layer, before the model acts" intent.
+        if extra_system_context:
+            system_content += extra_system_context
 
         messages = [{"role": "system", "content": system_content}]
         # Compacted summary of older turns (from the orchestrator). Injected as
@@ -3861,11 +3870,32 @@ class OrchestratorAgent:
         except ValueError:
             _single_cap = 24
 
+        # Learning layer for single mode. The unified agent has tool_names=[],
+        # so the runner's own skill preload is empty. Recover it by matching the
+        # query against the SAME keyword map the legacy orchestrator routes on
+        # (no second keyword map to drift): every domain the query touches
+        # contributes its specialist's tools → their skills, unioned. This lands
+        # the verified handbook procedure (units/traps/flags) in context BEFORE
+        # the loop edits a param file or fires a tool. Empty when nothing matches
+        # — the deterministic lint gate + RAG still cover that case.
+        skill_block = ""
+        try:
+            _, _scores = self._score_route(query)
+            _matched_tools: List[str] = []
+            for _dom, _sc in _scores.items():
+                if _sc > 0:
+                    _matched_tools.extend(self._ROUTES[_dom].tool_names)
+            if _matched_tools:
+                skill_block = skill_context_for_tools(_matched_tools)
+        except Exception:
+            skill_block = ""  # never let skill matching break a query
+
         result = await self.runner.run(
             agent, query, provider, self.all_tools,
             history=None, log_entry=log_entry, on_tool_result=_capture,
             history_summary=self.running_summary if use_history else "",
             transcript=transcript, single_mode=True, max_iterations=_single_cap,
+            extra_system_context=skill_block,
         )
 
         n_calls = len(log_entry.tool_calls)

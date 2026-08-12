@@ -8957,6 +8957,73 @@ def _lint_handbook_traps(param_path, pipeline: str = "ff", source_h5: str = "") 
                     f"pixels; use ~{default} µm.",
                     "FF Parameters Reference (µm units)")
 
+        # BoxSize (Ymin Ymax Zmin Zmax, µm) is the virtual-detector search box. If
+        # a BoxSize line is PRESENT it must have a positive span on both axes — a
+        # collapsed span (Ymax<=Ymin or Zmax<=Zmin, e.g. the degenerate
+        # `BoxSize -10000 0 0 0` with a zero Z-span) makes the fit_setup keep-box
+        # filter reject EVERY spot → all-zero InputAll.csv → the indexer later dies
+        # on the empty/zeroed Data.bin ("mmap Data.bin failed") two stages
+        # downstream of the real fault. Unambiguous → "error" (blocks dispatch).
+        # An ABSENT BoxSize is NOT flagged: fit_setup skips the box filter entirely
+        # when BoxSizes is empty (fit_setup/core.py:379 `if OmegaRanges and
+        # BoxSizes`), so absence keeps all spots — the safe path, not a trap.
+        for toks in params.get("boxsize", []):
+            try:
+                bx = [float(t) for t in toks[:4]]
+            except Exception:
+                continue
+            if len(bx) < 4:
+                continue
+            y_span, z_span = bx[1] - bx[0], bx[3] - bx[2]
+            if y_span <= 0 or z_span <= 0:
+                axis = "Z" if z_span <= 0 else "Y"
+                add("error", "BoxSize",
+                    f"BoxSize {bx[0]:g} {bx[1]:g} {bx[2]:g} {bx[3]:g} has a "
+                    f"collapsed {axis}-span (min ≥ max). BoxSize is Ymin Ymax Zmin "
+                    "Zmax in µm; a zero/negative span makes the spot keep-box reject "
+                    "EVERY peak → all-zero InputAll.csv → the indexer dies on an "
+                    "empty Data.bin ('mmap Data.bin failed') two stages later. Use a "
+                    "permissive box, e.g. BoxSize -1000000 1000000 -1000000 1000000.",
+                    "FF Parameters Reference (µm units)")
+                break
+
+        # Seed ω-window (Min/MaxOmeSpotIDsToIndex, degrees) selects which spots seed
+        # indexing. Both default to 0.0 (params.py:576-577) with NO auto-derivation
+        # from the ω sweep, and the fit_setup seed mask ALWAYS applies
+        # `ω >= Min AND ω <= Max` (fit_setup/core.py:395-396). So a missing pair →
+        # a degenerate [0.0, 0.0] single-point window that keeps only spots at
+        # exactly ω=0° → empty SpotsToIndex.csv → the indexer gets 0 seeds → 0
+        # grains (a 4-byte IndexBest_all.bin), ring-independent. Both-missing or an
+        # inverted/zero-width window is unambiguous → "error" (blocks dispatch); a
+        # one-sided window (the other bound defaulting to 0.0) is a softer warning.
+        mn = first_float("minomespotidstoindex")
+        mx = first_float("maxomespotidstoindex")
+        has_mn = have("minomespotidstoindex")
+        has_mx = have("maxomespotidstoindex")
+        if not has_mn and not has_mx:
+            add("error", "MinOmeSpotIDsToIndex",
+                "Min/MaxOmeSpotIDsToIndex are not set — both default to 0.0, a "
+                "degenerate single-point ω seed-window at 0° that keeps no spots "
+                "(empty SpotsToIndex.csv → 0 indexing seeds → 0 grains, independent "
+                "of RingToIndex). Set them to the full ω sweep, e.g. "
+                "MinOmeSpotIDsToIndex -180 / MaxOmeSpotIDsToIndex 180.",
+                "FF Parameters Reference (seed ω-window)")
+        elif mn is not None and mx is not None and mn >= mx:
+            add("error", "MinOmeSpotIDsToIndex",
+                f"Seed ω-window is degenerate: MinOmeSpotIDsToIndex={mn:g} ≥ "
+                f"MaxOmeSpotIDsToIndex={mx:g}. A zero/negative-width window keeps no "
+                "spots (empty SpotsToIndex.csv → 0 seeds → 0 grains). Open it to the "
+                "ω sweep, e.g. -180 / 180.",
+                "FF Parameters Reference (seed ω-window)")
+        elif has_mn != has_mx:
+            present = "MinOmeSpotIDsToIndex" if has_mn else "MaxOmeSpotIDsToIndex"
+            missing = "MaxOmeSpotIDsToIndex" if has_mn else "MinOmeSpotIDsToIndex"
+            add("warning", "MinOmeSpotIDsToIndex",
+                f"{present} is set but {missing} is not — {missing} defaults to 0.0, "
+                "giving an asymmetric seed ω-window that likely drops most spots. "
+                "Set both bounds explicitly (e.g. -180 / 180).",
+                "FF Parameters Reference (seed ω-window)")
+
         # §6 — a calibrant LatticeConstant left on a sample run.
         lc = params.get("latticeconstant") or params.get("latticeparameter")
         if lc:
