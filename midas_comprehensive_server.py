@@ -353,6 +353,48 @@ MIDAS_NF_V7 = MIDAS_ROOT / "NF_HEDM" / "v7"
 MIDAS_UTILS = MIDAS_ROOT / "utils"
 STRESS_RUNNER_SCRIPT = Path(__file__).parent / "_stress_runner.py"
 CAPABILITY_RUNNER_SCRIPT = Path(__file__).parent / "_capability_runner.py"
+DETECTOR_PRESETS_FILE = (Path(__file__).parent / "knowledge_base" / "data"
+                         / "detector_presets.json")
+
+_DETECTOR_PRESETS_CACHE: Optional[dict] = None
+
+
+def _load_detector_presets() -> dict:
+    """Load the sourced detector-preset registry once (cached).
+
+    Every numeric field in detector_presets.json is sourced from a real line in
+    the MIDAS repo (see the file's _schema.sources). Returns the "detectors"
+    sub-dict (alias→preset). Returns {} if the file is missing/unreadable rather
+    than raising — masking still works when the caller passes dims directly.
+    """
+    global _DETECTOR_PRESETS_CACHE
+    if _DETECTOR_PRESETS_CACHE is None:
+        try:
+            with open(DETECTOR_PRESETS_FILE) as fh:
+                _DETECTOR_PRESETS_CACHE = json.load(fh).get("detectors", {})
+        except Exception as e:
+            print(f"⚠ detector_presets.json unavailable: {e}", file=sys.stderr)
+            _DETECTOR_PRESETS_CACHE = {}
+    return _DETECTOR_PRESETS_CACHE
+
+
+def _resolve_detector_preset(name_or_alias: str):
+    """Case-insensitive resolve of a detector name/alias to its preset dict.
+
+    Returns (key, preset) on a hit, or (None, sorted_known_keys) on a miss so
+    the caller can surface an actionable "known detectors" listing.
+    """
+    presets = _load_detector_presets()
+    if not name_or_alias:
+        return None, sorted(presets.keys())
+    needle = name_or_alias.strip().lower()
+    for key, preset in presets.items():
+        if key.lower() == needle:
+            return key, preset
+        for alias in preset.get("aliases", []):
+            if alias.strip().lower() == needle:
+                return key, preset
+    return None, sorted(presets.keys())
 
 _autocal_script = MIDAS_UTILS / "AutoCalibrateZarr.py"
 if not _autocal_script.exists():
@@ -2944,6 +2986,44 @@ async def validate_midas_installation(
             "status": "error",
             "error": str(e)
         })
+
+@mcp.tool()
+async def verify_ff_reconstruction(
+    result_folder: str,
+    layers: str = ""
+) -> str:
+    """Independently verify an FF reconstruction's on-disk artifacts.
+
+    Reads the artifacts under ``result_folder/LayerNr_<N>/`` and checks them
+    against the FF Lab Notebook's documented silent-failure chains — WITHOUT
+    running MIDAS or trusting the workflow's own summary. Surfaces the failure at
+    its real cause, not the crash two stages downstream:
+      • empty / all-zero InputAll.csv   → bad Width or collapsed BoxSize
+      • 0 rows in SpotsToIndex.csv       → dead ω seed-window
+      • 4-byte IndexBest*.bin            → indexer got 0 seeds → 0 grains
+      • empty Data.bin/nData.bin, 0 Grains.csv rows
+
+    Args:
+        result_folder: FF result directory (holding LayerNr_<N> subdirs).
+        layers: Optional comma-separated layer numbers (e.g. "0,1"); empty = all.
+
+    Returns:
+        JSON ``{status: ok|fail|incomplete|error, layers:[...], summary}``. Each
+        check cites its notebook source. Deterministic, fail-open.
+    """
+    try:
+        import handbook_guardrails as _hg
+        layer_list = None
+        if layers.strip():
+            layer_list = [int(x) for x in re.split(r"[,\s]+", layers.strip()) if x]
+        return format_result({
+            "tool": "verify_ff_reconstruction",
+            **_hg.verify_ff_outputs(result_folder, layer_list),
+        })
+    except Exception as e:
+        return format_result({
+            "tool": "verify_ff_reconstruction", "status": "error", "error": str(e)})
+
 
 @mcp.tool()
 async def get_midas_workflow_status(
@@ -8864,223 +8944,22 @@ def _parse_param_multi(param_path: Path) -> dict:
 def _lint_handbook_traps(param_path, pipeline: str = "ff", source_h5: str = "") -> list:
     """Check a parameter file against the FF/NF Handbook silent-corruption traps.
 
-    Returns a list of {severity, key, message, section} dicts. Severity is
-    "warning" (likely-wrong, silently corrupts results) or "info" (a rule that
-    can't be confirmed from the param file alone — a reminder). Grounded in
-    manuals/FF_HEDM_Handbook.md and NF_HEDM_Handbook.md (the source of truth).
+    Thin wrapper over the generic, handbook-sourced guardrail engine in
+    ``handbook_guardrails.evaluate_param_guardrails``. Returns the same list of
+    ``{severity, key, message, section}`` dicts as before (error/warning/info) —
+    all call sites (the FF pre-dispatch gate + the two renderers) are unchanged.
+
+    The rules are no longer hand-typed here: unit/degenerate traps come from
+    generic primitives fed by facts parsed from ``manuals/FF_Parameters_Reference.md``
+    (units/defaults/arity) plus the ``FF_HEDM/Example/Parameters.txt`` recommended
+    magnitudes; relational/outcome traps come from a curated, per-rule **cited**
+    spec. See ``handbook_guardrails`` for the design. Fail-open to ``[]``.
     """
-    p = Path(param_path).expanduser()
-    pipe = (pipeline or "ff").lower()
-    traps: list = []
-
-    def add(sev, key, msg, section):
-        traps.append({"severity": sev, "key": key, "message": msg, "section": section})
-
-    params = _parse_param_multi(p)
-    have = lambda k: k in params  # noqa: E731
-
-    def first_float(k):
-        try:
-            return float(params[k][0][0])
-        except Exception:
-            return None
-
-    if pipe in ("ff", "pf"):
-        # §3e — GE/far-field frames carry a leading throwaway frame; SkipFrame 1.
-        if not have("skipframe"):
-            add("warning", "SkipFrame",
-                "SkipFrame is not set. GE/far-field data carry a leading throwaway "
-                "frame — set 'SkipFrame 1' (FF §3e). Omitting it shifts every "
-                "omega by one step, mirroring/rotating the microstructure "
-                "undetectably.", "FF §3e")
-        elif str(params["skipframe"][0][0] if params["skipframe"][0] else "") != "1":
-            add("info", "SkipFrame",
-                f"SkipFrame={params['skipframe'][0]} (expected 1 for GE/far-field). "
-                "Confirm this matches the detector's frame layout (FF §3e).",
-                "FF §3e")
-
-        # §3d — a separate Dark .h5 stores its frame at exchange/data, so BOTH
-        # darkLoc and darkDataset must point at exchange/data (not exchange/dark).
-        if have("dark") or have("darkfile"):
-            dl = (params.get("darkloc", [[""]])[0] or [""])[0].lower()
-            dd = (params.get("darkdataset", [[""]])[0] or [""])[0].lower()
-            bad = []
-            if have("darkloc") and dl and dl != "exchange/data":
-                bad.append(f"darkLoc={dl}")
-            if have("darkdataset") and dd and dd != "exchange/data":
-                bad.append(f"darkDataset={dd}")
-            if not have("darkloc") and not have("darkdataset"):
-                add("warning", "darkLoc",
-                    "A separate Dark file is set but darkLoc/darkDataset are not. "
-                    "A standalone dark .h5 stores its frame at 'exchange/data' — "
-                    "set BOTH darkLoc and darkDataset to exchange/data (FF §3d). "
-                    "The integrator default 'exchange/dark' reads nothing → an "
-                    "all-zero dark → threshold-invariant 0-peak output.", "FF §3d")
-            elif bad:
-                add("warning", "darkLoc",
-                    "Separate Dark file with " + ", ".join(bad) + ". A standalone "
-                    "dark .h5 stores its frame at 'exchange/data' — set BOTH "
-                    "darkLoc and darkDataset to exchange/data (FF §3d).", "FF §3d")
-
-        # §6c — MinPeakSNR is the spot-quality gate; FitRMSE/NImgs are not proxies.
-        if not have("minpeaksnr"):
-            add("info", "MinPeakSNR",
-                "MinPeakSNR is not set. It is the peak/spot quality gate (FF §6c) — "
-                "set it explicitly rather than relying on FitRMSE/NImgs proxies.",
-                "FF §6c")
-
-        # §6 — Rsample/Hbeam are the grain-SEARCH BOUND, never the sample size.
-        for k, label in (("rsample", "Rsample"), ("hbeam", "Hbeam")):
-            v = first_float(k)
-            if v is not None and 0 < v < 100:
-                add("warning", label,
-                    f"{label}={v} looks small. {label} is the grain-search bound "
-                    "(half-width in µm the indexer searches), NOT the physical "
-                    "sample size (FF §6). Setting it to the sample size drops grains "
-                    "at the edges. Use a bound comfortably larger than the beam-lit "
-                    "volume.", "FF §6")
-
-        # Width / MarginRadius are in MICRONS (Width default 1500, MarginRadius
-        # default 500) — a value < ~50 almost certainly means pixels were entered
-        # instead of µm. Classic failure: `Width 7.5` (= 0.0375 px band) rejects
-        # essentially every peak → empty InputAll.csv → the FF run aborts. This is
-        # an unambiguous unit error, so it is "error" severity (blocks dispatch).
-        for k, label, default in (("width", "Width", 1500),
-                                  ("marginradius", "MarginRadius", 500)):
-            v = first_float(k)
-            if v is not None and 0 < v < 50:
-                add("error", label,
-                    f"{label}={v} is far below its µm default ({default}). {label} "
-                    "is in MICRONS, not pixels — at ~200 µm/px that is only "
-                    f"~{v / 200:.3g} px, a ring band so narrow it rejects nearly all "
-                    "peaks (empty InputAll.csv, aborted run). You likely entered "
-                    f"pixels; use ~{default} µm.",
-                    "FF Parameters Reference (µm units)")
-
-        # BoxSize (Ymin Ymax Zmin Zmax, µm) is the virtual-detector search box. If
-        # a BoxSize line is PRESENT it must have a positive span on both axes — a
-        # collapsed span (Ymax<=Ymin or Zmax<=Zmin, e.g. the degenerate
-        # `BoxSize -10000 0 0 0` with a zero Z-span) makes the fit_setup keep-box
-        # filter reject EVERY spot → all-zero InputAll.csv → the indexer later dies
-        # on the empty/zeroed Data.bin ("mmap Data.bin failed") two stages
-        # downstream of the real fault. Unambiguous → "error" (blocks dispatch).
-        # An ABSENT BoxSize is NOT flagged: fit_setup skips the box filter entirely
-        # when BoxSizes is empty (fit_setup/core.py:379 `if OmegaRanges and
-        # BoxSizes`), so absence keeps all spots — the safe path, not a trap.
-        for toks in params.get("boxsize", []):
-            try:
-                bx = [float(t) for t in toks[:4]]
-            except Exception:
-                continue
-            if len(bx) < 4:
-                continue
-            y_span, z_span = bx[1] - bx[0], bx[3] - bx[2]
-            if y_span <= 0 or z_span <= 0:
-                axis = "Z" if z_span <= 0 else "Y"
-                add("error", "BoxSize",
-                    f"BoxSize {bx[0]:g} {bx[1]:g} {bx[2]:g} {bx[3]:g} has a "
-                    f"collapsed {axis}-span (min ≥ max). BoxSize is Ymin Ymax Zmin "
-                    "Zmax in µm; a zero/negative span makes the spot keep-box reject "
-                    "EVERY peak → all-zero InputAll.csv → the indexer dies on an "
-                    "empty Data.bin ('mmap Data.bin failed') two stages later. Use a "
-                    "permissive box, e.g. BoxSize -1000000 1000000 -1000000 1000000.",
-                    "FF Parameters Reference (µm units)")
-                break
-
-        # Seed ω-window (Min/MaxOmeSpotIDsToIndex, degrees) selects which spots seed
-        # indexing. Both default to 0.0 (params.py:576-577) with NO auto-derivation
-        # from the ω sweep, and the fit_setup seed mask ALWAYS applies
-        # `ω >= Min AND ω <= Max` (fit_setup/core.py:395-396). So a missing pair →
-        # a degenerate [0.0, 0.0] single-point window that keeps only spots at
-        # exactly ω=0° → empty SpotsToIndex.csv → the indexer gets 0 seeds → 0
-        # grains (a 4-byte IndexBest_all.bin), ring-independent. Both-missing or an
-        # inverted/zero-width window is unambiguous → "error" (blocks dispatch); a
-        # one-sided window (the other bound defaulting to 0.0) is a softer warning.
-        mn = first_float("minomespotidstoindex")
-        mx = first_float("maxomespotidstoindex")
-        has_mn = have("minomespotidstoindex")
-        has_mx = have("maxomespotidstoindex")
-        if not has_mn and not has_mx:
-            add("error", "MinOmeSpotIDsToIndex",
-                "Min/MaxOmeSpotIDsToIndex are not set — both default to 0.0, a "
-                "degenerate single-point ω seed-window at 0° that keeps no spots "
-                "(empty SpotsToIndex.csv → 0 indexing seeds → 0 grains, independent "
-                "of RingToIndex). Set them to the full ω sweep, e.g. "
-                "MinOmeSpotIDsToIndex -180 / MaxOmeSpotIDsToIndex 180.",
-                "FF Parameters Reference (seed ω-window)")
-        elif mn is not None and mx is not None and mn >= mx:
-            add("error", "MinOmeSpotIDsToIndex",
-                f"Seed ω-window is degenerate: MinOmeSpotIDsToIndex={mn:g} ≥ "
-                f"MaxOmeSpotIDsToIndex={mx:g}. A zero/negative-width window keeps no "
-                "spots (empty SpotsToIndex.csv → 0 seeds → 0 grains). Open it to the "
-                "ω sweep, e.g. -180 / 180.",
-                "FF Parameters Reference (seed ω-window)")
-        elif has_mn != has_mx:
-            present = "MinOmeSpotIDsToIndex" if has_mn else "MaxOmeSpotIDsToIndex"
-            missing = "MaxOmeSpotIDsToIndex" if has_mn else "MinOmeSpotIDsToIndex"
-            add("warning", "MinOmeSpotIDsToIndex",
-                f"{present} is set but {missing} is not — {missing} defaults to 0.0, "
-                "giving an asymmetric seed ω-window that likely drops most spots. "
-                "Set both bounds explicitly (e.g. -180 / 180).",
-                "FF Parameters Reference (seed ω-window)")
-
-        # §6 — a calibrant LatticeConstant left on a sample run.
-        lc = params.get("latticeconstant") or params.get("latticeparameter")
-        if lc:
-            try:
-                a0 = float(lc[0][0])
-                for nm, (sg, a_cal) in _CALIBRANT_DB.items():
-                    if abs(a0 - a_cal) < 0.01:
-                        add("warning", "LatticeConstant",
-                            f"LatticeConstant a={a0} ≈ {nm} ({a_cal} Å). If this is a "
-                            f"SAMPLE run, you are indexing with the calibrant's cell "
-                            "(FF §6). Set the sample's LatticeConstant + SpaceGroup.",
-                            "FF §6")
-                        break
-            except Exception:
-                pass
-
-        # §6b — template-looking RingThresh (all rings share one identical value).
-        rt = params.get("ringthresh", [])
-        if rt:
-            vals = []
-            for toks in rt:
-                if len(toks) >= 2:
-                    vals.append(toks[1])
-            if len(vals) >= 2 and len(set(vals)) == 1:
-                add("warning", "RingThresh",
-                    f"All {len(vals)} RingThresh lines share the same value "
-                    f"({vals[0]}) — that is a template, not data-derived. Real "
-                    "per-ring thresholds differ. Run calibrate_ring_thresholds on "
-                    "the .MIDAS.zip and paste its RingThresh block (FF §6b); a wrong "
-                    "value gives 0 peaks and an empty grain list.", "FF §6b")
-
-        # §2 — omega sign / aero convention: unconfirmable without the _FF.par.
-        add("info", "OmegaStart",
-            "Verify the omega sign against the beamline's rotation convention "
-            "(FF §2). On aero-convention data, OmegaStart AND OmegaStep must be "
-            "negated; a sign flip mirrors the microstructure and is undetectable "
-            "from the grain list alone." + (
-                "" if source_h5 else " (No _FF.par provided to auto-check.)"),
-            "FF §2")
-
-        # §4b — Lsd is calibrated, not a stage readback; DetZ ≠ Lsd.
-        add("info", "Lsd",
-            "Lsd must come from the calibrant fit, not a DetZ stage readback "
-            "(FF §4b). Confirm this Lsd is the calibrated sample-to-detector "
-            "distance.", "FF §4b")
-
-    if pipe == "nf":
-        # §3g — the GE SkipFrame-1 rule must NOT cross to NF. NF's extra frame is a
-        # trailing omega-wrap frame, not a leading throwaway.
-        if have("skipframe") and str(
-                params["skipframe"][0][0] if params["skipframe"][0] else "") == "1":
-            add("warning", "SkipFrame",
-                "SkipFrame 1 is set on an NF parameter file. The GE far-field "
-                "SkipFrame rule does NOT apply to NF — NF's extra frame is a "
-                "trailing omega-wrap frame, not a leading throwaway (NF §3g). "
-                "Remove SkipFrame here or you will drop a real omega frame.",
-                "NF §3g")
+    try:
+        import handbook_guardrails as _hg
+        return _hg.evaluate_param_guardrails(param_path, pipeline, source_h5)
+    except Exception:
+        return []
 
     return traps
 
@@ -10182,6 +10061,247 @@ async def invert_pink_beam(
         return format_result({"tool": "invert_pink_beam", **out})
     except Exception as e:
         return format_result({"tool": "invert_pink_beam",
+                              "status": "error", "error": str(e)})
+
+
+def _lint_mask_request(mode_list: list, ny: int, nz: int, param_file: str,
+                       sentinels: str, module_gaps_json: str,
+                       detector: str) -> list:
+    """Deterministic pre-run lint for build_detector_mask requests.
+
+    Returns {severity, key, message, section} dicts (same shape as
+    _lint_handbook_traps). `error` severity hard-blocks the run (like the FF
+    unit traps); `warning`/`info` are surfaced but never block. Covers the
+    unambiguous ways a mask request produces garbage: wrong geometry, diff mode
+    without a calibrated param file, value mode without sentinels, module_gap
+    with no geometry.
+    """
+    traps = []
+    S = "Detector masking (build_detector_mask)"
+    if "differentiable" in mode_list and not param_file:
+        traps.append({"severity": "error", "key": "param_file",
+                      "message": ("differentiable mode needs a calibrated param "
+                                  "file (Lsd/BC/tilts/px/binning) for the forward "
+                                  "geometry — none given."), "section": S})
+    if "value" in mode_list and not sentinels:
+        traps.append({"severity": "error", "key": "sentinels",
+                      "message": ("value mode needs sentinels (e.g. '-1,-2'); none "
+                                  "given and the detector has no default_sentinels."),
+                      "section": S})
+    if "module_gap" in mode_list and not module_gaps_json:
+        traps.append({"severity": "warning", "key": "module_gap",
+                      "message": (f"module_gap requested but detector '{detector or '?'}' "
+                                  "has no module_gaps geometry in the registry — this "
+                                  "mode will no-op (flat panel, or gaps not sourced in "
+                                  "MIDAS)."), "section": S})
+    need_dims = {"module_gap"} & set(mode_list)
+    if need_dims and not (ny and nz):
+        traps.append({"severity": "error", "key": "dims",
+                      "message": ("module_gap mode needs detector dims — pass a "
+                                  "`detector` alias or nr_pixels_y/nr_pixels_z."),
+                      "section": S})
+    return traps
+
+
+def _patch_maskfile_param(param_file: str, mask_path: str) -> dict:
+    """Back up the param file, then insert/replace its MaskFile line in place.
+
+    Report-only is the default in build_detector_mask; this runs ONLY on
+    write_param=True. Backs up to <param>.bak.<n> (never overwriting an existing
+    .bak) BEFORE editing, then patches (or appends) `MaskFile <abs path>`. An
+    existing `MaskFile`/`MaskFN` line is replaced. Returns backup path + a diff.
+    """
+    import shutil
+    p = Path(param_file).expanduser()
+    lines = p.read_text().splitlines()
+    # Pick the first free backup slot — never clobber an existing .bak.
+    n = 0
+    while (bak := p.with_name(p.name + f".bak.{n}")).exists():
+        n += 1
+    shutil.copy2(p, bak)
+
+    new_line = f"MaskFile {mask_path}"
+    old_line = None
+    out_lines, replaced = [], False
+    for ln in lines:
+        tok = ln.strip().split()
+        key = tok[0] if tok else ""
+        if key in ("MaskFile", "MaskFN") and not replaced:
+            old_line, replaced = ln, True
+            out_lines.append(new_line)
+        else:
+            out_lines.append(ln)
+    action = "replaced"
+    if not replaced:
+        out_lines.append(new_line)
+        action = "appended"
+    p.write_text("\n".join(out_lines) + "\n")
+    return {"param_file": str(p), "backup": str(bak), "action": action,
+            "old_line": old_line, "new_line": new_line}
+
+
+@mcp.tool()
+async def build_detector_mask(
+    image_path: str = "",
+    detector: str = "",
+    nr_pixels_y: int = 0,
+    nr_pixels_z: int = 0,
+    modes: str = "statistical",
+    sentinels: str = "",
+    param_file: str = "",
+    output_path: str = "",
+    diff_iterations: int = 300,
+    diff_lr: float = 0.5,
+    diff_threshold: float = 0.5,
+    diff_sparsity: float = 1e-4,
+    diff_smoothness: float = 0.0,
+    diff_crop_rings: bool = True,
+    write_param: bool = False,
+) -> str:
+    """Build a detector MaskFile (uint8 TIFF, 1=masked) for MIDAS FF/NF/integration.
+
+    Beamline detector frames carry defects that corrupt HEDM analysis: dead
+    pixels, module strides/gaps (Pilatus/Eiger tiles), hot pixels/zingers, NaNs,
+    and diffuse blobs. This builds a downstream-correct MaskFile — uint8 TIFF,
+    convention **1 = masked**, DataType code 7, in RAW detector orientation — from
+    one or more detection modes, OR-combined. Report-only by default: it always
+    returns a paste-ready `MaskFile <path>` line and patches a param file only on
+    explicit `write_param=True` (backing up the original first).
+
+    Detector geometry (dims, pixel size, module-gap layout, typical sentinels) is
+    resolved from a sourced registry (knowledge_base/data/detector_presets.json —
+    every value traced to a MIDAS repo line). Pass `detector` (name/alias) OR the
+    dims directly via `nr_pixels_y`/`nr_pixels_z`.
+
+    Args:
+        image_path: dark/data frame (TIFF or HDF5). Required for value/statistical/
+            differentiable/convert modes. For HDF5 the dataset defaults to
+            exchange/data. A 3-D stack is averaged per-pixel.
+        detector: registry alias (e.g. "pilatus 2m", "ge", "varex", "eiger2 4m")
+            → resolves NrPixelsY/Z, module_gaps, default sentinels, DataType. Or
+            omit and pass dims directly.
+        nr_pixels_y: detector width (fast axis) — overrides/supplies dims.
+        nr_pixels_z: detector height (slow axis) — overrides/supplies dims.
+        modes: csv of modes: value, statistical (default), module_gap,
+            differentiable, convert, combine. Multiple → OR-combined.
+        sentinels: for `value` mode, csv like "-1,-2". Defaults to the detector's
+            registry default_sentinels if a detector is resolved.
+        param_file: calibrated MIDAS param file. REQUIRED for `differentiable`
+            (geometry: Lsd/BC/tilts/px/binning) and the target of `write_param`.
+        output_path: mask TIFF path. Default: <image_stem>_mask.tif.
+        diff_iterations: differentiable mode Adam steps (default 300; 200-500).
+        diff_lr: differentiable Adam learning rate (default 0.5).
+        diff_threshold: hard-mask threshold on the learned weight (default 0.5).
+        diff_sparsity: sparsity prior weight (default 1e-4).
+        diff_smoothness: smoothness prior weight (default 0.0; >0 for clustered blobs).
+        diff_crop_rings: focus the η-uniformity loss on ring bands (default True).
+        write_param: if True, back up param_file → param_file.bak.<n> then insert/
+            replace its `MaskFile` line. Default False (report-only).
+
+    Returns:
+        JSON with output_path, mask stats (n_masked/pct/per-mode breakdown), the
+        paste-ready MaskFile line, the resolved detector preset, and — on
+        write_param — the backup path + diff. Values are always uint8 ⊆ {0,1}.
+    """
+    try:
+        mode_list = [m.strip().lower() for m in modes.split(",") if m.strip()]
+        preset_used = None
+        module_gaps_json = ""
+        ny, nz = nr_pixels_y, nr_pixels_z
+        sent = sentinels
+
+        # Resolve detector preset → dims / module_gaps / default sentinels.
+        if detector:
+            key, preset = _resolve_detector_preset(detector)
+            if key is None:
+                return format_result({
+                    "tool": "build_detector_mask", "status": "error",
+                    "error": f"Unknown detector '{detector}'.",
+                    "known_detectors": preset})
+            preset_used = {"key": key, **preset}
+            if not ny:
+                ny = int(preset.get("NrPixelsY", 0))
+            if not nz:
+                nz = int(preset.get("NrPixelsZ", 0))
+            if preset.get("module_gaps"):
+                module_gaps_json = json.dumps(preset["module_gaps"])
+            if not sent and preset.get("default_sentinels"):
+                sent = ",".join(str(s) for s in preset["default_sentinels"])
+
+        # Pre-dispatch lint (hard-block on `error` traps).
+        traps = _lint_mask_request(mode_list, ny, nz, param_file, sent,
+                                   module_gaps_json, detector)
+        errors = [t for t in traps if t.get("severity") == "error"]
+        if errors:
+            return format_result({
+                "tool": "build_detector_mask", "status": "error",
+                "error": "Handbook lint blocked the mask request.",
+                "handbook_traps": traps, "detector_preset": preset_used})
+
+        # Validate the image where a mode needs it.
+        needs_image = {"value", "statistical", "differentiable", "convert"} & set(mode_list)
+        if needs_image:
+            if not image_path:
+                return format_result({
+                    "tool": "build_detector_mask", "status": "error",
+                    "error": f"modes {sorted(needs_image)} require image_path."})
+            v, msg = validate_file(image_path)
+            if not v:
+                return format_result({"tool": "build_detector_mask",
+                                      "status": "error", "error": msg})
+
+        # Build CLI args. Use `--flag=value` for anything that may start with '-'
+        # (argparse treats a bare leading-dash value as an option — see plan).
+        cargs = ["mask", "--modes", ",".join(mode_list)]
+        if image_path:
+            cargs += ["--image", str(Path(image_path).expanduser())]
+        if output_path:
+            cargs += ["--output", str(Path(output_path).expanduser())]
+        if ny:
+            cargs += ["--nr-pixels-y", str(ny)]
+        if nz:
+            cargs += ["--nr-pixels-z", str(nz)]
+        if sent:
+            cargs += [f"--sentinels={sent}"]
+        if module_gaps_json:
+            cargs += [f"--module-gaps={module_gaps_json}"]
+        if param_file:
+            cargs += ["--param-file", str(Path(param_file).expanduser())]
+        cargs += [
+            f"--diff-iterations={diff_iterations}",
+            f"--diff-lr={diff_lr}",
+            f"--diff-threshold={diff_threshold}",
+            f"--diff-sparsity={diff_sparsity}",
+            f"--diff-smoothness={diff_smoothness}",
+        ]
+        if diff_crop_rings:
+            cargs += ["--diff-crop-rings"]
+
+        # Differentiable mode recomputes the full forward each step → allow time.
+        timeout = 7200 if "differentiable" in mode_list else 900
+        out = _run_capability_runner(cargs, timeout=timeout)
+
+        result = {"tool": "build_detector_mask", **out,
+                  "detector_preset": preset_used}
+        if traps:
+            result["handbook_traps"] = traps
+
+        # Opt-in param patch (report-only otherwise).
+        if write_param and out.get("status") == "success":
+            if not param_file:
+                result["param_patch"] = {"status": "skipped",
+                                         "reason": "write_param=True but no param_file given."}
+            else:
+                pv, pmsg = validate_file(param_file)
+                if not pv:
+                    result["param_patch"] = {"status": "error", "reason": pmsg}
+                else:
+                    result["param_patch"] = {"status": "success",
+                                             **_patch_maskfile_param(param_file,
+                                                                     out["output_path"])}
+        return format_result(result)
+    except Exception as e:
+        return format_result({"tool": "build_detector_mask",
                               "status": "error", "error": str(e)})
 
 

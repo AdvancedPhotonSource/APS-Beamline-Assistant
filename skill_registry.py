@@ -56,6 +56,8 @@ SKILL_FOR_TOOL = {
     "read_grains_summary": "midas-hedm",
     "compute_grain_stress": "midas-hedm",
     "analyze_slip_systems": "midas-hedm",
+    # detector masking
+    "build_detector_mask": "midas-mask",
     # phase / refinement
     "run_gsas_refinement": "midas-gsasii",
     # inspect / validate

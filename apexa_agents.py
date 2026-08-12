@@ -42,7 +42,7 @@ from apexa_timing import (
     log_llm_call, count_message_tokens, count_tokens,
     record_llm_call, current_query_id,
 )
-from skill_registry import skill_context_for_tools
+from skill_registry import skill_context_for_tools, skills_for_tools, load_skill_text
 
 # ── Compact directory listing ───────────────────────────────────────────────
 
@@ -2288,6 +2288,92 @@ class AgentRunner:
             return list(history[-max_msgs:])
         return [history[first_user_idx]] + list(history[-(max_msgs - 1):])
 
+    # ── Stage-scoped guardrails (Component C helpers) ─────────────────────────
+
+    @staticmethod
+    def _maybe_stage_skill_msg(tool_name: str, injected_skills: set) -> Optional[Dict]:
+        """(C1) Stage-scoped skill loading.
+
+        When the model uses a tool whose canonical Agent Skill has not yet been
+        injected this turn, return a system message carrying that skill body —
+        so as a single turn walks the pipeline (calibrate → integrate → refine)
+        it picks up each stage's verified handbook procedure at the moment it
+        enters that stage. Query-time skill matching only sees the opening
+        request; this follows the ACTUAL stage. Returns None when the tool maps
+        to no new skill. Mutates `injected_skills` (dedup set)."""
+        try:
+            new = [s for s in skills_for_tools([tool_name]) if s not in injected_skills]
+        except Exception:
+            return None
+        if not new:
+            return None
+        blocks = []
+        for s in new:
+            injected_skills.add(s)          # mark injected even if body is empty
+            body = load_skill_text(s)
+            if body:
+                blocks.append(f"### Canonical procedure: {s}\n{body}")
+        if not blocks:
+            return None
+        return {
+            "role": "system",
+            "content": (
+                "CANONICAL PROCEDURE for the tool you just used — the verified "
+                "handbook/notebook steps (exact flags, units, traps). Follow it "
+                "for the remaining steps of this stage:\n\n" + "\n\n".join(blocks)
+            ),
+        }
+
+    @staticmethod
+    def _maybe_verifier_msg(tool_name: str, arguments: Dict) -> Optional[Dict]:
+        """(C2) Post-stage verifier feedback.
+
+        After an FF reconstruction tool resolves, run the independent on-disk
+        output verifier (`handbook_guardrails.verify_ff_outputs`) and, if it
+        finds degenerate/empty artifacts, return a user message listing the
+        failed invariant checks (with their notebook citations) — so the model
+        reacts to ground-truth output inspection rather than the tool's own
+        success summary. Returns None when the tool is not an FF reconstruction,
+        no result folder is given, or every check passed."""
+        if tool_name not in ("run_ff_hedm_full_workflow", "run_ff_pipeline"):
+            return None
+        args = arguments or {}
+        rf = args.get("result_folder") or args.get("resultFolder") or ""
+        if not rf:
+            return None
+        try:
+            import handbook_guardrails as _hg
+            report = _hg.verify_ff_outputs(rf)
+        except Exception:
+            return None
+        if report.get("status") != "fail":
+            return None
+        lines = []
+        for layer in report.get("layers", []):
+            for chk in layer.get("checks", []):
+                if chk.get("ok") is False:
+                    cite = f"  [{chk['cite']}]" if chk.get("cite") else ""
+                    lines.append(
+                        f"  • L{layer.get('layer')} {chk.get('name')}: "
+                        f"{chk.get('detail')}{cite}"
+                    )
+        if not lines:
+            return None
+        return {
+            "role": "user",
+            "content": (
+                "⛔ INDEPENDENT OUTPUT CHECK — the FF reconstruction wrote "
+                "degenerate or empty artifacts on disk (this is a direct file "
+                "inspection, not the tool's own summary). These are the "
+                "silent-failure chains the handbook warns about:\n"
+                + "\n".join(lines) + "\n\n"
+                "Do NOT report success. Diagnose the ROOT cause (a missing or "
+                "degenerate parameter upstream typically produces an empty "
+                "InputAll.csv / 0 seeds / a 4-byte IndexBest), fix the parameter "
+                "file, and re-run."
+            ),
+        }
+
     # ── Main loop ────────────────────────────────────────────────────────────
 
     async def run(self, agent: APEXAAgent, query: str,
@@ -2447,6 +2533,23 @@ class AgentRunner:
         _refusal_strikes = 0  # refusal guard: false "I can't execute / you run it"
         _empty_strikes = 0    # empty-response guard: model returned nothing this turn
 
+        # ── Stage-scoped guardrails (Component C) ────────────────────────────
+        # As the model moves through pipeline stages within ONE turn, (C1) load
+        # the canonical skill for each NEW tool it uses — extending the
+        # once-per-turn preload to follow the actual stage — and (C2) run the
+        # independent output verifier after an FF reconstruction so the model
+        # reacts to on-disk invariants (0 seeds, empty InputAll) rather than the
+        # tool's own summary. Behind APEXA_STAGE_GUARDRAILS (default on); fully
+        # fail-open. Seed the injected-skills set with what was already preloaded
+        # into the system prompt so we never re-inject the specialist's own skills.
+        _stage_guardrails_on = os.environ.get(
+            "APEXA_STAGE_GUARDRAILS", "1").strip().lower() not in ("0", "false", "no", "off")
+        _injected_skills: set = set()
+        try:
+            _injected_skills.update(skills_for_tools(agent.tool_names))
+        except Exception:
+            pass
+
         for _ in range(max_iterations):
             # `tools` is passed unconditionally; ArgoProvider only attaches it to
             # the payload when APEXA_NATIVE_TOOLS is set, so the OFF path is
@@ -2502,6 +2605,18 @@ class AgentRunner:
                             "content": f"TOOL_CALL: {tc.name}\nARGUMENTS: {json.dumps(tc.arguments)}"})
                         _persist_buffer.append({"role": "user",
                             "content": f"[Tool Result for {tc.name}]\n{result}"})
+                    # ── Stage-scoped guardrails (C1 skills + C2 verifier) ──
+                    # Transient coaching, never persisted to the transcript buffer.
+                    if _stage_guardrails_on:
+                        try:
+                            _sk = self._maybe_stage_skill_msg(tc.name, _injected_skills)
+                            if _sk:
+                                messages.append(_sk)
+                            _vf = self._maybe_verifier_msg(tc.name, tc.arguments)
+                            if _vf:
+                                messages.append(_vf)
+                        except Exception:
+                            pass
                 continue
 
             # ── Mode 2: Text-based TOOL_CALL: parsing ──
@@ -2906,6 +3021,18 @@ class AgentRunner:
                             "content": f"TOOL_CALL: {tc.name}\nARGUMENTS: {json.dumps(tc.arguments)}"})
                         _persist_buffer.append({"role": "user",
                             "content": f"[Tool Result for {tc.name}]\n{result}"})
+                    # ── Stage-scoped guardrails (C1 skills + C2 verifier) ──
+                    # Transient coaching, never persisted to the transcript buffer.
+                    if _stage_guardrails_on:
+                        try:
+                            _sk = self._maybe_stage_skill_msg(tc.name, _injected_skills)
+                            if _sk:
+                                messages.append(_sk)
+                            _vf = self._maybe_verifier_msg(tc.name, tc.arguments)
+                            if _vf:
+                                messages.append(_vf)
+                        except Exception:
+                            pass
                 if forced_break:
                     break
                 continue

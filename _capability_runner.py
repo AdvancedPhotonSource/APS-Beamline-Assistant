@@ -103,6 +103,257 @@ def _load_1d(path):
     return np.asarray(x), np.asarray(y)
 
 
+# ── mask: detector-mask building (dead px / strides / blobs / auto-learn) ──
+#
+# MaskFile downstream contract (MIDAS): uint8 TIFF, convention 1 = MASKED,
+# DataType code 7, in RAW detector orientation. Every mode below converges on a
+# single boolean `mask_1masked` (True = masked) BEFORE the one write gate
+# `_write_mask_tiff`, so the on-disk convention can never be inverted by accident.
+
+def _read_image_raw(path, data_location="exchange/data"):
+    """Read a detector frame as a 2-D float array in RAW orientation.
+
+    TIFF/other → tifffile (fallback PIL); HDF5 (.h5/.hdf5/.nxs) → the dataset at
+    `data_location`. A 3-D stack is reduced to its per-pixel MEAN — persistent
+    dead/hot pixels survive the mean (transient zingers do not, which is correct:
+    a permanent MaskFile should not encode a one-frame zinger).
+    """
+    ext = os.path.splitext(path)[1].lower()
+    if ext in (".h5", ".hdf5", ".nxs", ".nx5"):
+        import h5py
+        with h5py.File(path, "r") as f:
+            if data_location not in f:
+                raise ValueError(
+                    f"dataset '{data_location}' not in {path}; "
+                    f"available top-level keys: {list(f.keys())[:20]}")
+            arr = np.asarray(f[data_location][()])
+    else:
+        try:
+            import tifffile
+            arr = np.asarray(tifffile.imread(path))
+        except Exception:
+            from PIL import Image
+            arr = np.asarray(Image.open(path))
+    arr = np.asarray(arr, dtype=np.float64)
+    if arr.ndim == 3:
+        # (frames, Z, Y) → mean over frames
+        arr = np.nanmean(arr, axis=0)
+    if arr.ndim != 2:
+        raise ValueError(f"expected a 2-D frame, got shape {arr.shape} from {path}")
+    return arr
+
+
+def _write_mask_tiff(mask_1masked, out_path):
+    """THE single mask write gate: bool/int → uint8 TIFF, values ⊆ {0,1}, 1=masked.
+
+    Mirrors MIDAS/utils/generate_mask.py (uint8 TIFF, DataType 7).
+    """
+    m = np.asarray(mask_1masked)
+    m = (m != 0).astype(np.uint8)          # coerce anything truthy → 1
+    uniq = set(np.unique(m).tolist())
+    if not uniq.issubset({0, 1}):
+        raise ValueError(f"mask must be binary after coercion; got values {uniq}")
+    try:
+        import tifffile
+        tifffile.imwrite(out_path, m)
+    except Exception:
+        from PIL import Image
+        Image.fromarray(m).save(out_path)
+    return out_path
+
+
+def _stat_masks(img, k=5.0, dead_value=0.0):
+    """Statistical bad-pixel detection. Returns (mask_1masked, breakdown dict).
+
+    dead  — pixels reading ≤ dead_value (default 0, i.e. flat-out dead)
+    hot   — residual over a 3×3 local median exceeds k·(1.4826·MAD) (robust; flags
+            zingers/hot pixels and small blobs that stand out from their surround)
+    nan   — non-finite pixels
+    """
+    from scipy import ndimage
+    finite = np.isfinite(img)
+    nan_mask = ~finite
+    safe = np.where(finite, img, 0.0)
+    med = ndimage.median_filter(safe, size=3)
+    resid = safe - med
+    r_in = resid[finite]
+    mad = np.median(np.abs(r_in - np.median(r_in))) if r_in.size else 0.0
+    scale = 1.4826 * mad if mad > 0 else (np.std(r_in) if r_in.size else 0.0)
+    hot_mask = (resid > k * scale) & finite if scale > 0 else np.zeros_like(img, bool)
+    dead_mask = (safe <= dead_value) & finite
+    combined = dead_mask | hot_mask | nan_mask
+    breakdown = {
+        "dead": int(dead_mask.sum()),
+        "hot": int(hot_mask.sum()),
+        "nan": int(nan_mask.sum()),
+        "k_mad": float(k), "mad_scale": float(scale),
+    }
+    return combined, breakdown
+
+
+def _gap_axis(n_panels, panel_size, gaps, total):
+    """1-D boolean along one axis: True on inter-panel gap pixels."""
+    m = np.zeros(int(total), dtype=bool)
+    pos = 0
+    for i in range(int(n_panels)):
+        pos += int(panel_size)
+        if i < int(n_panels) - 1:
+            g = int(gaps[i]) if i < len(gaps) else 0
+            m[pos:pos + g] = True
+            pos += g
+    return m, pos
+
+
+def _module_gap_mask(ny, nz, gaps):
+    """Synthesize the tiled-detector gap stripes from registry module geometry.
+
+    gaps = {NPanelsY,NPanelsZ,PanelSizeY,PanelSizeZ,PanelGapsY[],PanelGapsZ[]}.
+    Image shape is (NZ, NY): Z=rows, Y=cols. Returns (mask_1masked, note).
+    """
+    my, posy = _gap_axis(gaps["NPanelsY"], gaps["PanelSizeY"], gaps["PanelGapsY"], ny)
+    mz, posz = _gap_axis(gaps["NPanelsZ"], gaps["PanelSizeZ"], gaps["PanelGapsZ"], nz)
+    note = ""
+    if posy != ny or posz != nz:
+        note = (f"panel geometry sums to Y={posy}/Z={posz} but detector is "
+                f"Y={ny}/Z={nz} — check PanelSize*/PanelGaps* against the detector.")
+    mask = mz[:, None] | my[None, :]     # (NZ, NY)
+    return mask, note
+
+
+def cmd_mask(args):
+    """Build a detector MaskFile (uint8 TIFF, 1=masked) from one or more modes."""
+    modes = [m.strip().lower() for m in args.modes.split(",") if m.strip()]
+    ny, nz = int(args.nr_pixels_y), int(args.nr_pixels_z)
+    combined = None
+    per_mode = {}
+    img = None
+
+    def _accum(mask, name):
+        nonlocal combined
+        mask = np.asarray(mask, dtype=bool)
+        combined = mask if combined is None else (combined | mask)
+        per_mode[name] = int(mask.sum())
+
+    # Modes that need the image frame.
+    needs_image = {"value", "statistical", "differentiable"} & set(modes)
+    if needs_image:
+        if not args.image:
+            _error(f"modes {sorted(needs_image)} require --image (a dark/data frame).")
+        img = _read_image_raw(args.image, args.data_location)
+        if ny and nz and img.shape != (nz, ny):
+            _error(f"image shape {img.shape} != detector (NZ,NY)=({nz},{ny}); "
+                   f"wrong --detector or transposed frame.",
+                   image_shape=list(img.shape), expected=[nz, ny])
+        if not (ny and nz):
+            nz, ny = img.shape
+
+    for mode in modes:
+        if mode == "value":
+            if not args.sentinels:
+                _error("value mode needs --sentinels, e.g. '-1,-2'.")
+            sent = [float(s) for s in args.sentinels.replace(" ", "").split(",") if s]
+            m = np.zeros(img.shape, dtype=bool)
+            for v in sent:
+                m |= (img == v)
+            _accum(m, "value")
+        elif mode == "statistical":
+            m, bd = _stat_masks(img, k=float(args.stat_k),
+                                dead_value=float(args.dead_value))
+            _accum(m, "statistical")
+            per_mode["statistical_breakdown"] = bd
+        elif mode == "module_gap":
+            if not args.module_gaps:
+                per_mode["module_gap_note"] = ("no module_gaps geometry for this "
+                                               "detector — skipped (flat panel?).")
+                continue
+            gaps = json.loads(args.module_gaps)
+            if not (ny and nz):
+                _error("module_gap mode needs detector dims (--nr-pixels-y/-z).")
+            m, note = _module_gap_mask(ny, nz, gaps)
+            _accum(m, "module_gap")
+            if note:
+                per_mode["module_gap_note"] = note
+        elif mode == "convert":
+            if not args.image:
+                _error("convert mode needs --image (an existing .mask/TIFF).")
+            src = _read_image_raw(args.image, args.data_location)
+            _accum(src != 0, "convert")
+        elif mode == "combine":
+            if not args.combine_files:
+                _error("combine mode needs --combine-files (comma-separated masks).")
+            for fp in args.combine_files.split(","):
+                fp = fp.strip()
+                if not fp:
+                    continue
+                _accum(_read_image_raw(fp) != 0, f"combine:{os.path.basename(fp)}")
+        elif mode == "differentiable":
+            _accum(_diff_mask(args, img), "differentiable")
+        else:
+            _error(f"unknown mode '{mode}'. "
+                   "Choose from value,statistical,module_gap,differentiable,convert,combine.")
+
+    if combined is None:
+        _error("no mask produced (no valid modes ran).")
+
+    out_path = args.output or (os.path.splitext(args.image or "detector")[0] + "_mask.tif")
+    _write_mask_tiff(combined, out_path)
+    n_masked = int(combined.sum())
+    total = int(combined.size)
+    _output({
+        "status": "success", "mode": "real", "real_data_supported": True,
+        "tool": "build_detector_mask", "modes": modes,
+        "output_path": os.path.abspath(out_path),
+        "mask_shape": list(combined.shape),
+        "n_masked": n_masked, "total_pixels": total,
+        "pct_masked": round(100.0 * n_masked / total, 4),
+        "convention": "uint8 TIFF, 1=masked, DataType 7 (RAW orientation)",
+        "per_mode": per_mode,
+        "maskfile_line": f"MaskFile {os.path.abspath(out_path)}",
+    })
+
+
+def _diff_mask(args, img):
+    """Differentiable auto-learn mask (midas_integrate_v2). Returns bool True=masked.
+
+    Minimizes azimuthal (η) non-uniformity of the integrated pattern w.r.t. a
+    per-pixel learnable weight — bad pixels that break ring uniformity are driven
+    to weight 0 and thresholded out. Requires a calibrated param file for geometry.
+    """
+    if not args.param_file:
+        _error("differentiable mode needs --param-file (calibrated geometry: "
+               "Lsd/BC/tilts/px/binning).")
+    import torch
+    from midas_integrate_v2 import (
+        LearnableMask, EtaUniformityLoss, sparsity_prior, smoothness_prior,
+        integrate_with_corrections, spec_from_v1_paramstest,
+    )
+    dtype = torch.float32
+    spec = spec_from_v1_paramstest(args.param_file, dtype=dtype, requires_grad=False)
+    spec.validate()
+    nz, ny = img.shape
+    img_t = torch.as_tensor(img, dtype=dtype)
+    # LearnableMask is Z-FIRST: (NrPixelsZ, NrPixelsY). Transposing raises downstream.
+    mask = LearnableMask(nz, ny, init_weight=0.9, dtype=dtype)
+    floor = 0.0
+    if args.diff_crop_rings:
+        with torch.no_grad():
+            int0 = integrate_with_corrections(img_t, spec)
+        floor = float(np.percentile(int0.detach().cpu().numpy(), 60))
+    eta_loss = EtaUniformityLoss(intensity_floor=floor)
+    opt = torch.optim.Adam(mask.parameters(), lr=float(args.diff_lr))
+    n_iter = int(args.diff_iterations)
+    for _ in range(n_iter):
+        opt.zero_grad()
+        int2d = integrate_with_corrections(img_t, spec, learnable_mask=mask)
+        loss = eta_loss(int2d) + sparsity_prior(
+            mask, weight=float(args.diff_sparsity), target=1.0)
+        if float(args.diff_smoothness) > 0:
+            loss = loss + smoothness_prior(mask, weight=float(args.diff_smoothness))
+        loss.backward()
+        opt.step()
+    return mask.extract_hard_mask(threshold=float(args.diff_threshold))
+
+
 # ── pdf: I(Q) -> G(r) pair distribution (REAL data) ───────────────────────
 
 def cmd_pdf(args):
@@ -469,6 +720,26 @@ def main():
     p.add_argument("--energy-keV", default="55.0")
     p.add_argument("--half-bw", default="0.02")
 
+    p = sub.add_parser("mask")
+    p.add_argument("--modes", default="statistical")   # csv
+    p.add_argument("--image", default="")
+    p.add_argument("--output", default="")
+    p.add_argument("--nr-pixels-y", type=int, default=0)
+    p.add_argument("--nr-pixels-z", type=int, default=0)
+    p.add_argument("--sentinels", default="")          # value mode, e.g. "-1,-2"
+    p.add_argument("--data-location", default="exchange/data")   # hdf5 dataset
+    p.add_argument("--module-gaps", default="")        # JSON geometry from registry
+    p.add_argument("--combine-files", default="")      # combine mode: csv of masks
+    p.add_argument("--stat-k", default="5.0")          # hot-pixel MAD multiplier
+    p.add_argument("--dead-value", default="0.0")      # statistical dead threshold
+    p.add_argument("--param-file", default="")         # differentiable: geometry
+    p.add_argument("--diff-iterations", default="300")
+    p.add_argument("--diff-lr", default="0.5")
+    p.add_argument("--diff-threshold", default="0.5")
+    p.add_argument("--diff-sparsity", default="1e-4")
+    p.add_argument("--diff-smoothness", default="0.0")
+    p.add_argument("--diff-crop-rings", action="store_true")
+
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
@@ -480,7 +751,7 @@ def main():
     dispatch = {
         "pdf": cmd_pdf, "defect": cmd_defect, "grain_odf": cmd_grain_odf,
         "twod": cmd_twod, "xaf": cmd_xaf, "dfxm": cmd_dfxm,
-        "pf_odf": cmd_pf_odf, "pink": cmd_pink,
+        "pf_odf": cmd_pf_odf, "pink": cmd_pink, "mask": cmd_mask,
     }
     try:
         dispatch[args.command](args)

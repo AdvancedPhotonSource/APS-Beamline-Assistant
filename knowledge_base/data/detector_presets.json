@@ -1,0 +1,155 @@
+{
+  "_schema": {
+    "description": "APS/MIDAS detector presets for build_detector_mask. Every numeric field is sourced from a real line in the MIDAS repo (/Users/b324240/Git/MIDAS); no invented values. NrPixelsY = detector width (fast/horizontal axis), NrPixelsZ = height (slow/vertical axis). px_um = pixel size in micrometres. DataType is the MIDAS file-format code (7 = tiff-uint8 = the MaskFile format itself; the code here is the TYPICAL raw-image DataType for this detector, not the mask). module_gaps is only populated where a concrete tiled layout exists in the repo (Pilatus 2M calibration example); null elsewhere rather than guessed.",
+    "datatype_codes": "1=uint16(GE binary, header auto->8192), 2=double, 3=float, 4=uint32, 5=int32, 6=tiff-uint32, 7=tiff-uint8(mask/bitmap), 8=hdf5, 9=tiff-uint16, 10=CBF. Source: FF_HEDM/src/archive/Integrator.c:520-542, GenMedianDark.c:153-172. NOTE: registry.py:159 '2=Pilatus' is INACCURATE docs; code 2 is double in all C.",
+    "sources": [
+      "utils/radial_integration_comparison.py:1705-1714 (TABLE2_DETECTORS: Dectris/Varex dims+px)",
+      "utils/AutoCalibrateZarr.py:3487-3512 (GE/Varex/Pilatus px auto-detect)",
+      "FF_HEDM/Example/Calibration/parameters.txt:22,30,41-45,166-193 (Pilatus 2M example + panel block)",
+      "FF_HEDM/src/MIDAS_ParamParser.c:556-559 (GE 8192-byte header, DataType 1)",
+      "utils/compare_peak_fit_modes.py:44-56 (GE5 .ge5.h5)",
+      "README.md:46 + FF_HEDM/src/FitPosOrStrainsOMP.c:495 (HYDRA multi-GE mode)"
+    ]
+  },
+  "detectors": {
+    "eiger2_500k": {
+      "aliases": ["eiger2 500k", "eiger 500k", "eiger2_500k", "eiger500k"],
+      "vendor": "Dectris",
+      "NrPixelsY": 1028,
+      "NrPixelsZ": 512,
+      "px_um": 75,
+      "DataType": 9,
+      "module_gaps": null,
+      "default_sentinels": [],
+      "source": "utils/radial_integration_comparison.py:1706",
+      "notes": "Dims/px from paper Table 1. DataType typical tiff-uint16; verify per dataset. Module gaps not encoded in MIDAS (no literals)."
+    },
+    "pilatus3_1m": {
+      "aliases": ["pilatus3 1m", "pilatus 1m", "pilatus3_1m", "pilatus1m"],
+      "vendor": "Dectris",
+      "NrPixelsY": 981,
+      "NrPixelsZ": 1043,
+      "px_um": 172,
+      "DataType": 6,
+      "module_gaps": null,
+      "default_sentinels": [-1, -2],
+      "source": "utils/radial_integration_comparison.py:1707",
+      "notes": "Pilatus CBF/TIFF commonly uses -1/-2 for gap/dead sentinels. Module gaps not hardcoded in MIDAS for this size."
+    },
+    "pilatus3_2m": {
+      "aliases": ["pilatus3 2m", "pilatus 2m", "pilatus3_2m", "pilatus2m", "pilatus"],
+      "vendor": "Dectris",
+      "NrPixelsY": 1475,
+      "NrPixelsZ": 1679,
+      "px_um": 172,
+      "DataType": 6,
+      "module_gaps": {
+        "NPanelsY": 6,
+        "NPanelsZ": 8,
+        "PanelSizeY": 243,
+        "PanelSizeZ": 195,
+        "PanelGapsY": [1, 7, 1, 7, 1],
+        "PanelGapsZ": [17, 17, 17, 17, 17, 17, 17]
+      },
+      "default_sentinels": [-1, -2],
+      "source": "utils/radial_integration_comparison.py:1708; FF_HEDM/Example/Calibration/parameters.txt:41-45,168-181",
+      "notes": "The ONLY detector with a concrete tiled layout in the MIDAS repo (calibration example). PanelSizeZ 195 = Pilatus module height; PanelGapsZ 17 = inter-module gap; PanelGapsY 7 = true module boundary, 1 = intra-module split. DataType 6 (tiff-uint32) in the example."
+    },
+    "eiger2_4m": {
+      "aliases": ["eiger2 4m", "eiger 4m", "eiger2_4m", "eiger4m"],
+      "vendor": "Dectris",
+      "NrPixelsY": 2068,
+      "NrPixelsZ": 2162,
+      "px_um": 75,
+      "DataType": 9,
+      "module_gaps": null,
+      "default_sentinels": [],
+      "source": "utils/radial_integration_comparison.py:1709",
+      "notes": "Dims/px from paper Table 1."
+    },
+    "pilatus3_6m": {
+      "aliases": ["pilatus3 6m", "pilatus 6m", "pilatus3_6m", "pilatus6m"],
+      "vendor": "Dectris",
+      "NrPixelsY": 2463,
+      "NrPixelsZ": 2527,
+      "px_um": 172,
+      "DataType": 6,
+      "module_gaps": null,
+      "default_sentinels": [-1, -2],
+      "source": "utils/radial_integration_comparison.py:1710",
+      "notes": "Dims/px from paper Table 1. Module gaps not hardcoded in MIDAS for this size."
+    },
+    "varex_2923": {
+      "aliases": ["varex 2923", "varex", "varex2923", "vrx", ".vrx"],
+      "vendor": "Varex",
+      "NrPixelsY": 2880,
+      "NrPixelsZ": 2880,
+      "px_um": 150,
+      "DataType": 9,
+      "module_gaps": null,
+      "default_sentinels": [],
+      "source": "utils/radial_integration_comparison.py:1711; utils/AutoCalibrateZarr.py:3497-3510",
+      "notes": "Flat-panel (no module gaps). px auto-detected from .vrx/varex filename in AutoCalibrateZarr."
+    },
+    "eiger2_9m": {
+      "aliases": ["eiger2 9m", "eiger 9m", "eiger2_9m", "eiger9m"],
+      "vendor": "Dectris",
+      "NrPixelsY": 3110,
+      "NrPixelsZ": 3269,
+      "px_um": 75,
+      "DataType": 9,
+      "module_gaps": null,
+      "default_sentinels": [],
+      "source": "utils/radial_integration_comparison.py:1712",
+      "notes": "Dims/px from paper Table 1."
+    },
+    "eiger2_16m": {
+      "aliases": ["eiger2 16m", "eiger 16m", "eiger2_16m", "eiger16m"],
+      "vendor": "Dectris",
+      "NrPixelsY": 4148,
+      "NrPixelsZ": 4362,
+      "px_um": 75,
+      "DataType": 9,
+      "module_gaps": null,
+      "default_sentinels": [],
+      "source": "utils/radial_integration_comparison.py:1713",
+      "notes": "Dims/px from paper Table 1."
+    },
+    "ge": {
+      "aliases": ["ge", "ge41rt", "ge2", "ge3", "ge4", "ge41"],
+      "vendor": "GE",
+      "NrPixelsY": 2048,
+      "NrPixelsZ": 2048,
+      "px_um": 200,
+      "DataType": 1,
+      "module_gaps": null,
+      "default_sentinels": [],
+      "source": "utils/AutoCalibrateZarr.py:3492-3496; FF_HEDM/src/MIDAS_ParamParser.c:556-559",
+      "notes": "GE41RT-class area detector at APS. DataType 1 (uint16 binary) with an 8192-byte header (auto-set when DataType=1). 10-bit-stored x64: saturation at 65472 = 1023x64 (NF_HEDM_Handbook.md:729)."
+    },
+    "ge5": {
+      "aliases": ["ge5", "ge5.h5", ".ge5.h5"],
+      "vendor": "GE",
+      "NrPixelsY": 2048,
+      "NrPixelsZ": 2048,
+      "px_um": 200,
+      "DataType": 8,
+      "module_gaps": null,
+      "default_sentinels": [],
+      "source": "utils/compare_peak_fit_modes.py:44-56; utils/benchmark_pyfai_vs_midas.py:64-81",
+      "notes": "GE variant stored as .ge5.h5 (HDF5, DataType 8). 200 um, ~71.7 keV in the benchmark. Dims inherit generic GE 2048^2."
+    },
+    "hydra": {
+      "aliases": ["hydra"],
+      "vendor": "GE (multi-panel)",
+      "NrPixelsY": 2048,
+      "NrPixelsZ": 2048,
+      "px_um": 200,
+      "DataType": 1,
+      "module_gaps": null,
+      "default_sentinels": [],
+      "source": "README.md:46; FF_HEDM/src/FitPosOrStrainsOMP.c:495",
+      "notes": "HYDRA is a multi-GE MODE (several GE panels, per-GE cake rows / LsdMean), not a distinct sensor. Per-panel dims inherit GE 2048^2. Mask per panel."
+    }
+  }
+}
