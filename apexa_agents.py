@@ -43,6 +43,23 @@ from apexa_timing import (
     record_llm_call, current_query_id,
 )
 from skill_registry import skill_context_for_tools, skills_for_tools, load_skill_text
+try:
+    import capsule_registry as _capsule_registry
+except Exception:  # pragma: no cover - defensive; capsule injection then no-ops
+    _capsule_registry = None
+from apexa_provider_openai import (
+    OpenAICompatProvider,
+    ProviderUnavailable,
+    preflight as llm_preflight,
+    proxy_mode_enabled,
+    strict_mode,
+)
+from apexa_ledger import ToolLedger
+from apexa_toolsurface import (
+    disclosure_enabled,
+    handle_meta_tool,
+    initial_surface,
+)
 
 # ── Compact directory listing ───────────────────────────────────────────────
 
@@ -796,13 +813,38 @@ class StreamingAnthropicProvider:
 
 
 def select_provider(username: str, model: str):
-    """Pick a provider based on ``APEXA_PROVIDER`` and model family.
+    """Pick a provider based on ``APEXA_LLM_MODE`` / ``APEXA_PROVIDER``.
 
-    - ``APEXA_PROVIDER=streaming`` + a ``claude*`` model  → StreamingAnthropicProvider
-    - anything else                                        → ArgoProvider
+    - ``APEXA_LLM_MODE=proxy``                             → OpenAICompatProvider
+      (argo-proxy, OpenAI-compatible; STRUCTURED tool results on every turn)
+    - ``APEXA_PROVIDER=streaming`` + a ``claude*`` model    → StreamingAnthropicProvider
+    - anything else                                         → ArgoProvider
+
+    The proxy path is preferred: Argo's ``/chat/`` sanitizer flattens messages to
+    strings, so tool results can only be fed back as prose there, which is what
+    forces the fragile text ``TOOL_CALL:`` protocol. It is opt-in (default
+    ``argo``) until the sidecar has soaked on the beamline host — see
+    ``scripts/gate0_argo_proxy_smoke.py``. If the proxy is misconfigured we fall
+    back rather than stranding an operator mid-experiment.
 
     Non-Claude models under ``streaming`` fall back to Argo /chat/ with a
     one-line stderr note (Anthropic native only speaks Claude)."""
+    if proxy_mode_enabled():
+        try:
+            return OpenAICompatProvider(username, model)
+        except ProviderUnavailable as e:
+            if strict_mode():
+                # Beamline default: a broken proxy must not silently downgrade to
+                # the fabrication-prone text path. Set APEXA_LLM_STRICT=0 to allow.
+                raise ProviderUnavailable(
+                    f"APEXA_LLM_MODE=proxy but the proxy is unusable: {e}\n"
+                    f"Refusing to fall back to the legacy Argo text protocol "
+                    f"(APEXA_LLM_STRICT is on). Start the argo-proxy sidecar, or set "
+                    f"APEXA_LLM_STRICT=0 to permit the degraded transport."
+                ) from e
+            print(f"  \033[33m⚠ APEXA_LLM_MODE=proxy unavailable ({e}) — "
+                  f"falling back to Argo /chat/\033[0m", file=sys.stderr)
+
     prov = (os.environ.get("APEXA_PROVIDER") or "").lower()
     if prov == "streaming":
         if model.startswith("claude"):
@@ -810,6 +852,16 @@ def select_provider(username: str, model: str):
         print(f"  \033[33m⚠ APEXA_PROVIDER=streaming ignored — model {model!r} "
               f"is not a Claude model; using Argo /chat/\033[0m", file=sys.stderr)
     return ArgoProvider(username, model)
+
+
+def provider_is_structured(provider) -> bool:
+    """True when the provider can carry native ``tool_calls`` / ``role:"tool"``
+    messages, so the loop may skip the text ``TOOL_CALL:`` protocol entirely.
+
+    Duck-typed on a ``structured_tools`` attribute rather than an isinstance check,
+    so a stub provider can exercise the structured loop in tests without a network
+    or an argo-proxy instance."""
+    return bool(getattr(provider, "structured_tools", False))
 
 
 # ── Agent Definition ─────────────────────────────────────────────────────────
@@ -1444,7 +1496,25 @@ target, final RBV, units.""",
 )
 
 
-# ── Tool-use system preamble ─────────────────────────────────────────────────
+# ── Tool-use system preambles ────────────────────────────────────────────────
+
+# Structured transport (argo-proxy). The model receives real tool schemas and
+# emits real tool_calls, so none of the format coaching in _TOOL_PREAMBLE below
+# is needed — describing a text protocol here would only invite the model to
+# emulate one we no longer parse. Keep this SHORT: it is a per-request cost, and
+# the behavioural rules that matter are enforced in code (execution ledger,
+# deletion permission gate, handbook guardrails), not hoped for in a prompt.
+_STRUCTURED_PREAMBLE = """You are APEXA, connected to live MCP servers at a synchrotron beamline.
+
+Use the provided tools to do real work. Report ONLY what tools actually returned —
+never invent file paths, counts, or parameter values. If you have not run a tool,
+say so plainly instead of describing what it would have shown; fabricated values are
+dangerous at a beamline. Tool calls are synchronous: there is no background job and
+you will not be re-invoked later, so never promise to report something "once it
+finishes" — call the tool now and report the result.
+
+When a tool fails, read the error and adapt. Do not repeat an identical failing call.
+"""
 
 _TOOL_PREAMBLE = """⚠️ CRITICAL: YOU HAVE TOOLS — USE THEM.
 
@@ -2092,8 +2162,29 @@ class AgentRunner:
         clean = re.sub(r'(?:I\'ll|Let me|Let\'s)\s+.*?(?:\.|:)\s*$', '', clean, flags=re.MULTILINE).strip()
         return clean
 
-    def _assistant_message(self, resp: AgentResponse, model: str) -> Dict:
-        """Format assistant message (with tool calls) for conversation history."""
+    def _assistant_message(self, resp: AgentResponse, model: str,
+                           structured: bool = False) -> Dict:
+        """Format assistant message (with tool calls) for conversation history.
+
+        ``structured=True`` (the argo-proxy / OpenAI-compatible path) emits a real
+        assistant turn carrying ``tool_calls``, which the next request pairs with
+        ``role:"tool"`` results. Every other branch below exists only because Argo
+        ``/chat/``'s sanitizer flattens content to a string, forcing tool intent to
+        be replayed as prose.
+        """
+        if structured:
+            msg: Dict[str, Any] = {"role": "assistant", "content": resp.content or ""}
+            if resp.tool_calls:
+                msg["tool_calls"] = [
+                    {
+                        "id":   tc.id,
+                        "type": "function",
+                        "function": {"name": tc.name,
+                                     "arguments": json.dumps(tc.arguments)},
+                    }
+                    for tc in resp.tool_calls
+                ]
+            return msg
         if _native_tools_enabled(model):
             # Native /chat path: feed the assistant's tool intent back as a flat
             # STRING so the payload sanitizer (which json-dumps non-string
@@ -2135,8 +2226,14 @@ class AgentRunner:
             }
 
     def _tool_result_message(self, tc: ToolCall, result: str,
-                             model: str) -> Dict:
-        """Format tool result for next API call (model-specific)."""
+                             model: str, structured: bool = False) -> Dict:
+        """Format tool result for next API call (model-specific).
+
+        ``structured=True`` returns the standard OpenAI tool turn — the thing Argo
+        ``/chat/`` cannot carry, and the reason the text protocol existed.
+        """
+        if structured:
+            return {"role": "tool", "tool_call_id": tc.id, "content": result}
         if _native_tools_enabled(model):
             # Native /chat path: flat-text user turn for ALL vendors — survives
             # the payload sanitizer and matches the flat-text assistant turn
@@ -2325,6 +2422,48 @@ class AgentRunner:
         }
 
     @staticmethod
+    def _maybe_capsule_msg(tool_name: str, injected_techniques: set) -> Optional[Dict]:
+        """(C3) Stage-scoped technique-capsule loading.
+
+        The moment the model fires a tool that belongs to a MIDAS technique
+        (ff/nf/pf/dfxm — derived from the tool name, not a hardcoded map), inject
+        that technique's handbook SPINE (scope, step ORDER, hard rules, halt
+        conditions, traps) if it has not been loaded this turn. This is the
+        "learn the technique itself" layer at the dispatch moment: the verified
+        workflow procedure lands in context before the model runs the next step.
+        The model can also pull it explicitly via learn_technique; both share the
+        `injected_techniques` dedup set so the spine is injected at most once per
+        technique per turn. Returns None when the tool maps to no capsule or the
+        spine is already loaded. Fail-open."""
+        if _capsule_registry is None:
+            return None
+        try:
+            tech = _capsule_registry.technique_for_tool(tool_name)
+        except Exception:
+            return None
+        if not tech or tech in injected_techniques:
+            return None
+        injected_techniques.add(tech)   # mark even if body is empty
+        try:
+            body = _capsule_registry.spine_context(tech)
+            halt = _capsule_registry.halt_checklist(tech)
+        except Exception:
+            return None
+        if not body:
+            return None
+        halt_block = (f"\n\nHALT CONDITIONS — stop and ask the user if any apply "
+                      f"(do not proceed on assumption):\n{halt}") if halt else ""
+        return {
+            "role": "system",
+            "content": (
+                "TECHNIQUE HANDBOOK for the workflow you just entered — the verified "
+                "MIDAS procedure (scope, step order, hard rules, traps). It is the "
+                "source of truth for the remaining steps; follow it and open each "
+                "phase doc (open_phase) as you reach it." + body + halt_block
+            ),
+        }
+
+    @staticmethod
     def _maybe_verifier_msg(tool_name: str, arguments: Dict) -> Optional[Dict]:
         """(C2) Post-stage verifier feedback.
 
@@ -2389,14 +2528,43 @@ class AgentRunner:
 
         tools = self._filter_tools(agent.tool_names, all_tools)
 
+        # Structured transport (argo-proxy / OpenAI-compatible): tool intent and
+        # tool results travel as real `tool_calls` / `role:"tool"` messages on
+        # EVERY turn. That makes the text TOOL_CALL: protocol — and the drift
+        # mitigations built around it — unnecessary, so both are skipped below.
+        structured = provider_is_structured(provider)
+
+        # Progressive tool disclosure. Only for the unified agent (tool_names=[],
+        # which otherwise means "all 81 schemas, every request") and only on the
+        # structured path, where the model can reliably call the two meta-tools.
+        # A specialist with an explicit tool list already has a scoped surface.
+        _disclosure = structured and not agent.tool_names and disclosure_enabled()
+        if _disclosure:
+            tools = initial_surface(all_tools)
+
+        # Execution ledger: the integrity primitive. Records what actually ran so
+        # the final answer can be checked against execution facts instead of
+        # regexes over prose (see apexa_ledger.ToolLedger).
+        ledger = ToolLedger()
+        ledger.add_grounding(query)
+        # Bounded correction attempts, so a model that cannot ground its answer
+        # degrades to an explicitly-flagged answer instead of looping.
+        _ledger_retries = 0
+        _MAX_LEDGER_RETRIES = 2
+
         # Build system message: strong preamble + agent-specific instructions.
         # Agents with use_planning=True get the plan-first preamble prepended,
         # which (a) tells the model to batch all needed tool calls in one
         # response and (b) explicitly forbids primitive-tool fan-out where a
         # compound tool exists.
+        #
+        # _TOOL_PREAMBLE documents the text TOOL_CALL: format (~11K chars). On the
+        # structured path the model gets real tool schemas, so shipping it would
+        # only invite the model to emulate a protocol we no longer parse.
         cwd = str(Path.cwd())
         plan_pre = _PLAN_FIRST_PREAMBLE if getattr(agent, "use_planning", False) else ""
-        system_content = plan_pre + _TOOL_PREAMBLE + f"\nCurrent working directory (CWD): {cwd}\n" + agent.instructions
+        preamble = _STRUCTURED_PREAMBLE if structured else _TOOL_PREAMBLE
+        system_content = plan_pre + preamble + f"\nCurrent working directory (CWD): {cwd}\n" + agent.instructions
 
         # Append tool catalog with parameters so the model knows what to call
         if tools:
@@ -2549,6 +2717,9 @@ class AgentRunner:
             _injected_skills.update(skills_for_tools(agent.tool_names))
         except Exception:
             pass
+        # (C3) Technique-capsule spines injected this turn (dedup shared with the
+        # learn_technique meta-tool via handle_meta_tool).
+        _injected_techniques: set = set()
 
         for _ in range(max_iterations):
             # `tools` is passed unconditionally; ArgoProvider only attaches it to
@@ -2558,10 +2729,15 @@ class AgentRunner:
 
             # ── Mode 1: Native API tool_calls ──
             if response.tool_calls:
-                # Cross-iteration fan-out check for native tool_calls.
+                ledger.note_emitted(tc.id for tc in response.tool_calls)
+                # Cross-iteration fan-out check for native tool_calls. Skipped on
+                # the structured path: it is a drift mitigation, and interrupting a
+                # model that is legitimately iterating (e.g. walking a directory
+                # tree during a debug session) is the exact regression the old
+                # thrash floor caused.
                 _turn_tool_counts.update(tc.name for tc in response.tool_calls)
                 _worst_tool, _worst_count = _turn_tool_counts.most_common(1)[0]
-                if _worst_count >= _FANOUT_THRESHOLD and not single_mode:
+                if _worst_count >= _FANOUT_THRESHOLD and not single_mode and not structured:
                     print(f"  \033[33m⚠ cumulative fan-out:\033[0m {_worst_count}× {_worst_tool}")
                     messages.append(self._assistant_message(response, provider.model))
                     messages.append({
@@ -2576,14 +2752,23 @@ class AgentRunner:
                         ),
                     })
                     continue
-                messages.append(self._assistant_message(response, provider.model))
+                messages.append(self._assistant_message(response, provider.model, structured))
                 _emit_narration(response.content or "")   # narration before the ▸ markers
                 for tc in response.tool_calls:
                     print(f"  \033[36m▸\033[0m \033[1m{tc.name}\033[0m")
+                    ledger.dispatch(tc.id, tc.name, tc.arguments)
                     t0 = time.monotonic()
-                    result = await self._execute(tc.name, tc.arguments)
+                    # search_tools / load_tools are client-side: they reshape this
+                    # turn's tool surface and never reach an MCP server. Returns
+                    # None for every other name, so normal dispatch is unaffected.
+                    result = handle_meta_tool(tc.name, tc.arguments, all_tools, tools,
+                                              injected_techniques=_injected_techniques) \
+                        if _disclosure else None
+                    if result is None:
+                        result = await self._execute(tc.name, tc.arguments)
                     dur = int((time.monotonic() - t0) * 1000)
                     ok = "error" not in result.lower()[:100]
+                    ledger.complete(tc.id, result, elapsed_s=dur / 1000.0)
                     if log_entry:
                         log_entry.add_tool_call(tc.name, tc.arguments, result, ok, dur)
                     if on_tool_result:
@@ -2598,7 +2783,7 @@ class AgentRunner:
                         except (json.JSONDecodeError, KeyError):
                             pass
                     messages.append(
-                        self._tool_result_message(tc, result, provider.model)
+                        self._tool_result_message(tc, result, provider.model, structured)
                     )
                     if single_mode:
                         _persist_buffer.append({"role": "assistant",
@@ -2609,6 +2794,9 @@ class AgentRunner:
                     # Transient coaching, never persisted to the transcript buffer.
                     if _stage_guardrails_on:
                         try:
+                            _cap = self._maybe_capsule_msg(tc.name, _injected_techniques)
+                            if _cap:
+                                messages.append(_cap)
                             _sk = self._maybe_stage_skill_msg(tc.name, _injected_skills)
                             if _sk:
                                 messages.append(_sk)
@@ -2618,6 +2806,36 @@ class AgentRunner:
                         except Exception:
                             pass
                 continue
+
+            # ── Structured path: no tool_calls ⇒ this IS the final answer ──
+            # Tool intent can only arrive as real `tool_calls` here, so there is no
+            # text protocol to parse and nothing for the drift guards to catch.
+            # Integrity is checked against the execution ledger instead: every
+            # violation below is predicated on a recorded fact (a call that never
+            # executed, an empty ledger, a path absent from all tool output), so a
+            # turn that genuinely ran tools is never interrupted.
+            if structured and (response.content or "").strip():
+                text = response.content or ""
+                violations = ledger.check_final_answer(text)
+                if violations and _ledger_retries < _MAX_LEDGER_RETRIES:
+                    _ledger_retries += 1
+                    for v in violations:
+                        print(f"  \033[33m⚠ integrity ({v['code']}):\033[0m {v['message'][:120]}")
+                    messages.append(self._assistant_message(response, provider.model, True))
+                    messages.append({
+                        "role": "user",
+                        "content": ("⛔ EXECUTION-INTEGRITY CHECK FAILED — do not present "
+                                    "this answer.\n\n"
+                                    + "\n".join(f"• {v['message']}" for v in violations)
+                                    + "\n\nUse the tools to establish these facts, then answer."),
+                    })
+                    continue
+                if violations:
+                    # Budget spent: surface the unresolved violations rather than
+                    # silently passing an answer we could not ground.
+                    text += ("\n\n⚠️ Unverified: "
+                             + "; ".join(v["message"] for v in violations))
+                return _persist(text)
 
             # ── Mode 2: Text-based TOOL_CALL: parsing ──
             text = response.content or ""
@@ -3025,6 +3243,9 @@ class AgentRunner:
                     # Transient coaching, never persisted to the transcript buffer.
                     if _stage_guardrails_on:
                         try:
+                            _cap = self._maybe_capsule_msg(tc.name, _injected_techniques)
+                            if _cap:
+                                messages.append(_cap)
                             _sk = self._maybe_stage_skill_msg(tc.name, _injected_skills)
                             if _sk:
                                 messages.append(_sk)

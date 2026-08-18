@@ -1709,6 +1709,37 @@ class APEXAClient:
         if "midas" in self.sessions:
             self.session = self.sessions["midas"]
 
+        # LLM transport preflight. Runs once at startup so a misconfigured or
+        # not-yet-started argo-proxy sidecar fails HERE — visibly, before any
+        # science — instead of surfacing as a failed query mid-experiment.
+        # Under APEXA_LLM_STRICT (default on when APEXA_LLM_MODE=proxy) an
+        # unreachable proxy aborts startup rather than silently downgrading to the
+        # legacy text protocol. Consistent with the startup-diagnostics rule:
+        # show warnings and errors, stay quiet on success.
+        try:
+            from apexa_provider_openai import (
+                preflight as _llm_preflight,
+                proxy_mode_enabled as _proxy_on,
+                strict_mode as _llm_strict,
+            )
+            _ok, _detail = await _llm_preflight(self.anl_username, self.selected_model)
+            if not _ok:
+                if _llm_strict():
+                    print(f"  {C.RED}✗ LLM transport unavailable{C.RESET}: {_detail}")
+                    print(f"  {C.DIM}APEXA_LLM_STRICT is on — refusing to run on the "
+                          f"legacy text protocol. Start the sidecar, fix "
+                          f"APEXA_LLM_BASE_URL, or set APEXA_LLM_STRICT=0.{C.RESET}")
+                    raise RuntimeError(f"LLM transport preflight failed: {_detail}")
+                print(f"  {C.YELLOW}⚠ LLM transport degraded{C.RESET}: {_detail}")
+                print(f"  {C.YELLOW}  → running on the legacy Argo text protocol "
+                      f"(weaker execution-integrity guarantees).{C.RESET}")
+            elif _proxy_on():
+                print(f"  {C.DIM}LLM transport: {_detail}{C.RESET}")
+        except RuntimeError:
+            raise
+        except Exception as _e:      # preflight must never break startup itself
+            print(f"  {C.YELLOW}⚠ LLM preflight skipped: {_e}{C.RESET}", file=sys.stderr)
+
         # Initialise the orchestrator (Phase 2 core)
         self.orchestrator = OrchestratorAgent(
             execute_tool_fn=self.execute_tool_call,
@@ -1857,6 +1888,31 @@ class APEXAClient:
                     return (f"⛔ Deletion NOT run ({reason}). The command `{_cmd}` was "
                             "blocked before execution. The files were NOT deleted. Do "
                             "not retry or claim success; ask the user how to proceed.")
+
+        # ===== TECHNIQUE SCOPE GATE =====
+        # Each technique's handbook ("capsule") is beamline-scoped — its geometry
+        # and conventions do NOT transfer across beamlines. When APEXA_BEAMLINE is
+        # configured and a technique-workflow tool's capsule names beamlines that
+        # exclude it, block before running (fail-closed), same chokepoint principle
+        # as the deletion gate. Fail-open when unconfigured, unknown-technique, or
+        # explicitly overridden (APEXA_IGNORE_SCOPE_GATE=1). The natural-language
+        # halt conditions the model must also satisfy are surfaced separately, at
+        # dispatch time, by AgentRunner._maybe_capsule_msg.
+        _beamline = os.environ.get("APEXA_BEAMLINE", "").strip()
+        if _beamline and os.environ.get("APEXA_IGNORE_SCOPE_GATE", "").strip().lower() \
+                not in ("1", "true", "yes", "on"):
+            _scope_blocked, _scope_reason = False, ""
+            try:
+                import capsule_registry as _cr
+                _tech = _cr.technique_for_tool(tool_name)
+                if _tech:
+                    _scope_blocked, _scope_reason = _cr.scope_conflict(_tech, _beamline)
+            except Exception:
+                _scope_blocked = False  # fail-open: a broken registry never blocks
+            if _scope_blocked:
+                print(f"  \033[31m⛔ scope gate:\033[0m {tool_name} — {_scope_reason}")
+                return (f"⛔ Scope gate: `{tool_name}` NOT run. {_scope_reason} "
+                        "The tool did not execute; do not claim success.")
 
         _t0 = _time.monotonic()
         try:

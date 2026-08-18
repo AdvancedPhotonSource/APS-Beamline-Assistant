@@ -8,6 +8,10 @@ dependencies = [
     # Core
     "httpx>=0.28.1",
     "mcp>=1.14.1",
+    # OpenAI-compatible transport (argo-proxy). Gives APEXA structured
+    # multi-turn tool calling — role:"tool" + tool_call_id — which Argo
+    # /chat/ cannot carry. See apexa_provider_openai.py.
+    "openai>=1.40",
     "python-dotenv>=1.1.1",
     # Web UI
     "fastapi>=0.116.2",

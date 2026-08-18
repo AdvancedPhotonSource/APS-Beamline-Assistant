@@ -412,10 +412,14 @@ async def initialize_mcp_client():
             print(f"Loaded {len(server_configs)} server(s) from servers.config")
         else:
             print("⚠️  Warning: servers.config not found, using fallback configuration")
+            # Must mirror servers.config. The old fallback named the retired
+            # filesystem/executor servers and omitted core+motor entirely, so a
+            # missing servers.config silently brought the UI up with no file ops
+            # and no motor control.
             server_configs = [
+                {"name": "core",  "script_path": "./beamline_core_server.py"},
                 {"name": "midas", "script_path": "./midas_comprehensive_server.py"},
-                {"name": "filesystem", "script_path": "./filesystem_server.py"},
-                {"name": "executor", "script_path": "./command_executor_server.py"}
+                {"name": "motor", "script_path": "./epics_motor_server.py"},
             ]
 
         await mcp_client.connect_to_multiple_servers(server_configs)

@@ -238,3 +238,16 @@ osf_bundle/
 # OSF API token (never commit) — inline comments break .gitignore patterns,
 # so the comment MUST stay on its own line above the pattern
 .osfcli.config
+
+# Ad-hoc experiment scratch dirs (kept on disk, never committed)
+test1/
+test2/
+test3/
+test4/
+test5/
+test6/
+test-*/
+scratch/
+unknown_integration/
+Ref-test/
+uploads/

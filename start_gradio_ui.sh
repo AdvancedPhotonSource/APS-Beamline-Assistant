@@ -19,10 +19,10 @@ if [ ! -f "servers.config" ]; then
     echo "Error: servers.config not found!"
     echo "Creating default configuration..."
     cat > servers.config << 'EOF'
-# Core servers
-filesystem:filesystem_server.py
-executor:command_executor_server.py
+# Core servers (must match the checked-in servers.config)
+core:beamline_core_server.py
 midas:midas_comprehensive_server.py
+motor:epics_motor_server.py
 EOF
 fi
 

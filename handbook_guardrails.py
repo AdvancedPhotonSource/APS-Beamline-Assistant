@@ -96,6 +96,23 @@ def _example_params() -> Path | None:
     return p if p.is_file() else None
 
 
+def _capsule_param_text(pipeline: str) -> str:
+    """The PARAMETERS doc text from the vendored technique capsule for this
+    pipeline (ff/nf/pf/dfxm) — offline-safe and generic across techniques. "" if
+    no capsule / no PARAMETERS doc. This is what lets the SAME table parser and
+    trap engine enforce ANY technique's schema without a live MIDAS checkout: a
+    new capsule with a PARAMETERS doc is picked up automatically."""
+    try:
+        import capsule_registry as _cr
+    except Exception:
+        return ""
+    try:
+        tech = _cr._canon(pipeline or "") or _cr._canon((pipeline or "") + "-hedm")
+        return _cr.parameters_doc(tech) if tech else ""
+    except Exception:
+        return ""
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Parameter-file parsing (mirror of the server's _parse_param_multi, standalone)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -333,23 +350,48 @@ def _normalized_facts(raw: dict) -> dict:
     return out
 
 
-@lru_cache(maxsize=4)
+@lru_cache(maxsize=8)
 def load_param_facts(pipeline: str = "ff") -> dict:
-    """Return ``{lowercased_key: Fact}`` parsed from the FF Parameters Reference,
-    with the verified Defaults-summary overlaid. Falls back to a small embedded
-    snapshot when the MIDAS checkout is absent. Fail-open to the snapshot."""
-    ref = _reference_md()
-    if not ref:
-        return _normalized_facts(_FALLBACK_FACTS)
-    try:
-        text = ref.read_text(encoding="utf-8", errors="ignore")
-        facts = _parse_reference_tables(text)
-        _overlay_defaults_summary(text, facts)
-        if "width" not in facts:            # parse produced nothing useful
-            return _normalized_facts(_FALLBACK_FACTS)
+    """Return ``{lowercased_key: Fact}`` for a technique's parameter schema, with
+    the verified Defaults-summary overlaid. Fail-open to a small embedded snapshot.
+
+    Sources, in precedence order (first definition of a key wins):
+      1. FF only: the authoritative top-level ``manuals/FF_Parameters_Reference.md``
+         from a live MIDAS checkout — richest schema (Type/Units/Default/Required).
+      2. Any technique: the vendored capsule PARAMETERS doc
+         (``knowledge_base/capsules/<technique>/PARAMETERS.md`` etc.) — offline-safe
+         and generic, so nf/pf/dfxm (and future capsules) are enforced from the
+         same parser without a MIDAS checkout.
+      3. Embedded snapshot, when nothing else parsed."""
+    pipe = (pipeline or "ff").lower()
+    facts: dict = {}
+
+    def _merge(text: str) -> None:
+        f = _parse_reference_tables(text)
+        _overlay_defaults_summary(text, f)
+        for k, v in f.items():
+            facts.setdefault(k, v)   # earlier (richer) source wins
+
+    # 1. FF authoritative reference (live checkout) — richest columns.
+    if pipe == "ff":
+        ref = _reference_md()
+        if ref:
+            try:
+                _merge(ref.read_text(encoding="utf-8", errors="ignore"))
+            except Exception:
+                pass
+
+    # 2. Vendored capsule PARAMETERS doc for this technique (offline-safe, generic).
+    cap = _capsule_param_text(pipe)
+    if cap:
+        try:
+            _merge(cap)
+        except Exception:
+            pass
+
+    if facts:
         return _normalized_facts(facts)
-    except Exception:
-        return _normalized_facts(_FALLBACK_FACTS)
+    return _normalized_facts(_FALLBACK_FACTS)   # 3. offline FF fallback
 
 
 @lru_cache(maxsize=2)
@@ -666,7 +708,7 @@ def evaluate_param_guardrails(param_path, pipeline: str = "ff",
     try:
         pipe = (pipeline or "ff").lower()
         params = parse_param_file(param_path)
-        facts = load_param_facts("ff")
+        facts = load_param_facts(pipe)
         recommended = load_recommended_values()
         traps: list = []
 
