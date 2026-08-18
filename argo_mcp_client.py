@@ -33,6 +33,7 @@ from pathlib import Path
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.completion import Completer, Completion
+from prompt_toolkit.shortcuts import CompleteStyle
 from prompt_toolkit.formatted_text import FormattedText
 
 from mcp import ClientSession, StdioServerParameters
@@ -2041,9 +2042,27 @@ class APEXAClient:
         _SESSION_NAME_VERBS = {'load', 'switch', 'resume', 'append', 'save'}
 
         class _APEXACompleter(Completer):
-            def __init__(self, commands, sessions_provider=None):
+            def __init__(self, commands, sessions_provider=None, active_provider=None):
                 self._commands = sorted(commands)
                 self._sessions_provider = sessions_provider
+                self._active_provider = active_provider
+
+            def _session_names(self):
+                # Fail-open: a provider error must not kill completion entirely.
+                if not self._sessions_provider:
+                    return []
+                try:
+                    return list(self._sessions_provider())
+                except Exception:
+                    return []
+
+            def _active_name(self):
+                if not self._active_provider:
+                    return None
+                try:
+                    return self._active_provider()
+                except Exception:
+                    return None
 
             def get_completions(self, document, complete_event):
                 text = document.text_before_cursor
@@ -2053,17 +2072,21 @@ class APEXAClient:
                 # `session <verb> [name]` — complete verbs, then saved session names
                 if tokens and tokens[0] == 'session':
                     completing = '' if text.endswith(' ') else (tokens[-1] if tokens else '')
+                    pfx = completing.lower()
                     idx = len(tokens) - (0 if text.endswith(' ') else 1)
                     if idx == 1:                       # completing the verb
                         for v in _SESSION_VERBS:
-                            if v.startswith(completing):
+                            if v.lower().startswith(pfx):
                                 yield Completion(v, start_position=-len(completing))
                         return
                     if idx == 2 and tokens[1] in _SESSION_NAME_VERBS:  # completing a name
-                        names = self._sessions_provider() if self._sessions_provider else []
-                        for nm in names:
-                            if nm.startswith(completing):
-                                yield Completion(nm, start_position=-len(completing))
+                        active = self._active_name()
+                        for nm in sorted(self._session_names()):
+                            if nm.lower().startswith(pfx):
+                                yield Completion(
+                                    nm, start_position=-len(completing),
+                                    display_meta='active' if nm == active else '',
+                                )
                         return
 
                 if not tokens or (len(tokens) == 1 and not text.endswith(' ')):
@@ -2082,8 +2105,12 @@ class APEXAClient:
 
         pt_session = PromptSession(
             history=InMemoryHistory(),
-            completer=_APEXACompleter(_apexa_commands,
-                                      sessions_provider=self.context.list_sessions),
+            completer=_APEXACompleter(
+                _apexa_commands,
+                sessions_provider=self.context.list_sessions,
+                active_provider=lambda: getattr(self.context, 'active_session', None),
+            ),
+            complete_style=CompleteStyle.MULTI_COLUMN,   # TAB shows all names in a grid
             enable_history_search=True,
         )
 
