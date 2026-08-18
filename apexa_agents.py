@@ -2688,6 +2688,13 @@ class AgentRunner:
         # paths is the correct multi-file pattern (no "batch calibrate" tool exists).
         _MULTI_ARG_OK_TOOLS = {
             "read_file", "get_file_info", "run_command",
+            # run_remote_command is the SSH sibling of run_command and the primary
+            # tool for driving MIDAS on the remote analysis host (e.g. copland).
+            # A fresh reconstruction setup naturally issues many DISTINCT remote
+            # commands — locate the *_FF.par, read field 9, check disk, probe the
+            # MIDAS env — which is exploration, not thrashing. Omitting it here is
+            # what truncated a live FF-HEDM session at "5× run_remote_command".
+            "run_remote_command",
             "midas_auto_calibrate", "midas_integrate_2d_to_1d",
             "run_gsas_refinement",
             # Read-only inspection tools: calling them on N distinct paths/files
