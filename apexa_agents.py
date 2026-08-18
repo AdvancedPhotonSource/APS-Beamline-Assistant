@@ -463,7 +463,11 @@ class ArgoProvider:
                 status  = response.status_code
                 if os.environ.get("APEXA_SHOW_TIMING"):
                     print(f"  \033[2m⏱ {self.model} responded in {elapsed:.1f}s\033[0m", flush=True)
-                if status in (502, 503, 429):
+                # Transient gateway failures — retry with backoff. 500/504 are
+                # Argo-side blips (Internal Server Error / gateway timeout) that
+                # come and go; without retrying them a single blip aborts an
+                # in-progress reconstruction mid-turn.
+                if status in (500, 502, 503, 504, 429):
                     wait = 2 ** attempt
                     print(f"  \033[33m⚠ Argo {status}, retrying in {wait}s ({attempt+1}/{retries})\033[0m")
                     log_llm_call(self._timing_record(
@@ -509,11 +513,24 @@ class ArgoProvider:
                     print(f"  \033[33m⚠ Argo returned an EMPTY completion\033[0m "
                           f"(model={self.model}, user={self.username!r}). Raw: {_raw}",
                           file=sys.stderr)
+                    log_llm_call(self._timing_record(
+                        attempt=attempt, status=status, elapsed=elapsed,
+                        prompt_tok=prompt_tok, n_messages=n_messages,
+                        temperature=temperature, parsed=parsed, empty=True))
+                    # An empty 200 is a transient gateway hiccup that would
+                    # otherwise stall the agentic loop (nothing to act on) —
+                    # retry with backoff before giving up.
+                    if attempt < retries - 1:
+                        wait = 2 ** attempt
+                        print(f"  \033[33m⚠ empty completion — retrying in {wait}s "
+                              f"({attempt+1}/{retries})\033[0m", file=sys.stderr)
+                        await asyncio.sleep(wait)
+                        continue
+                    return parsed
                 log_llm_call(self._timing_record(
                     attempt=attempt, status=status, elapsed=elapsed,
                     prompt_tok=prompt_tok, n_messages=n_messages,
-                    temperature=temperature, parsed=parsed,
-                    empty=not (parsed.content or parsed.tool_calls)))
+                    temperature=temperature, parsed=parsed, empty=False))
                 return parsed
             except httpx.TimeoutException:
                 elapsed = time.monotonic() - t0
