@@ -140,6 +140,16 @@ If the image filename contains these patterns, no param file needed for material
 - `71p676keV` → wavelength 0.17298 Å
 - `650mm` → Lsd guess 650000 µm
 
+### Wavelength — ALWAYS derive it, never hand-compute
+
+The beam energy (e.g. `96keV` in the filename) → `--wavelength` MUST come from
+`xray_calculate("energy_to_wavelength", energy_kev=96)` — do NOT compute λ in your
+head. It uses the canonical beamline constant (λ = 12.398419057638671 / E[keV]); a
+hand-computed λ drifts (e.g. 0.12908 instead of 0.129150 Å for 96 keV = a 0.05 keV
+error baked into the geometry). For an edge-tuned run, pass `element=<symbol>` (au,
+w, pb, …) to use that element's K-edge energy — but a *sample* made of gold measured
+at 96 keV uses 96 keV, NOT the Au edge.
+
 ### Output files (written to image directory)
 
 - `refined_MIDAS_params_<material>.txt` — **primary output**, use for integration and FF-HEDM

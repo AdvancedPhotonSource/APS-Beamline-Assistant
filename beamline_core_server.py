@@ -1137,6 +1137,35 @@ async def check_environment() -> str:
 # SECTION 3: X-RAY UTILITIES & CALCULATIONS (using xrayutilities)
 # =============================================================================
 
+# Canonical Planck constant × c for E[keV] <-> lambda[Å]:  lambda = HC / E.
+# This exact value is the beamline's own energy2lambda script constant
+# (AC, cchuang@anl.gov, 2025-04-10) and agrees with xrayutilities.en2lam to
+# 7 significant figures. Pinned here as the SINGLE source of truth so any
+# wavelength APEXA derives (e.g. the calibration --wavelength) equals the
+# beamline's other tools exactly, rather than a model-computed approximation.
+HC_KEV_ANGSTROM = 12.398419057638671
+
+# Element K-edge energies (keV) for edge-tuned runs. Source: the same beamline
+# energy2lambda script. Used ONLY when a run is deliberately tuned to an element's
+# absorption edge — a *sample* made of gold does NOT imply the Au edge; the beam
+# energy comes from the experiment (e.g. "96keV" in the filename), not the element.
+ELEMENT_EDGE_KEV = {
+    "ho": 55.615, "yb": 61.332, "lu": 63.314, "hf": 65.350,
+    "ta": 67.411, "w": 69.525, "re": 71.676, "ir": 76.112,
+    "au": 80.726, "pb": 88.005, "bi": 90.529,
+}
+
+
+def _lambda_from_energy_kev(energy_kev: float) -> float:
+    """Wavelength in Å from energy in keV using the canonical beamline constant."""
+    return HC_KEV_ANGSTROM / energy_kev
+
+
+def _energy_kev_from_lambda(wavelength_angstroms: float) -> float:
+    """Energy in keV from wavelength in Å using the canonical beamline constant."""
+    return HC_KEV_ANGSTROM / wavelength_angstroms
+
+
 @mcp.tool()
 async def xray_calculate(
     calculation_type: str,
@@ -1148,6 +1177,7 @@ async def xray_calculate(
     two_theta_degrees: float = None,
     wavelength_angstroms: float = None,
     energy_kev: float = None,
+    element: str = None,
     d_spacing: float = None,
     measured_d: float = None,
     reference_d: float = None
@@ -1161,10 +1191,17 @@ async def xray_calculate(
     - "d_from_hkl": Calculate d-spacing from Miller indices
     - "d_from_angle": Calculate d-spacing from 2θ (Bragg's law)
     - "angle_from_d": Calculate 2θ from d-spacing
-    - "energy_to_wavelength": Convert energy (keV) to wavelength (Å)
+    - "energy_to_wavelength": Convert energy (keV) to wavelength (Å). Accepts
+        energy_kev directly, OR element=<symbol> to use that element's K-edge
+        energy (edge-tuned runs only — see list_element_edges).
     - "wavelength_to_energy": Convert wavelength (Å) to energy (keV)
+    - "list_element_edges": List the element K-edge energies (keV) known to APEXA
     - "strain": Calculate strain from measured and reference d-spacings
     - "list_materials": List available materials in xrayutilities
+
+    NOTE: energy<->wavelength uses the beamline's canonical constant
+    (lambda = 12.398419057638671 / E[keV]). ALWAYS derive a calibration/FF
+    wavelength through this tool — do not hand-compute it.
 
     Args:
         calculation_type: Type of calculation (see above)
@@ -1286,41 +1323,72 @@ async def xray_calculate(
 
         # ENERGY TO WAVELENGTH
         elif calculation_type == "energy_to_wavelength":
+            # Resolve energy: explicit energy_kev wins; else an element symbol
+            # maps to its K-edge energy (edge-tuned runs only).
+            _edge_note = None
+            if energy_kev is None and element:
+                _el = element.strip().lower()
+                if _el not in ELEMENT_EDGE_KEV:
+                    return format_result({
+                        "error": f"Unknown element '{element}'",
+                        "known_elements": sorted(ELEMENT_EDGE_KEV),
+                        "hint": "Pass energy_kev directly, or use calculation_type='list_element_edges'.",
+                    })
+                energy_kev = ELEMENT_EDGE_KEV[_el]
+                _edge_note = (f"Using {_el.capitalize()} K-edge = {energy_kev} keV. "
+                              "This is an edge-tuned energy — for a normal run pass the "
+                              "actual beam energy (e.g. from the filename), not the sample element.")
+            elif energy_kev is not None and element:
+                _edge_note = "Both energy_kev and element given — using explicit energy_kev."
             if energy_kev is None:
-                return format_result({"error": "energy_kev required"})
+                return format_result({"error": "energy_kev or element required"})
 
-            # Use xrayutilities energy-wavelength conversion
-            wavelength = xu.en2lam(energy_kev * 1000)  # Convert keV to eV
+            # Canonical beamline constant (matches xrayutilities.en2lam to 7 figs).
+            wavelength = _lambda_from_energy_kev(energy_kev)
 
-            return format_result({
+            _out = {
                 "tool": "xray_calculate",
-                "library": "xrayutilities.en2lam()",
                 "calculation": "energy_to_wavelength",
-                "inputs": {"energy_kev": energy_kev},
+                "constant": "lambda = 12.398419057638671 / E[keV] (beamline energy2lambda)",
+                "inputs": {"energy_kev": energy_kev,
+                           **({"element": element} if element else {})},
                 "result": {
                     "wavelength_angstroms": round(wavelength, 6),
-                    "energy_eV": energy_kev * 1000
-                }
-            })
+                    "energy_eV": energy_kev * 1000,
+                },
+            }
+            if _edge_note:
+                _out["note"] = _edge_note
+            return format_result(_out)
 
         # WAVELENGTH TO ENERGY
         elif calculation_type == "wavelength_to_energy":
             if wavelength_angstroms is None:
                 return format_result({"error": "wavelength_angstroms required"})
 
-            # Use xrayutilities wavelength-energy conversion
-            energy_eV = xu.lam2en(wavelength_angstroms)
-            energy_kev = energy_eV / 1000
+            # Canonical beamline constant (matches xrayutilities.lam2en to 7 figs).
+            energy_kev = _energy_kev_from_lambda(wavelength_angstroms)
 
             return format_result({
                 "tool": "xray_calculate",
-                "library": "xrayutilities.lam2en()",
                 "calculation": "wavelength_to_energy",
+                "constant": "E[keV] = 12.398419057638671 / lambda[Å] (beamline energy2lambda)",
                 "inputs": {"wavelength_angstroms": wavelength_angstroms},
                 "result": {
                     "energy_kev": round(energy_kev, 6),
-                    "energy_eV": round(energy_eV, 2)
+                    "energy_eV": round(energy_kev * 1000, 2)
                 }
+            })
+
+        # LIST ELEMENT K-EDGE ENERGIES
+        elif calculation_type == "list_element_edges":
+            return format_result({
+                "tool": "xray_calculate",
+                "calculation": "list_element_edges",
+                "source": "beamline energy2lambda script (AC, cchuang@anl.gov)",
+                "element_k_edges_keV": ELEMENT_EDGE_KEV,
+                "note": "Edge-tuned energies only. A gold sample measured at 96 keV "
+                        "uses 96 keV, NOT the Au edge (80.726 keV).",
             })
 
         # STRAIN CALCULATION
@@ -1364,7 +1432,7 @@ async def xray_calculate(
                 "error": f"Unknown calculation_type: {calculation_type}",
                 "valid_types": ["d_from_hkl", "d_from_angle", "angle_from_d",
                                "energy_to_wavelength", "wavelength_to_energy",
-                               "strain", "list_materials"]
+                               "list_element_edges", "strain", "list_materials"]
             })
 
     except Exception as e:
