@@ -251,3 +251,16 @@ scratch/
 unknown_integration/
 Ref-test/
 uploads/
+
+# ALCF Globus auth helper (vendored from argonne-lcf/inference-endpoints)
+inference_auth_token.py
+
+# ── The real test suite is NOT scratch — keep it tracked ─────────────────────
+# `test.py`, `test_*.py`, `test_*.sh` and `test*/` above exist to exclude ad-hoc
+# validation scripts and scratch dirs, but they also matched tests/, so the whole
+# suite (~100 tests) was silently uncommittable and lived only on one laptop.
+# These negations re-include it. Scratch dirs (test1/, test-LANL/, …) stay ignored
+# because they do not sit under tests/.
+!tests/
+!tests/**
+tests/__pycache__/
