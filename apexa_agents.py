@@ -2541,7 +2541,8 @@ class AgentRunner:
                   history_summary: str = "",
                   transcript: Optional[List[Dict]] = None,
                   single_mode: bool = False,
-                  extra_system_context: str = "") -> str:
+                  extra_system_context: str = "",
+                  preloaded_techniques: Optional[set] = None) -> str:
 
         tools = self._filter_tools(agent.tool_names, all_tools)
 
@@ -2742,8 +2743,11 @@ class AgentRunner:
         except Exception:
             pass
         # (C3) Technique-capsule spines injected this turn (dedup shared with the
-        # learn_technique meta-tool via handle_meta_tool).
-        _injected_techniques: set = set()
+        # learn_technique meta-tool via handle_meta_tool). Seeded with any spine
+        # the caller already front-loaded into the system prompt (single mode,
+        # query-scored) so the same technique is not re-injected mid-loop when its
+        # first FF/NF/PF tool fires.
+        _injected_techniques: set = set(preloaded_techniques or ())
 
         for _ in range(max_iterations):
             # `tools` is passed unconditionally; ArgoProvider only attaches it to
@@ -4251,9 +4255,9 @@ class OrchestratorAgent:
         # the loop edits a param file or fires a tool. Empty when nothing matches
         # — the deterministic lint gate + RAG still cover that case.
         skill_block = ""
+        _matched_tools: List[str] = []
         try:
             _, _scores = self._score_route(query)
-            _matched_tools: List[str] = []
             for _dom, _sc in _scores.items():
                 if _sc > 0:
                     _matched_tools.extend(self._ROUTES[_dom].tool_names)
@@ -4262,12 +4266,60 @@ class OrchestratorAgent:
         except Exception:
             skill_block = ""  # never let skill matching break a query
 
+        # Front-load the technique-capsule SPINE for single mode. Skills (above)
+        # carry per-stage procedure; the SPINE carries the technique's hard rules,
+        # halt conditions, step ORDER and traps — e.g. the FF omega-sign / SkipFrame
+        # / "derive lambda from calibration" rules. Mid-loop, `_maybe_capsule_msg`
+        # only injects the spine once an FF/NF/PF-*named* tool fires — which is too
+        # late for the planning + calibration phase (`run_remote_command`,
+        # `midas_auto_calibrate` carry no technique token). Deriving the technique
+        # from the SAME query-matched tools lands those rules in context BEFORE the
+        # model plans. Techniques front-loaded here are passed to run() so the
+        # mid-loop path does not re-inject them. Gated by APEXA_STAGE_GUARDRAILS,
+        # fail-open, prompt-cache-friendly (stable system-prompt prefix).
+        _preloaded_techniques: set = set()
+        _guardrails_on = os.environ.get(
+            "APEXA_STAGE_GUARDRAILS", "1").strip().lower() not in ("0", "false", "no", "off")
+        if _guardrails_on and _capsule_registry is not None and _matched_tools:
+            try:
+                _techs: List[str] = []
+                for _t in _matched_tools:
+                    _tech = _capsule_registry.technique_for_tool(_t)
+                    if _tech and _tech not in _techs:
+                        _techs.append(_tech)
+                # Front-load ONLY when the query resolves to a single technique
+                # (e.g. a calibration query → CalibrationAgent → run_ff_calibration
+                # → 'ff-hedm'). If it is ambiguous (a bare "reconstruction" query
+                # matches AnalysisAgent, which bundles ff+nf+pf), do NOT front-load:
+                # the spines carry technique-scoped rules that CONFLICT across
+                # techniques (FF requires SkipFrame 1, NF forbids it), so loading
+                # all three would dilute and mislead. The mid-loop `_maybe_capsule_msg`
+                # still injects the single correct spine the moment the actual
+                # FF/NF/PF-named tool fires — so the ambiguous case is unchanged.
+                if len(_techs) == 1:
+                    _tech = _techs[0]
+                    _spine = _capsule_registry.spine_context(_tech)
+                    if _spine:
+                        _preloaded_techniques.add(_tech)
+                        _halt = _capsule_registry.halt_checklist(_tech)
+                        _halt_block = (
+                            "\n\nHALT CONDITIONS — stop and ask the user if any apply "
+                            f"(do not proceed on assumption):\n{_halt}") if _halt else ""
+                        skill_block += (
+                            f"\n\nTECHNIQUE HANDBOOK ({_tech}) — the verified MIDAS "
+                            "procedure (scope, step order, hard rules, traps). It is the "
+                            "source of truth for this workflow; follow it and open each "
+                            "phase doc (open_phase) as you reach it." + _spine + _halt_block)
+            except Exception:
+                pass  # never let capsule preload break a query
+
         result = await self.runner.run(
             agent, query, provider, self.all_tools,
             history=None, log_entry=log_entry, on_tool_result=_capture,
             history_summary=self.running_summary if use_history else "",
             transcript=transcript, single_mode=True, max_iterations=_single_cap,
             extra_system_context=skill_block,
+            preloaded_techniques=_preloaded_techniques,
         )
 
         n_calls = len(log_entry.tool_calls)
