@@ -6301,6 +6301,14 @@ def _apply_offline_hf_env() -> bool:
     missing-network machine loads it from cache instead of hanging/failing on an HF
     HEAD request. Enable with APEXA_OFFLINE=1 (or set HF_HUB_OFFLINE=1 directly).
     Idempotent; safe to call before every model load. Returns True if offline."""
+    # Network tier is authoritative: anything below `web` must never reach HF.
+    # APEXA_OFFLINE stays supported as the legacy switch.
+    try:
+        from apexa_network import apply_offline_env
+        if apply_offline_env():
+            return True
+    except Exception:
+        pass
     truthy = ("1", "true", "yes", "on")
     if (os.environ.get("APEXA_OFFLINE", "").lower() in truthy
             or os.environ.get("HF_HUB_OFFLINE", "").lower() in truthy):
@@ -10723,16 +10731,33 @@ async def preprocess_nf_data(
 # =============================================================================
 
 if __name__ == "__main__":
-    # Pre-warm the knowledge base (loads ~700MB Nomic embedder + ChromaDB client).
-    # Without this, the first query_hedm_knowledge call pays a ~6 s cold-start
-    # cost while the user is waiting. Cost is paid once at server startup
-    # (hidden behind APEXA's normal banner) instead of on the first query.
+    # Pre-warm the knowledge base (loads ~700MB Nomic embedder + ChromaDB client)
+    # so the first query_hedm_knowledge call doesn't pay a ~6 s cold start.
+    #
+    # GATED ON NETWORK TIER. On a host with no public internet and no pre-staged
+    # HF cache this call BLOCKS on a HuggingFace HEAD request — and a block is not
+    # an exception, so the try/except below never fires, mcp.run() is never
+    # reached, and APEXA fails to launch at all. That is exactly what happened on
+    # copland. A slow first query is strictly better than a server that never
+    # starts, so below `web` tier we skip the warmup unless the operator has
+    # explicitly staged the cache (APEXA_KB_PREWARM=1).
+    import sys as _sys
     try:
-        import sys as _sys
-        kb = get_knowledge_base()
-        if kb.get("available"):
-            print("[midas] knowledge base pre-warmed", file=_sys.stderr, flush=True)
-    except Exception as _e:
-        print(f"[midas] kb warmup skipped: {_e}", file=_sys.stderr, flush=True)
+        from apexa_network import prewarm_allowed as _prewarm_ok, describe as _net_desc
+        print(f"[midas] {_net_desc()}", file=_sys.stderr, flush=True)
+        _do_warm = _prewarm_ok()
+    except Exception:
+        _do_warm = False        # unknown tier → assume the risky one is unsafe
+    if _do_warm:
+        try:
+            kb = get_knowledge_base()
+            if kb.get("available"):
+                print("[midas] knowledge base pre-warmed", file=_sys.stderr, flush=True)
+        except Exception as _e:
+            print(f"[midas] kb warmup skipped: {_e}", file=_sys.stderr, flush=True)
+    else:
+        print("[midas] kb pre-warm skipped (no web tier) — first RAG query will be "
+              "slower; set APEXA_KB_PREWARM=1 once the embedder cache is staged",
+              file=_sys.stderr, flush=True)
 
     mcp.run(transport='stdio')

@@ -1850,6 +1850,22 @@ class APEXAClient:
 
     async def execute_tool_call(self, tool_name: str, arguments: Dict[str, Any]) -> str:
 
+        # ===== NETWORK TIER GATE =====
+        # A tool that needs the public internet must be refused HERE, at the same
+        # single chokepoint as the deletion gate, rather than dispatched to a host
+        # that has no route out. Left to itself such a call does not fail — it
+        # BLOCKS, which is how the copland launch hung. Returning an explicit
+        # unavailable message keeps the model honest (it can adapt or ask the user)
+        # instead of stalling or inventing the result.
+        try:
+            from apexa_network import tool_unavailable_reason
+            _blocked = tool_unavailable_reason(tool_name)
+        except Exception:
+            _blocked = None
+        if _blocked:
+            print(f"  {C.YELLOW}⚠ unavailable on this host{C.RESET} {C.DIM}({tool_name}){C.RESET}")
+            return f"⛔ Tool unavailable: {_blocked}"
+
         # ===== SMART CACHING =====
         # Check cache for expensive read-only operations
         cacheable_operations = ["filesystem_read_file", "filesystem_list_directory"]

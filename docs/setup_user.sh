@@ -84,6 +84,47 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
     fi
 fi
 
+# Detect network reachability
+echo ""
+echo "Step 3: Network Environment"
+echo "-------------------------"
+echo "Probing what this host can reach (3s timeout each)..."
+
+APEXA_NETWORK=$(python3 - <<'PYEOF'
+import socket
+def up(h, p=443, t=3.0):
+    try:
+        with socket.create_connection((h, p), timeout=t):
+            return True
+    except OSError:
+        return False
+web = up("huggingface.co")
+anl = up("apps.inside.anl.gov") or up("inference-api.alcf.anl.gov")
+print("web" if web else ("internal" if anl else "data"))
+PYEOF
+)
+
+case "$APEXA_NETWORK" in
+  web)
+    echo "  ✓ public internet reachable  -> APEXA_NETWORK=web"
+    echo "    All tools available, including Materials Project and DOI lookup."
+    ;;
+  internal)
+    echo "  ✓ ANL internal reachable, no public internet -> APEXA_NETWORK=internal"
+    echo "    Argo / ALCF / SSH / MIDAS all work. Web-only tools are disabled and"
+    echo "    HuggingFace is forced offline, so startup cannot hang on a model"
+    echo "    download (this is what stalled APEXA on copland)."
+    echo ""
+    echo "    IMPORTANT: pre-stage the RAG embedder cache on a web-connected"
+    echo "    machine and copy ~/.cache/huggingface across, or query_hedm_knowledge"
+    echo "    stays unavailable. See docs/OFFLINE_DEPLOYMENT.md."
+    ;;
+  *)
+    echo "  ⚠ no network reachable -> APEXA_NETWORK=data"
+    echo "    APEXA needs an LLM endpoint; check the VPN/host networking."
+    ;;
+esac
+
 # Create .env file
 echo ""
 echo "Creating .env file..."
@@ -97,6 +138,11 @@ ANL_USERNAME=$ANL_USERNAME
 
 # AI Model
 ARGO_MODEL=$ARGO_MODEL
+
+# Network tier: web | internal | data  (detected at setup; edit if the host moves)
+#   internal = ANL-only. Web-only tools are disabled and HuggingFace is forced
+#   offline so the server cannot hang at startup on a model download.
+APEXA_NETWORK=$APEXA_NETWORK
 
 # MIDAS Installation Path
 EOF
@@ -116,6 +162,7 @@ echo ""
 echo "Configuration saved to .env:"
 echo "  - ANL Username: $ANL_USERNAME"
 echo "  - AI Model: $ARGO_MODEL"
+echo "  - Network tier: $APEXA_NETWORK"
 if [ -n "$MIDAS_PATH" ]; then
     echo "  - MIDAS Path: $MIDAS_PATH"
 else

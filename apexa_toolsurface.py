@@ -237,10 +237,24 @@ def meta_tool_schemas(n_hidden: int) -> List[Dict[str, Any]]:
 
 # ── Surface construction ─────────────────────────────────────────────────────
 
+def _network_disabled() -> Set[str]:
+    """Tools withheld because this host cannot reach the network they need.
+
+    Filtering the SURFACE complements the hard gate in execute_tool_call: the gate
+    guarantees such a tool can never run, this keeps it out of the model's context
+    so it never tries and never has to be corrected.
+    """
+    try:
+        from apexa_network import disabled_tools
+        return set(disabled_tools())
+    except Exception:
+        return set()
+
+
 def initial_surface(all_tools: Sequence[Dict[str, Any]],
                     extra: Iterable[str] = ()) -> List[Dict[str, Any]]:
     """The tool list a turn starts with: core + meta (+ any caller-pinned extras)."""
-    wanted = set(CORE_TOOLS) | set(extra)
+    wanted = (set(CORE_TOOLS) | set(extra)) - _network_disabled()
     present = [t for t in all_tools if tool_name(t) in wanted]
     n_hidden = max(0, len(all_tools) - len(present))
     return present + meta_tool_schemas(n_hidden)
@@ -261,7 +275,7 @@ def search(all_tools: Sequence[Dict[str, Any]], query: str,
             for h in hints:
                 qt |= _tokens(h)
 
-    skip = set(exclude) | set(META_TOOLS)
+    skip = set(exclude) | set(META_TOOLS) | _network_disabled()
     scored: List[tuple[float, str, str]] = []
     for t in all_tools:
         name = tool_name(t)
