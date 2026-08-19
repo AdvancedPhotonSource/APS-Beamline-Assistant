@@ -48,6 +48,19 @@ _TOKEN_TTL_S = 600
 _token_cache: dict[str, tuple[float, str]] = {}
 
 
+def _default_token_cmd() -> str:
+    """ALCF's Globus helper, invoked with the CURRENT interpreter.
+
+    Hardcoding ``python`` breaks whenever the shell's ``python`` is not the
+    interpreter APEXA is running under — a stale ``VIRTUAL_ENV`` from another repo
+    is enough, and the failure looks like a missing ``globus_sdk`` rather than a
+    path problem. ``sys.executable`` is unambiguous. Override with
+    ``APEXA_LLM_TOKEN_CMD`` if the helper lives elsewhere.
+    """
+    script = os.environ.get("ALCF_AUTH_HELPER") or "inference_auth_token.py"
+    return f"{shlex.quote(sys.executable)} {shlex.quote(script)} get_access_token"
+
+
 class EndpointRejected(RuntimeError):
     """The endpoint cannot support APEXA (e.g. no tool calling)."""
 
@@ -146,7 +159,7 @@ class ALCFSophiaEndpoint(OpenAIEndpoint):
 
     name: str = "alcf-sophia"
     base_url: str = "https://inference-api.alcf.anl.gov/resource_server/sophia/vllm/v1"
-    token_cmd: str = "python inference_auth_token.py get_access_token"
+    token_cmd: str = field(default_factory=_default_token_cmd)
     tool_calling: bool = True
     notes: str = ("ALCF Inference Service (Sophia). Per-user Globus identity; tokens "
                   "expire after 48h and are refreshed by the token command. Use only "
@@ -165,9 +178,34 @@ class ALCFMetisEndpoint(OpenAIEndpoint):
 
     name: str = "alcf-metis"
     base_url: str = "https://inference-api.alcf.anl.gov/resource_server/metis/api/v1"
-    token_cmd: str = "python inference_auth_token.py get_access_token"
+    token_cmd: str = field(default_factory=_default_token_cmd)
     tool_calling: bool = False
     notes: str = "Metis does not support tool calling — use alcf-sophia instead."
+
+
+@dataclass
+class ALCFMinervaEndpoint(OpenAIEndpoint):
+    """ALCF Minerva cluster (NVIDIA B200) — ``nemotron-3-ultra``, ``inkling-bf16``.
+
+    Tool-calling status is **unconfirmed**, not denied: ALCF flags both models
+    ``H`` (always hot) with no ``T``, but — unlike Metis, where the docs state
+    outright that tool calling is unsupported — Minerva carries no such statement.
+    So this preset is allowed through and left to be settled empirically by
+    ``scripts/alcf_qualify_models.py``; if the probe fails, APEXA cannot use it.
+
+    Both models being always-hot is attractive for interactive beamline use (no
+    10-15 min cold start), which is exactly why it's worth actually measuring.
+    """
+
+    name: str = "alcf-minerva"
+    base_url: str = "https://inference-api.alcf.anl.gov/resource_server/minerva/api/v1"
+    token_cmd: str = field(default_factory=_default_token_cmd)
+    tool_calling: bool = True   # CONFIRMED by measurement (see notes)
+    notes: str = ("ALCF Minerva (B200). Always-hot. ALCF publishes no T flag for "
+                  "these models, but both inkling-bf16 and nemotron-3-ultra passed "
+                  "full multi-turn tool CHAINING on 2026-08-18 (3.8-3.9 s) — the "
+                  "docs' flags are incomplete here, not authoritative. Fastest "
+                  "qualified endpoint measured so far.")
 
 
 @dataclass
@@ -189,15 +227,85 @@ class CustomEndpoint(OpenAIEndpoint):
 
 
 PRESETS: dict[str, type[OpenAIEndpoint]] = {
-    "argo-proxy":  ArgoProxyEndpoint,
-    "alcf-sophia": ALCFSophiaEndpoint,
-    "alcf-metis":  ALCFMetisEndpoint,
-    "openai":      OpenAIEndpoint,
-    "anthropic":   AnthropicEndpoint,
-    "custom":      CustomEndpoint,
+    "argo-proxy":   ArgoProxyEndpoint,
+    "alcf-sophia":  ALCFSophiaEndpoint,
+    "alcf-minerva": ALCFMinervaEndpoint,
+    "alcf-metis":   ALCFMetisEndpoint,
+    "openai":       OpenAIEndpoint,
+    "anthropic":    AnthropicEndpoint,
+    "custom":       CustomEndpoint,
 }
 
 DEFAULT_PRESET = "argo-proxy"
+
+
+# ── ALCF candidate models for APEXA ──────────────────────────────────────────
+# Flags from docs.alcf.anl.gov/services/inference-endpoints (read 2026-08-18):
+#   B = batch   R = reasoning   T = tool calling   H = always hot
+#
+# APEXA needs T (every capability is a tool call). R matters for multi-step FF
+# workflows. H matters a lot operationally: without it, a cold model costs 10-15
+# minutes before the first query — painful mid-experiment.
+#
+# Models with only B (AuroraGPT) or no flags (Devstral) have no tool calling and
+# are excluded. This table drives scripts/alcf_qualify_models.py.
+ALCF_CANDIDATES: list[dict] = [
+    # preset          model id                                    flags     note
+    {"preset": "alcf-sophia",  "model": "openai/gpt-oss-120b",
+     "flags": "B,R,T,H", "note": "only Sophia model with all four flags; Harmony-native"},
+    {"preset": "alcf-sophia",  "model": "openai/gpt-oss-20b",
+     "flags": "B,R,T,H", "note": "same flags, smaller/faster — cheap-turn fallback"},
+    {"preset": "alcf-sophia",  "model": "google/gemma-4-31B-it",
+     "flags": "R,T,H",   "note": "reasoning + tools + hot; small for APEXA's scope"},
+    {"preset": "alcf-sophia",  "model": "google/gemma-4-E4B-it",
+     "flags": "R,T,H",   "note": "smallest hot Gemma 4"},
+    {"preset": "alcf-sophia",  "model": "google/gemma-3-27b-it",
+     "flags": "B,T",     "note": "no reasoning flag; cold start"},
+    {"preset": "alcf-sophia",  "model": "nvidia/nemotron-3-super-120b",
+     "flags": "R,T",     "note": "reasoning + tools but NOT hot → 10-15 min cold start"},
+    {"preset": "alcf-sophia",  "model": "arcee-ai/Trinity-Large-Thinking-W4A16",
+     "flags": "R,T",     "note": "reasoning + tools; 4-bit quantized; not hot"},
+    {"preset": "alcf-sophia",  "model": "meta-llama/Llama-3.3-70B-Instruct",
+     "flags": "B,T",     "note": "mature tool calling, no reasoning flag"},
+    {"preset": "alcf-sophia",  "model": "meta-llama/Llama-4-Scout-17B-16E-Instruct",
+     "flags": "B,T",     "note": "long context MoE"},
+    # Minerva: always-hot, tool calling UNCONFIRMED — the reason to measure.
+    {"preset": "alcf-minerva", "model": "inkling-bf16",
+     "flags": "H(+T*)",  "note": "no T flag in docs, but CHAINS — measured 3.8s, fastest"},
+    {"preset": "alcf-minerva", "model": "nemotron-3-ultra",
+     "flags": "H(+T*)",  "note": "no T flag in docs, but CHAINS — measured 3.9s"},
+]
+
+
+def preset_for_model(model_id: str) -> Optional[str]:
+    """Which preset serves this model id, or None if it isn't an ALCF candidate.
+
+    Lets the CLI's ``model <name>`` switch **endpoint and model together**: moving
+    from ``claudeopus5`` to ``inkling-bf16`` is not a model change, it is a change
+    of cluster, credential, and base URL. Without this the CLI would silently ask
+    argo-proxy for an ALCF model and 404.
+    """
+    mid = (model_id or "").strip()
+    for c in ALCF_CANDIDATES:
+        if c["model"] == mid:
+            return c["preset"]
+    # Tolerate a bare id for a namespaced model ("gpt-oss-120b" → "openai/gpt-oss-120b").
+    for c in ALCF_CANDIDATES:
+        if c["model"].rsplit("/", 1)[-1] == mid:
+            return c["preset"]
+    return None
+
+
+def canonical_model_id(model_id: str) -> str:
+    """Expand a bare ALCF model name to the id the endpoint actually serves."""
+    mid = (model_id or "").strip()
+    for c in ALCF_CANDIDATES:
+        if c["model"] == mid:
+            return mid
+    for c in ALCF_CANDIDATES:
+        if c["model"].rsplit("/", 1)[-1] == mid:
+            return c["model"]
+    return mid
 
 
 def active_endpoint() -> OpenAIEndpoint:

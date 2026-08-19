@@ -1619,6 +1619,21 @@ class APEXAClient:
             }
         }
 
+        # ALCF Inference Service — open models on ANL hardware, authenticated with
+        # the USER'S OWN Globus identity. Listed from the single candidate table in
+        # apexa_llm_endpoints so the CLI can never drift from what's qualified.
+        # `model <id>` switches cluster + credential too (see the handler).
+        try:
+            from apexa_llm_endpoints import ALCF_CANDIDATES as _ALCF
+            for _cluster, _label in (("alcf-sophia",  "ALCF Sophia (open, per-user Globus)"),
+                                     ("alcf-minerva", "ALCF Minerva (open, per-user Globus)")):
+                _group = {c["model"]: f"[{c['flags']}] {c['note']}"
+                          for c in _ALCF if c["preset"] == _cluster}
+                if _group:
+                    self.available_models[_label] = _group
+        except Exception as _e:      # never let the model list break startup
+            print(f"  {C.DIM}(ALCF model list unavailable: {_e}){C.RESET}", file=sys.stderr)
+
     @staticmethod
     def _server_command(script_path: str) -> str:
         """Resolve the interpreter/command used to spawn a server script.
@@ -2757,8 +2772,38 @@ class APEXAClient:
                     _print_help()
                 elif user_input.startswith('model '):
                     model_name = user_input[6:].strip()
-                    if self._is_valid_model(model_name):
+                    # An ALCF model lives on a different CLUSTER, not just a
+                    # different name — switching it must also move the preset
+                    # (base URL + credential), or we'd ask argo-proxy for a model
+                    # it has never heard of. select_provider() re-reads the env
+                    # per query, so setting it here takes effect on the next turn.
+                    try:
+                        from apexa_llm_endpoints import canonical_model_id, preset_for_model
+                        _canon = canonical_model_id(model_name)
+                        _preset = preset_for_model(_canon)
+                    except Exception:
+                        _canon, _preset = model_name, None
+
+                    if _preset:
+                        os.environ["APEXA_LLM_PRESET"] = _preset
+                        os.environ["APEXA_LLM_MODE"] = "proxy"   # ALCF is proxy-path only
+                        os.environ.pop("APEXA_LLM_BASE_URL", None)  # let the preset supply it
+                        self.selected_model = _canon
+                        self.environment = _preset
+                        print(f"  {C.GREEN}✓{C.RESET} Switched to: {C.BOLD}{C.CYAN}{_canon}{C.RESET} "
+                              f"{C.DIM}via {_preset}{C.RESET}")
+                        from apexa_provider_openai import preflight as _pf
+                        _ok, _detail = await _pf(self.anl_username, _canon)
+                        if not _ok:
+                            print(f"  {C.YELLOW}⚠{C.RESET} {_detail}")
+                    elif self._is_valid_model(model_name):
+                        # An Argo model — restore the Argo transport if we had
+                        # previously switched away to an ALCF cluster.
+                        if (os.environ.get("APEXA_LLM_PRESET") or "").startswith("alcf"):
+                            os.environ["APEXA_LLM_PRESET"] = "argo-proxy"
+                            print(f"  {C.DIM}(back to argo-proxy transport){C.RESET}")
                         self.selected_model = model_name
+                        self.environment = "DEV" if model_name in DEV_ONLY_MODELS else "PROD"
                         print(f"  {C.GREEN}✓{C.RESET} Switched to: {C.BOLD}{C.CYAN}{model_name}{C.RESET}")
                     else:
                         print(f"  {C.RED}✗{C.RESET} Invalid model: {model_name}")

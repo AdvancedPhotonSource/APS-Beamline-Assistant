@@ -73,6 +73,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# ALCF Inference Service (multi-user, per-user Globus identity).
+# Only needed for APEXA_LLM_PRESET=alcf-*; see docs/ALCF_MULTIUSER.md
+alcf = ["globus-sdk>=3.40", "openai>=1.40"]
+
 # Extra scientific packages (not currently imported but useful for future)
 extra = [
     "plotly>=6.3.0",
