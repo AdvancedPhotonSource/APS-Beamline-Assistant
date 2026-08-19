@@ -2774,6 +2774,15 @@ class AgentRunner:
                 # tree during a debug session) is the exact regression the old
                 # thrash floor caused.
                 _turn_tool_counts.update(tc.name for tc in response.tool_calls)
+                # Track distinct arg fingerprints on the NATIVE path too. The
+                # thrash floor (Mode-2 block) judges shell/remote tools by arg
+                # diversity, but it reads a cross-mode counter: if the count is
+                # bumped here without also recording args, a native-driven turn
+                # (claude* uses native tool_calls) shows "N calls / 1 distinct"
+                # and false-trips on legitimately diverse commands.
+                for _tc in response.tool_calls:
+                    _turn_tool_args.setdefault(_tc.name, set()).add(
+                        json.dumps(_tc.arguments, sort_keys=True))
                 _worst_tool, _worst_count = _turn_tool_counts.most_common(1)[0]
                 if _worst_count >= _FANOUT_THRESHOLD and not single_mode and not structured:
                     print(f"  \033[33m⚠ cumulative fan-out:\033[0m {_worst_count}× {_worst_tool}")
