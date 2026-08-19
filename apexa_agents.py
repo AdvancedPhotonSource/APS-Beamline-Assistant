@@ -2704,6 +2704,16 @@ class AgentRunner:
             "list_directory", "read_document", "inspect_dataset_file",
             "diagnose_parameter_file", "validate_parameter_file",
         }
+        # Shell/remote investigation drives real pipelines: many DISTINCT commands
+        # are progress, not thrash (locate scripts, source the env, probe files,
+        # launch the run — each a different command). These are judged by argument
+        # DIVERSITY, not the strict "100% unique" rule above: a repeated probe or
+        # two while setting up a remote run must never force-finalize a live
+        # session. Requiring every call to be unique (as the strict rule did) is
+        # what re-truncated an FF-HEDM setup at "5× run_remote_command" the moment
+        # any single command recurred. The iteration cap remains the backstop for
+        # genuinely runaway loops.
+        _SHELL_INVESTIGATION_TOOLS = {"run_command", "run_remote_command"}
         # Track which _PLAN_REQUIRED_TOOLS have been gate-rejected this turn.
         # On a second rejection of the same tool, strengthen the message to
         # emphasise that plan + TOOL_CALL must be in the SAME response.
@@ -3070,9 +3080,19 @@ class AgentRunner:
                 _SINGLE_THRASH = 5
                 if single_mode and _cum_count >= _SINGLE_THRASH:
                     _unique_args = len(_turn_tool_args.get(_cum_top, set()))
-                    # Genuinely arg-diverse work (read_file over N distinct files) is fine.
-                    if not (_cum_top in _MULTI_ARG_OK_TOOLS and _unique_args >= _cum_count):
-                        print(f"  \033[33m⚠ thrash floor:\033[0m {_cum_count}× {_cum_top} — forcing answer")
+                    if _cum_top in _SHELL_INVESTIGATION_TOOLS:
+                        # Judge by DIVERSITY: trip only when the calls are mostly
+                        # repeats (>40% duplicate args) — real non-converging
+                        # thrash. All-distinct (or nearly) commands are exploration
+                        # and run to the iteration cap. e.g. 5 calls/5 distinct →
+                        # pass; 5/4 → pass (one repeat); 6 calls/2 distinct → trip.
+                        _thrash = _unique_args < 0.6 * _cum_count
+                    else:
+                        # Genuinely arg-diverse work (read_file over N distinct files)
+                        # is fine; everything else trips at the strict-unique bar.
+                        _thrash = not (_cum_top in _MULTI_ARG_OK_TOOLS and _unique_args >= _cum_count)
+                    if _thrash:
+                        print(f"  \033[33m⚠ thrash floor:\033[0m {_cum_count}× {_cum_top} ({_unique_args} distinct) — forcing answer")
                         messages.append({
                             "role": "user",
                             "content": (
