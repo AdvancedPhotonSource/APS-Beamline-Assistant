@@ -195,6 +195,15 @@ ALLOWED_COMMANDS = {
     'PlotFFNF.py',
 }
 
+# Case-insensitive lookup set. `_base_cmd` lowercases the executable token, but
+# ALLOWED_COMMANDS above stores canonical mixed case (AutoCalibrateZarr.py,
+# ff_MIDAS.py, IndexerOMP, ProcessGrains, …). Comparing a lowercased token
+# against the mixed-case set NEVER matches, so every mixed-case MIDAS binary was
+# wrongly refused when invoked by name (only all-lowercase entries like python3
+# passed). Match against this lowercased copy instead. ALLOWED_COMMANDS stays
+# the source of truth and is still what `available_commands` displays.
+_ALLOWED_COMMANDS_LOWER = {c.lower() for c in ALLOWED_COMMANDS}
+
 # =============================================================================
 # HELPER FUNCTIONS
 # =============================================================================
@@ -344,7 +353,7 @@ def _validate_segments(command: str) -> tuple:
         # Shell builtins: always allowed (part of the shell itself)
         if base in _SHELL_BUILTINS:
             continue
-        if base not in ALLOWED_COMMANDS:
+        if base not in _ALLOWED_COMMANDS_LOWER:
             blocked.append(base)
     return len(blocked) == 0, blocked
 
@@ -381,7 +390,7 @@ def is_command_allowed(command: str) -> bool:
             allowed, _ = _validate_segments(script_content)
             return allowed
         # bash -c with no following argument: just validate the interpreter
-        return base in ALLOWED_COMMANDS
+        return base in _ALLOWED_COMMANDS_LOWER
 
     # Normal command or pipeline: split on operators and validate each segment.
     # re.split is safe here because we're not inside a bash -c quoted string.
