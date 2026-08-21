@@ -2582,7 +2582,24 @@ class AgentRunner:
         cwd = str(Path.cwd())
         plan_pre = _PLAN_FIRST_PREAMBLE if getattr(agent, "use_planning", False) else ""
         preamble = _STRUCTURED_PREAMBLE if structured else _TOOL_PREAMBLE
-        system_content = plan_pre + preamble + f"\nCurrent working directory (CWD): {cwd}\n" + agent.instructions
+
+        # Tell the model what it actually IS. Asked "what model are you using?",
+        # gpt-oss-120b on ALCF answered "OpenAI's GPT-4 architecture (June 2024)" —
+        # a confabulation, and one APEXA can simply prevent, since it knows the
+        # answer. Same principle as the ledger: ground the claim in a fact we hold.
+        _ident = f"\nYou are currently running on model '{getattr(provider, 'model', 'unknown')}'"
+        try:
+            from apexa_llm_endpoints import active_endpoint
+            _ep = active_endpoint()
+            _ident += f" served by {_ep.name} ({_ep.base_url})"
+        except Exception:
+            pass
+        _ident += (". If asked which model or endpoint you are using, report exactly "
+                   "this and do not guess from your training data.\n")
+
+        system_content = (plan_pre + preamble + _ident
+                          + f"\nCurrent working directory (CWD): {cwd}\n"
+                          + agent.instructions)
 
         # Append tool catalog with parameters so the model knows what to call
         if tools:

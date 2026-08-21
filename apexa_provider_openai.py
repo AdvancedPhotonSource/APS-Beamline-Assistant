@@ -130,7 +130,20 @@ async def preflight(username: str, model: str) -> tuple[bool, str]:
         return False, str(e)
     try:
         resolved = await p._resolve_model()
-        return True, f"argo-proxy {p.url} — model {model!r} → {resolved!r}"
+        # For endpoints with no /models route, resolution is table-only and touches
+        # no network — so it proves nothing about reachability or the credential.
+        # Spend one tiny completion to actually verify, or APEXA_LLM_STRICT would
+        # be satisfied by a dead endpoint (the bug that already bit us once).
+        try:
+            from apexa_llm_endpoints import active_endpoint
+            needs_live_check = not active_endpoint().lists_models
+        except Exception:
+            needs_live_check = False
+        if needs_live_check:
+            await p._client_for_request().chat.completions.create(
+                model=resolved, max_completion_tokens=1,
+                messages=[{"role": "user", "content": "ping"}])
+        return True, f"{p.url} — model {model!r} → {resolved!r}"
     except ProviderUnavailable as e:
         return False, str(e)
     except Exception as e:
@@ -167,6 +180,25 @@ def _anagram_key(name: str) -> str:
     than guessed.
     """
     return "".join(sorted(_norm(name)))
+
+
+# Chat-template control tokens that some open models emit as literal TEXT instead
+# of consuming them as stop tokens. Observed live: inkling-bf16 on ALCF Minerva
+# wrapping every reply in `<|end_message|>`, which then reached the user's
+# terminal. Vendor-agnostic on purpose — the same class of leak shows up as
+# <|im_end|> (ChatML), <|eot_id|> (Llama 3), and <|channel|>/<|message|>
+# (OpenAI Harmony, which ALCF requires for tool calls).
+_SPECIAL_TOKEN_RE = re.compile(
+    r"<\|(?:end_message|im_end|im_start|eot_id|end_of_text|endoftext|end|start|"
+    r"assistant|user|system|channel|message|constrain|return|call)\|>"
+)
+
+
+def strip_special_tokens(text: str) -> str:
+    """Remove leaked chat-template control tokens from model output."""
+    if not text or "<|" not in text:
+        return text
+    return _SPECIAL_TOKEN_RE.sub("", text).strip()
 
 
 class ProviderUnavailable(RuntimeError):
@@ -224,6 +256,32 @@ class OpenAICompatProvider:
         """
         if self._resolved_model:
             return self._resolved_model
+        # ALCF serves chat but 404s every /models route, so probing one costs a
+        # wasted round trip and prints a warning for an expected condition. Use the
+        # curated candidate table as the validator there — which also restores the
+        # "did you typo the id?" check that a listing would normally give us.
+        try:
+            from apexa_llm_endpoints import (ALCF_CANDIDATES, active_endpoint,
+                                             canonical_model_id, suggest_models)
+            if not active_endpoint().lists_models:
+                canon = canonical_model_id(self.model)
+                known = {c["model"] for c in ALCF_CANDIDATES}
+                if known and canon not in known:
+                    hint = ", ".join(suggest_models(self.model)) or (
+                        "run scripts/alcf_qualify_models.py to see what works")
+                    raise ProviderUnavailable(
+                        f"model {self.model!r} is not a known model for {self.url}. "
+                        f"Did you mean: {hint}?")
+                if canon != self.model:
+                    print(f"  \033[2m↪ model {self.model!r} → {canon!r}\033[0m",
+                          file=sys.stderr)
+                self._resolved_model = canon
+                return self._resolved_model
+        except ProviderUnavailable:
+            raise
+        except Exception:
+            pass
+
         try:
             served = [m.id for m in (await self._client.models.list()).data]
         except Exception as e:
@@ -338,7 +396,7 @@ class OpenAICompatProvider:
                 arguments=args,
             ))
         return AgentResponse(
-            content=(msg.content or ""),
+            content=strip_special_tokens(msg.content or ""),
             tool_calls=calls,
             stop_reason="tool_use" if calls else "end_turn",
         )

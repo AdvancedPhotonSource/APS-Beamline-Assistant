@@ -34,6 +34,7 @@ Selected with ``APEXA_LLM_PRESET``:
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -77,6 +78,10 @@ class OpenAIEndpoint:
     token_cmd: Optional[str] = None
     #: False ⇒ APEXA refuses the endpoint: structured tool calling is mandatory.
     tool_calling: bool = True
+    #: False ⇒ no working GET /models. ALCF serves chat but 404s every listing
+    #: route, so probing one just wastes a round trip and emits a scary warning
+    #: for an entirely expected condition. Validate against ALCF_CANDIDATES instead.
+    lists_models: bool = True
     #: Operator-facing note surfaced at startup.
     notes: str = "Commercial OpenAI API — needs a personal API key and outbound egress."
 
@@ -160,6 +165,7 @@ class ALCFSophiaEndpoint(OpenAIEndpoint):
     name: str = "alcf-sophia"
     base_url: str = "https://inference-api.alcf.anl.gov/resource_server/sophia/vllm/v1"
     token_cmd: str = field(default_factory=_default_token_cmd)
+    lists_models: bool = False
     tool_calling: bool = True
     notes: str = ("ALCF Inference Service (Sophia). Per-user Globus identity; tokens "
                   "expire after 48h and are refreshed by the token command. Use only "
@@ -179,6 +185,7 @@ class ALCFMetisEndpoint(OpenAIEndpoint):
     name: str = "alcf-metis"
     base_url: str = "https://inference-api.alcf.anl.gov/resource_server/metis/api/v1"
     token_cmd: str = field(default_factory=_default_token_cmd)
+    lists_models: bool = False
     tool_calling: bool = False
     notes: str = "Metis does not support tool calling — use alcf-sophia instead."
 
@@ -200,6 +207,7 @@ class ALCFMinervaEndpoint(OpenAIEndpoint):
     name: str = "alcf-minerva"
     base_url: str = "https://inference-api.alcf.anl.gov/resource_server/minerva/api/v1"
     token_cmd: str = field(default_factory=_default_token_cmd)
+    lists_models: bool = False
     tool_calling: bool = True   # CONFIRMED by measurement (see notes)
     notes: str = ("ALCF Minerva (B200). Always-hot. ALCF publishes no T flag for "
                   "these models, but both inkling-bf16 and nemotron-3-ultra passed "
@@ -293,6 +301,14 @@ def preset_for_model(model_id: str) -> Optional[str]:
     for c in ALCF_CANDIDATES:
         if c["model"].rsplit("/", 1)[-1] == mid:
             return c["preset"]
+    # Tolerate a WRONG vendor prefix too ("openai/gemma-4-31B-it"): the bare name
+    # is unambiguous across the catalogue, and copying the prefix from the previous
+    # line is an easy slip. The switch prints what it resolved to, so the
+    # correction is never silent.
+    bare = mid.rsplit("/", 1)[-1]
+    for c in ALCF_CANDIDATES:
+        if c["model"].rsplit("/", 1)[-1] == bare:
+            return c["preset"]
     return None
 
 
@@ -302,8 +318,9 @@ def canonical_model_id(model_id: str) -> str:
     for c in ALCF_CANDIDATES:
         if c["model"] == mid:
             return mid
+    bare = mid.rsplit("/", 1)[-1]
     for c in ALCF_CANDIDATES:
-        if c["model"].rsplit("/", 1)[-1] == mid:
+        if c["model"].rsplit("/", 1)[-1] == bare:
             return c["model"]
     return mid
 
@@ -341,3 +358,18 @@ def describe_active() -> str:
     except EndpointRejected as e:
         return f"(unusable: {e})"
     return f"{ep.name} → {ep.base_url}"
+
+
+def suggest_models(model_id: str, limit: int = 5) -> list[str]:
+    """Closest candidate ids for a mistyped model name (setup + CLI error paths)."""
+    q = set(re.findall(r"[a-z0-9]+", (model_id or "").lower()))
+    if not q:
+        return []
+    scored = []
+    for c in ALCF_CANDIDATES:
+        t = set(re.findall(r"[a-z0-9]+", c["model"].lower()))
+        overlap = len(q & t)
+        if overlap:
+            scored.append((-overlap, c["model"]))
+    scored.sort()
+    return [m for _, m in scored[:limit]]

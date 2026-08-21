@@ -331,18 +331,42 @@ _SHELL_COMMANDS = {
     'caget', 'caput', 'camonitor', 'cainfo',
 }
 
+# Shell-ish signals in the ARGUMENTS: a flag, a pipe/redirect/separator, a glob,
+# or a quoted string. Natural language essentially never contains these.
+_SHELLISH_RE = re.compile(r'[|><;&$*]|(?:^|\s)-{1,2}\w|["\']')
+
+
 def _is_shell_command(user_input: str) -> bool:
-    """Check if input looks like a direct shell command."""
+    """Check if input looks like a direct shell command.
+
+    Matching on the first word alone was too eager: `which`, `find`, `date`,
+    `file`, `make`, `sort`, `tree` and `ps` are all ordinary English openers, so
+    "which model are you?" was executed as `which` instead of being answered.
+    Require the REST of the line to look like arguments too.
+    """
     if not user_input:
         return False
-    first_word = user_input.split()[0].rstrip(';')
-    # Exact match against known commands
-    if first_word in _SHELL_COMMANDS:
+    stripped = user_input.strip()
+    first_word = stripped.split()[0].rstrip(';')
+
+    # Paths to executables are unambiguous: ./script.sh, /usr/bin/x, ~/bin/tool
+    if first_word.startswith(('./', '/', '~/')):
         return True
-    # Paths to executables: ./script.sh, /usr/bin/something, ~/bin/tool
-    if first_word.startswith(('./','/',  '~/')):
-        return True
-    return False
+    if first_word not in _SHELL_COMMANDS:
+        return False
+
+    rest = stripped[len(first_word):].strip()
+    if not rest:
+        return True                      # bare `ls`, `pwd`, `date`
+    if stripped.endswith('?'):
+        return False                     # a question, not a command
+    if _SHELLISH_RE.search(rest):
+        return True                      # flags, pipes, globs, quotes
+    if '/' in rest or '.' in rest.split()[0]:
+        return True                      # a path or a filename argument
+    # No shell signals left: short means command (`git status`), long means prose
+    # ("find my grains in scan5", "sort the results by grain size").
+    return len(rest.split()) <= 2
 
 
 class ExperimentContext:
@@ -2040,16 +2064,35 @@ class APEXAClient:
             print(f"  {C.DIM}(autosave skipped: {e}){C.RESET}", file=sys.stderr)
 
     def show_available_models(self):
-        print(f"\n  {C.BOLD}Available Argo Models{C.RESET}")
-        print(f"  {C.DIM}{'─' * 50}{C.RESET}")
+        # The list is no longer Argo-only — ALCF's open models are here too, and
+        # their ids are up to 41 chars, so a hardcoded ":18" column misaligned
+        # every description. Size the column to the content instead.
+        try:
+            from apexa_llm_endpoints import preset_for_model
+        except Exception:
+            preset_for_model = lambda _m: None      # noqa: E731
+
+        width = max((len(m) for g in self.available_models.values() for m in g),
+                    default=18)
+        width = min(max(width, 18), 44)
+
+        active_preset = (os.environ.get("APEXA_LLM_PRESET") or "argo-proxy").strip()
+        print(f"\n  {C.BOLD}Available Models{C.RESET}  "
+              f"{C.DIM}(active: {self.selected_model} via {active_preset}){C.RESET}")
+        print(f"  {C.DIM}{'─' * (width + 34)}{C.RESET}")
 
         for provider, models in self.available_models.items():
             print(f"\n  {C.BOLD}{C.WHITE}{provider}{C.RESET}")
             for model_id, description in models.items():
-                if model_id == self.selected_model:
-                    print(f"  {C.BGREEN}● {C.BOLD}{model_id:18}{C.RESET} {C.DIM}{description}{C.RESET}")
-                else:
-                    print(f"  {C.DIM}  {C.RESET}{C.CYAN}{model_id:18}{C.RESET} {C.DIM}{description}{C.RESET}")
+                sel = model_id == self.selected_model
+                bullet = f"{C.BGREEN}● " if sel else f"{C.DIM}  {C.RESET}"
+                name = (f"{C.BOLD}{model_id:{width}}{C.RESET}" if sel
+                        else f"{C.CYAN}{model_id:{width}}{C.RESET}")
+                print(f"  {bullet}{name} {C.DIM}{description}{C.RESET}")
+
+        print(f"\n  {C.DIM}`model <id>` switches model AND endpoint — an ALCF id moves "
+              f"you to that cluster{C.RESET}")
+        print(f"  {C.DIM}(bare names expand: gpt-oss-120b → openai/gpt-oss-120b){C.RESET}")
 
     def _is_valid_model(self, model_name: str) -> bool:
         for provider, models in self.available_models.items():
@@ -2823,6 +2866,19 @@ class APEXAClient:
                         print(f"  {C.GREEN}✓{C.RESET} Switched to: {C.BOLD}{C.CYAN}{model_name}{C.RESET}")
                     else:
                         print(f"  {C.RED}✗{C.RESET} Invalid model: {model_name}")
+                        try:
+                            from apexa_llm_endpoints import suggest_models
+                            _sugg = suggest_models(model_name, 3)
+                        except Exception:
+                            _sugg = []
+                        if not _sugg:
+                            # Fall back to the Argo catalogue on token overlap.
+                            _toks = set(re.findall(r"[a-z0-9]+", model_name.lower()))
+                            _sugg = [m for g in self.available_models.values() for m in g
+                                     if _toks & set(re.findall(r"[a-z0-9]+", m.lower()))][:3]
+                        if _sugg:
+                            print(f"  {C.DIM}Did you mean:{C.RESET} "
+                                  + f"{C.DIM},{C.RESET} ".join(f"{C.CYAN}{m}{C.RESET}" for m in _sugg))
                         print(f"  {C.DIM}Type {C.RESET}{C.CYAN}models{C.RESET}{C.DIM} to see available{C.RESET}")
                 elif user_input == 'ls' or (user_input.startswith('ls ') and not user_input[3:].lstrip().startswith('-')):
                     path = user_input[2:].strip() or "."
