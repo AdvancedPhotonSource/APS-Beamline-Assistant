@@ -8821,6 +8821,25 @@ async def fetch_cif_from_mp(
         JSON with downloaded CIF file paths and material metadata
     """
     try:
+        # Network-tier self-gate (defence-in-depth). The client surface already
+        # hides this tool below the `web` tier (apexa_network.disabled_tools),
+        # but a non-standard MCP client that skips surface/client gating could
+        # still call it — and Materials Project is public-internet-only, so on an
+        # air-gapped beamline host the request would HANG rather than fail. Refuse
+        # here too, with the same explicit "do not fabricate" message the client
+        # gate uses, so nothing blocks and the model can't invent a CIF.
+        try:
+            from apexa_network import tool_unavailable_reason
+            _reason = tool_unavailable_reason("fetch_cif_from_mp")
+        except Exception:
+            _reason = None  # fail-open: network module missing → behave as before
+        if _reason:
+            return format_result({
+                "tool": "fetch_cif_from_mp",
+                "status": "error",
+                "error": _reason,
+            })
+
         # Try importing mp_api
         try:
             from mp_api.client import MPRester

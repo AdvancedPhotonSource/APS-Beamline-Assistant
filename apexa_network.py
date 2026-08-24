@@ -53,7 +53,9 @@ _TRUTHY = ("1", "true", "yes", "on")
 # disabled on beamline hosts, so it must genuinely require the open web.
 WEB_ONLY_TOOLS: Dict[str, str] = {
     "fetch_cif_from_mp": "Materials Project API (next-gen.materialsproject.org)",
-    "get_bibtex":        "DOI / bibliographic metadata lookup",
+    # NOTE: get_bibtex is NOT here — despite the name it makes no network call. It
+    # reads local .bib sidecars from knowledge_base/papers/ (no DOI/CrossRef
+    # fallback), so it works at every tier and must not be disabled offline.
 }
 
 # Capabilities that degrade rather than disappear without the public internet.
@@ -102,6 +104,11 @@ def apply_offline_env() -> bool:
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
     # Belt and braces: some stacks consult only this one.
     os.environ.setdefault("HF_DATASETS_OFFLINE", "1")
+    # ChromaDB ships anonymised telemetry to PostHog. That is an outbound call to
+    # a third party from a beamline host — undesirable on its own terms, and one
+    # more thing that can block when there is no route out.
+    os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
+    os.environ.setdefault("CHROMA_TELEMETRY_ENABLED", "False")
     return True
 
 

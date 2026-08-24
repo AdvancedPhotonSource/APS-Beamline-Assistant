@@ -21,6 +21,15 @@ import hashlib
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+import os as _os
+
+# ChromaDB ships anonymised telemetry to PostHog — an outbound call to a third
+# party from a (possibly air-gapped) beamline host. Disable it at any tier, and
+# BEFORE importing chromadb (it reads these at import), matching the runtime
+# server path (get_knowledge_base in midas_comprehensive_server.py).
+_os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
+_os.environ.setdefault("CHROMA_TELEMETRY_ENABLED", "False")
+
 try:
     import chromadb
 except ImportError:
@@ -30,8 +39,6 @@ try:
     from sentence_transformers import SentenceTransformer
 except ImportError:
     SentenceTransformer = None
-
-import os as _os
 
 # Override via env: APEXA_EMBED_MODEL=nvidia/llama-embed-nemotron-8b uv run ...
 EMBED_MODEL = _os.environ.get("APEXA_EMBED_MODEL", "nomic-ai/nomic-embed-text-v1.5")

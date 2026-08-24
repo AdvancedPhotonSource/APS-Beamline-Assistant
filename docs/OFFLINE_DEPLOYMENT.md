@@ -11,6 +11,44 @@ once and caches it. This doc is only for the offline case.
 
 ---
 
+## 0. Dependencies & network tier — the base install is offline-clean
+
+`uv sync` **with no extras has no public-internet dependency.** Everything needed
+for data reduction and RAG installs and runs on an air-gapped host:
+
+- The RAG stack (`chromadb` + `sentence-transformers`) is a **base** dependency, so
+  retrieval works offline — it only needs the network for the *first* embedder
+  download, which you pre-stage (§1). It is not gated behind an extra.
+- **ChromaDB telemetry is disabled** before `chromadb` is imported, on every code
+  path (runtime `get_knowledge_base`, the `index_knowledge.py` re-index script, and
+  `apexa_network.apply_offline_env`). So no anonymised PostHog call is attempted —
+  one fewer thing that can block or leak from a beamline host.
+- The **only** online-only feature is Materials Project CIF fetch
+  (`fetch_cif_from_mp`). Its `mp-api` package (and the large pymatgen tree it drags
+  in) lives in a **separate optional extra**, deliberately kept out of the base:
+
+  ```bash
+  uv sync              # offline-clean: NO mp-api, NO public-internet dep
+  uv sync --extra mp   # ONLY on a web-capable host — adds Materials Project CIF fetch
+  ```
+
+  On an internal/offline host, omit `--extra mp`. The tool is hidden below the
+  `web` tier and, if a non-standard client reaches it anyway, returns a structured
+  "unavailable at this tier" error — it never hangs on the network.
+
+Set the tier so the runtime never *tries* the public internet (a network hang is
+not catchable — the tier prevents the attempt):
+
+```bash
+APEXA_NETWORK=internal   # DEFAULT — ANL-internal only; HuggingFace forced offline
+# APEXA_OFFLINE=1 remains supported as a legacy alias and caps the tier at internal.
+```
+
+`docs/setup_user.sh` probes reachability and writes `APEXA_NETWORK` into `.env` for
+you. See the CLAUDE.md "Network tiers" section for the full model.
+
+---
+
 ## 1. Knowledge base (FF/NF handbooks + notebooks)
 
 ### What ships in git ✅
@@ -105,8 +143,13 @@ ssh copland 'cd /gdata/dm/1ID/2026/pokharel_jul26 && ff_MIDAS.py -paramFile ff.t
   than hanging.
 - Runs through a remote **login shell** so the remote MIDAS env is sourced; the
   same command allowlist as local `run_command` applies.
-- NOTE: the 53 *typed* MIDAS tools still execute on the local host — this tool is
-  the agent driving the MIDAS CLI directly on the remote host.
+- NOTE: `run_remote_command` is the agent driving the MIDAS CLI **by hand** on the
+  remote host (generic, unguarded — the handbook lint gate does not run on it). A
+  few *typed* MIDAS tools are now themselves SSH-routed to the host that owns the
+  data (`calibrate_ring_thresholds`, `run_ff_hedm_full_workflow`) — prefer the typed
+  tool when one exists, so the lint gate + output verifier still apply. Most typed
+  tools still execute locally. See the CLAUDE.md "Remote execution / topology"
+  section and `remote_hosts.example.json`.
 
 ### Or make the data local — mount / stage
 
@@ -140,8 +183,8 @@ network per file.
 ## Quick checklist for an air-gapped node
 
 - [ ] `git pull` — brings source docs **and** the prebuilt `chroma_db/`
-- [ ] `uv sync`
+- [ ] `uv sync` — base install is offline-clean (do **not** add `--extra mp`; §0)
 - [ ] Pre-stage the Nomic model cache (§1) — the only large offline artifact
-- [ ] `APEXA_OFFLINE=1` in `.env`
-- [ ] Mount or stage any off-machine data to a local path (§2)
+- [ ] `APEXA_NETWORK=internal` (or `APEXA_OFFLINE=1`) in `.env`
+- [ ] Mount or stage any off-machine data to a local path — or SSH-route it (§2)
 - [ ] Smoke-test: one MIDAS knowledge question + one file listing on the data path

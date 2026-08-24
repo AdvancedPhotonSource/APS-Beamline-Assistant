@@ -364,7 +364,6 @@ dependencies = [
     { name = "matplotlib" },
     { name = "mcp" },
     { name = "midas-suite", extra = ["defect", "dfxm", "ff", "grain-odf", "nf", "pdf", "pf-odf", "pink", "ultrafast", "xaf"], marker = "sys_platform != 'win32'" },
-    { name = "mp-api" },
     { name = "numpy" },
     { name = "openai" },
     { name = "openpyxl" },
@@ -409,6 +408,9 @@ extra = [
     { name = "typer" },
     { name = "vtk" },
 ]
+mp = [
+    { name = "mp-api" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -430,7 +432,7 @@ requires-dist = [
     { name = "matplotlib", specifier = ">=3.10.6" },
     { name = "mcp", specifier = ">=1.14.1" },
     { name = "midas-suite", extras = ["ff", "nf", "pdf", "defect", "dfxm", "xaf", "ultrafast", "grain-odf", "pf-odf", "pink"], marker = "sys_platform != 'win32'", specifier = ">=0.7.3" },
-    { name = "mp-api", specifier = ">=0.41.0" },
+    { name = "mp-api", marker = "extra == 'mp'", specifier = ">=0.41.0" },
     { name = "numpy", specifier = ">=2.3.3" },
     { name = "openai", specifier = ">=1.40" },
     { name = "openai", marker = "extra == 'alcf'", specifier = ">=1.40" },
@@ -467,7 +469,7 @@ requires-dist = [
     { name = "xrayutilities", specifier = ">=1.7.12" },
     { name = "zarr", specifier = ">=2.18.0,<3" },
 ]
-provides-extras = ["alcf", "extra"]
+provides-extras = ["alcf", "mp", "extra"]
 
 [[package]]
 name = "bibtexparser"

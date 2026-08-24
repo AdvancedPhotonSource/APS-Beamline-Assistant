@@ -54,7 +54,11 @@ dependencies = [
     "python-pptx>=0.6.23",
     "python-docx>=1.1.0",
     "openpyxl>=3.1.0",
-    "mp-api>=0.41.0",
+    # mp-api (Materials Project) moved to the optional `mp` extra below — it is an
+    # inherently online service (no offline story), pulls the large pymatgen tree,
+    # and is only used by the web-only, tier-gated `fetch_cif_from_mp` tool (which
+    # already returns a structured "not installed" error when absent). Keeping it
+    # out of the base lets a no-public-internet host (e.g. copland) `uv sync` clean.
     "dspy>=3.2.0",
     "autogen-agentchat>=0.7.5",
     "autogen-ext>=0.7.5",
@@ -76,6 +80,12 @@ dependencies = [
 # ALCF Inference Service (multi-user, per-user Globus identity).
 # Only needed for APEXA_LLM_PRESET=alcf-*; see docs/ALCF_MULTIUSER.md
 alcf = ["globus-sdk>=3.40", "openai>=1.40"]
+
+# Materials Project CIF fetch (fetch_cif_from_mp). Online-only service; pulls the
+# large pymatgen dependency tree. Install with `uv sync --extra mp` on a host that
+# has public internet (APEXA_NETWORK=web). Omit on offline/internal-only hosts —
+# the tool degrades to a structured "mp-api not installed" error.
+mp = ["mp-api>=0.41.0"]
 
 # Extra scientific packages (not currently imported but useful for future)
 extra = [
