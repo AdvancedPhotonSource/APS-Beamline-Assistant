@@ -16,6 +16,10 @@ env/
 *.env
 !.env.template
 
+# Site-specific remote-host registry (may contain internal hostnames/users)
+remote_hosts.json
+!remote_hosts.example.json
+
 # User data
 conversation_history.json
 *.log

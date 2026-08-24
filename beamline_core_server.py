@@ -33,6 +33,8 @@ import numpy as np
 import logging
 from mcp.server.fastmcp import FastMCP
 
+from apexa_remote_exec import remote_run, ssh_hint
+
 # Suppress verbose MCP server logging
 logging.getLogger("mcp").setLevel(logging.WARNING)
 logging.getLogger("fastmcp").setLevel(logging.WARNING)
@@ -1009,43 +1011,29 @@ async def run_remote_command(command: str, host: str = "", remote_dir: str = Non
                 "allowed_commands": "Use check_environment to see allowed commands"
             })
 
-        # Build the remote script: optional cd, then the command, run in a login
-        # shell so the remote PATH/MIDAS env is sourced. shlex.quote keeps the
-        # whole thing a single safe argv element for the LOCAL ssh invocation.
-        inner = f"cd {shlex.quote(remote_dir)} && {command}" if remote_dir else command
-        remote_exec = f"bash -lc {shlex.quote(inner)}"
+        # Run over SSH via the shared transport (login shell `bash -lc`, BatchMode,
+        # ConnectTimeout, rc==255 = ssh-layer failure). Factored into
+        # apexa_remote_exec so the midas server's per-tool routing shares one
+        # implementation; behavior and response keys here are unchanged.
+        res = remote_run(target, command, remote_dir=remote_dir, timeout=timeout)
 
-        ssh_cmd = [
-            "ssh",
-            "-o", "BatchMode=yes",            # never prompt — fail instead of hang
-            "-o", "ConnectTimeout=10",
-            "-o", "StrictHostKeyChecking=accept-new",
-            target,
-            remote_exec,
-        ]
-
-        result = subprocess.run(
-            ssh_cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
+        if res.get("timed_out"):
+            return format_result({
+                "error": f"Remote command timed out after {timeout} seconds on '{target}'"
+            })
 
         # ssh exit 255 = ssh-layer failure (auth/connectivity), not the remote
         # command's own exit code. Classify it so the agent gets an actionable
         # message instead of a bare non-zero.
-        if result.returncode == 255:
+        if res.get("ssh_failed"):
             return format_result({
                 "tool": "run_remote_command",
                 "host": target,
                 "command": command,
                 "return_code": 255,
-                "stderr": result.stderr,
+                "stderr": res.get("stderr", ""),
                 "success": False,
-                "error": f"SSH to '{target}' failed (auth or connectivity). "
-                         f"This runs non-interactively — set up key-based SSH: "
-                         f"`ssh-copy-id {target}` and confirm `ssh {target} true` "
-                         f"works with no password prompt.",
+                "error": ssh_hint(target),
             })
 
         return format_result({
@@ -1053,18 +1041,16 @@ async def run_remote_command(command: str, host: str = "", remote_dir: str = Non
             "host": target,
             "command": command,
             "remote_dir": remote_dir,
-            "return_code": result.returncode,
-            "stdout": result.stdout,
-            "stderr": result.stderr,
-            "success": result.returncode == 0,
+            "return_code": res.get("return_code"),
+            "stdout": res.get("stdout", ""),
+            "stderr": res.get("stderr", ""),
+            "success": res.get("success", False),
         })
 
-    except subprocess.TimeoutExpired:
-        return format_result({
-            "error": f"Remote command timed out after {timeout} seconds on '{host or os.environ.get('APEXA_ANALYSIS_HOST', 'copland')}'"
-        })
     except Exception as e:
-        return format_result({"error": f"Error executing remote command: {str(e)}"})
+        return format_result({
+            "error": f"Error executing remote command: {str(e)}"
+        })
 
 @mcp.tool()
 async def check_environment() -> str:

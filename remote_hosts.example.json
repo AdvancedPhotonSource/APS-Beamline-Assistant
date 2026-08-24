@@ -1,0 +1,18 @@
+{
+  "_comment": "Copy to remote_hosts.json (gitignored) and edit for your beamlines. Maps a data-root prefix to the analysis host that owns it, so data-dependent MIDAS tools run where the data lives. Longest matching data_roots prefix wins. Omit this file entirely to use the single-host env fallback (APEXA_ANALYSIS_HOST + APEXA_REMOTE_DATA_ROOTS). Any tool also accepts an explicit host= that overrides inference.",
+  "default_host": "copland",
+  "hosts": {
+    "copland": {
+      "host": "copland",
+      "data_roots": ["/gdata/dm/1ID", "/gdata"],
+      "activate": "conda activate midas_env",
+      "midas_path": "/home/beams/S1IDUSER/opt/MIDAS"
+    },
+    "example-6idc-host": {
+      "host": "user@some-6idc-analysis-host",
+      "data_roots": ["/data/6idc"],
+      "activate": "source /opt/midas/.venv/bin/activate",
+      "midas_path": "/opt/MIDAS"
+    }
+  }
+}

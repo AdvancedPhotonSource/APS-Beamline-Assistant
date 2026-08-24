@@ -16,11 +16,16 @@ import numpy as np
 import xrayutilities as xu
 import re
 import subprocess
+import shlex
 import asyncio
 import logging
 import traceback
 from mcp.server.fastmcp import FastMCP
 from _idempotency import idempotent  # skip-if-done guard for heavy tools (Phase 0)
+from apexa_remote_exec import (
+    decide_exec_host, remote_run, remote_exists, remote_read_text,
+    remote_midas_command, resolve_host_for_path, ssh_hint,
+)
 
 try:
     from dotenv import load_dotenv
@@ -454,6 +459,276 @@ def validate_file(file_path: str, must_exist: bool = True) -> tuple[bool, str]:
         return False, f"File not found: {path}"
     return True, str(path)
 
+
+def validate_file_on(file_path: str, decision: dict = None,
+                     must_exist: bool = True) -> tuple[bool, str]:
+    """Validate an input path locally OR on the decided remote host.
+
+    `decision` is a `decide_exec_host(...)` result. When it says the run is remote,
+    existence is checked on that host over SSH (the local `.exists()` in
+    `validate_file` would wrongly fail for a `/gdata` path that only lives on the
+    analysis host — the original topology bug). When local (or no decision), this
+    is exactly `validate_file`.
+    """
+    if not file_path:
+        return True, ""
+    if decision and decision.get("is_remote"):
+        host = decision.get("host")
+        if not must_exist:
+            return True, file_path
+        if remote_exists(host, file_path):
+            return True, file_path
+        return False, f"File not found on remote host '{host}': {file_path}"
+    return validate_file(file_path, must_exist=must_exist)
+
+
+def _run_midas_maybe_remote(cmd, *, data_paths, cwd=None, timeout=3600,
+                            host: str = "") -> dict:
+    """Run a MIDAS command locally, or route it to the host that owns the data.
+
+    Returns a dict shaped like a CompletedProcess-lite:
+        {success, return_code, stdout, stderr, is_remote, host}
+    plus, on an unreachable remote host, an `error` string the model cannot
+    mistake for success.
+
+    The LOCAL branch is byte-for-byte the pre-existing `subprocess.run(...)` call
+    (same env=get_midas_env(), cwd, timeout) — this is a pure superset. The REMOTE
+    branch ships the same argv over SSH via a login shell, prefixed with the host
+    record's `activate` snippet so the remote MIDAS env (conda/venv) resolves.
+    """
+    d = decide_exec_host(*[p for p in data_paths if p], host=host)
+    if d.get("error"):
+        return {"success": False, "return_code": None, "is_remote": False,
+                "host": None, "stdout": "", "stderr": d.get("reason", ""),
+                "error": d.get("reason", "host resolution error; NOTHING was run.")}
+    if d.get("unreachable"):
+        return {"success": False, "return_code": None, "is_remote": True,
+                "host": d.get("host"), "stdout": "",
+                "stderr": "remote data host unreachable; NOTHING was run.",
+                "error": ssh_hint(d.get("host"))}
+    if not d.get("is_remote"):
+        p = subprocess.run(cmd, capture_output=True, text=True,
+                           timeout=timeout, cwd=cwd, env=get_midas_env())
+        return {"success": p.returncode == 0, "return_code": p.returncode,
+                "stdout": p.stdout, "stderr": p.stderr,
+                "is_remote": False, "host": None}
+    bare = " ".join(shlex.quote(str(c)) for c in cmd)
+    r = remote_run(d["host"], remote_midas_command(bare, d.get("record")),
+                   remote_dir=cwd, timeout=timeout)
+    out = {"success": r.get("success", False), "return_code": r.get("return_code"),
+           "stdout": r.get("stdout", ""), "stderr": r.get("stderr", ""),
+           "is_remote": True, "host": d["host"]}
+    if r.get("timed_out"):
+        out["error"] = f"remote command timed out on '{d['host']}'; state may be partial."
+    elif r.get("ssh_failed"):
+        out["error"] = ssh_hint(d["host"])
+    return out
+
+
+def _collect_ff_outputs_local(result_path, start_layer, end_layer, run_started):
+    """Local FF output collection (the original in-process path, unchanged logic).
+
+    Returns (layer_outputs, fresh_grains, stale_grains, any_fresh_output). Extracted
+    verbatim from run_ff_hedm_full_workflow so the remote path can slot in beside it
+    without re-indenting the block; the local branch stays byte-for-byte equivalent.
+    """
+    def _is_fresh(p) -> bool:
+        # 2 s tolerance for coarse-granularity filesystems; run_started was
+        # captured before the subprocess, so any file written during the run
+        # has mtime >= run_started.
+        try:
+            return p.stat().st_mtime >= run_started - 2
+        except Exception:
+            return False
+
+    layer_outputs = []
+    for layer in range(start_layer, end_layer + 1):
+        layer_dir = result_path / f"LayerNr_{layer}"
+        if not layer_dir.exists():
+            continue
+        info: dict = {"layer": layer, "layer_dir": str(layer_dir)}
+
+        # 1. Grains.csv — present when process_grains ran (c-omp backend)
+        for grains_name in ("Grains.csv", "GrainsReconstructed.csv",
+                            "Grains_consolidated.csv"):
+            gf = layer_dir / grains_name
+            if gf.exists():
+                try:
+                    lines = gf.read_text().splitlines()
+                    n = sum(1 for l in lines
+                            if l.strip() and not l.startswith("%"))
+                except Exception:
+                    n = 0
+                info["grains_file"] = str(gf)
+                info["n_grains"] = n
+                info["fresh"] = _is_fresh(gf)
+                break
+
+        # 2. IndexBest.bin — always written by the indexer regardless of backend.
+        #    15 float64 columns per seed; column 14 = nMatches (>0 = solution).
+        #    Use this as the grain count when Grains.csv is absent.
+        ib_path = layer_dir / "IndexBest.bin"
+        if ib_path.exists() and "n_grains" not in info:
+            try:
+                import numpy as _np
+                ib = _np.fromfile(ib_path, dtype=_np.float64)
+                if ib.size > 0 and ib.size % 15 == 0:
+                    ib = ib.reshape(-1, 15)
+                    solved = int((ib[:, 14] > 0).sum())
+                    info["n_grains"] = solved
+                    info["n_seeds"] = len(ib)
+                    info["best_nMatches"] = float(ib[:, 14].max())
+                    info["fresh"] = _is_fresh(ib_path)
+                    info["note"] = (
+                        "process_grains skipped (python refiner); "
+                        "n_grains = seeds with nMatches>0 from IndexBest.bin. "
+                        "Re-run with refine_backend='c-omp' to get Grains.csv."
+                    )
+            except Exception:
+                pass
+
+        # 3. OrientPosFit.bin — tells us refinement ran
+        if (layer_dir / "OrientPosFit.bin").exists():
+            info["refinement_complete"] = True
+        if (layer_dir / "Results" / "OrientPosFit.bin").exists():
+            info["refinement_complete"] = True
+
+        # 4. processgrains_diagnostics.h5 — written by process_grains; the
+        #    residual/strain plate + most auto-findings in the reconstruction
+        #    report need it (FF §9). report_ready when a FRESH Grains.csv
+        #    exists so the agent can chain generate_ff_reconstruction_report.
+        diag = layer_dir / "processgrains_diagnostics.h5"
+        if diag.exists():
+            info["diagnostics_h5"] = str(diag)
+        info["report_ready"] = "grains_file" in info and info.get("fresh", False)
+        if "n_grains" in info and not info.get("fresh", False):
+            info["stale"] = True
+            info["note"] = (
+                (info.get("note", "") + " ").strip()
+                + " STALE: this file predates the current run — it is from a "
+                  "PRIOR reconstruction, not this one."
+            ).strip()
+
+        layer_outputs.append(info)
+
+    # Fresh grains = only counts from files THIS run wrote. Stale on-disk
+    # counts are reported separately and never inflate total_grains.
+    fresh_grains = sum(l.get("n_grains", 0) for l in layer_outputs
+                       if l.get("fresh"))
+    stale_grains = sum(l.get("n_grains", 0) for l in layer_outputs
+                       if l.get("n_grains") and not l.get("fresh"))
+    any_fresh_output = any(l.get("fresh") for l in layer_outputs)
+    return layer_outputs, fresh_grains, stale_grains, any_fresh_output
+
+
+def _collect_ff_outputs_remote(run_host, result_str, start_layer, end_layer,
+                               run_started):
+    """Light, shell-only FF output verify on a remote host (one SSH round-trip per
+    layer). Mirrors the local collector's honest-status contract: a present-but-
+    empty Grains.csv is caught, and only files fresh by remote mtime count toward
+    total_grains.
+
+    Coverage gap vs the local path (deferred follow-up): the numpy IndexBest.bin
+    col-14>0 grain count and the full verify_ff_outputs .bin checks are NOT ported
+    to remote yet — a `run_note` flags this whenever is_remote. Returns
+    (layer_outputs, fresh_grains, stale_grains, any_fresh_output, remote_note).
+    """
+    layer_outputs = []
+    # One portable shell probe per layer. `stat -c` (GNU/copland) with a `stat -f`
+    # (BSD) fallback so the same script works if the analysis host is a Mac.
+    script_tmpl = (
+        'D={d}/LayerNr_{n}\n'
+        'if [ ! -d "$D" ]; then echo MISSING; exit 0; fi\n'
+        'G=""\n'
+        'for f in Grains.csv GrainsReconstructed.csv Grains_consolidated.csv; do\n'
+        '  if [ -f "$D/$f" ]; then G="$D/$f"; break; fi\n'
+        'done\n'
+        'if [ -n "$G" ]; then\n'
+        '  echo "GRAINS=$G"\n'
+        '  echo "NROWS=$(grep -v \'^%\' "$G" | grep -cve \'^[[:space:]]*$\')"\n'
+        '  echo "GMTIME=$(stat -c %Y "$G" 2>/dev/null || stat -f %m "$G")"\n'
+        'fi\n'
+        'IB="$D/IndexBest.bin"\n'
+        'if [ -f "$IB" ]; then\n'
+        '  echo "IB_BYTES=$(stat -c %s "$IB" 2>/dev/null || stat -f %z "$IB")"\n'
+        '  echo "IB_MTIME=$(stat -c %Y "$IB" 2>/dev/null || stat -f %m "$IB")"\n'
+        'fi\n'
+        'IA="$D/InputAll.csv"\n'
+        'if [ -f "$IA" ]; then echo "IA_BYTES=$(stat -c %s "$IA" 2>/dev/null || stat -f %z "$IA")"; fi\n'
+        'SP="$D/SpotsToIndex.csv"\n'
+        'if [ -f "$SP" ]; then echo "SP_LINES=$(wc -l < "$SP")"; fi\n'
+        'if [ -f "$D/OrientPosFit.bin" ] || [ -f "$D/Results/OrientPosFit.bin" ]; then echo REFINED=1; fi\n'
+        'if [ -f "$D/processgrains_diagnostics.h5" ]; then echo "DIAG=$D/processgrains_diagnostics.h5"; fi\n'
+    )
+
+    def _fresh(mtime):
+        # run_started==0 means the remote clock could not be read → we cannot tell
+        # fresh from stale; treat as fresh (report output) but the run_note warns.
+        if not run_started:
+            return True
+        try:
+            return float(mtime) >= run_started - 2
+        except Exception:
+            return False
+
+    for layer in range(start_layer, end_layer + 1):
+        r = remote_run(run_host, script_tmpl.format(d=shlex.quote(result_str), n=layer),
+                       timeout=120)
+        out = (r.get("stdout") or "")
+        if "MISSING" in out.splitlines() or not r.get("success"):
+            continue
+        kv = {}
+        for line in out.splitlines():
+            if "=" in line:
+                k, _, v = line.partition("=")
+                kv[k.strip()] = v.strip()
+        info = {"layer": layer, "layer_dir": f"{result_str}/LayerNr_{layer}"}
+        if kv.get("GRAINS"):
+            try:
+                n = int(kv.get("NROWS", "0"))
+            except Exception:
+                n = 0
+            info["grains_file"] = kv["GRAINS"]
+            info["n_grains"] = n
+            info["fresh"] = _fresh(kv.get("GMTIME"))
+        elif kv.get("IB_BYTES"):
+            # No Grains.csv (python backend / process_grains skipped). The col-14>0
+            # count needs numpy on the bytes — deferred for remote. Record presence
+            # + freshness so the honest-status contract still downgrades correctly.
+            info["indexbest_bytes"] = int(kv["IB_BYTES"])
+            info["fresh"] = _fresh(kv.get("IB_MTIME"))
+            info["note"] = ("IndexBest.bin present but the remote path does not yet "
+                            "count solved grains (numpy col-14 verifier deferred). "
+                            "Re-run with refine_backend='c-omp' for a remote Grains.csv.")
+        if kv.get("IA_BYTES"):
+            info["inputall_bytes"] = int(kv["IA_BYTES"])
+        if kv.get("SP_LINES"):
+            info["spots_to_index_lines"] = int(kv["SP_LINES"])
+        if kv.get("REFINED"):
+            info["refinement_complete"] = True
+        if kv.get("DIAG"):
+            info["diagnostics_h5"] = kv["DIAG"]
+        info["report_ready"] = "grains_file" in info and info.get("fresh", False)
+        if "n_grains" in info and not info.get("fresh", False):
+            info["stale"] = True
+            info["note"] = ((info.get("note", "") + " ").strip()
+                            + " STALE: predates this run (a prior reconstruction).").strip()
+        layer_outputs.append(info)
+
+    fresh_grains = sum(l.get("n_grains", 0) for l in layer_outputs if l.get("fresh"))
+    stale_grains = sum(l.get("n_grains", 0) for l in layer_outputs
+                       if l.get("n_grains") and not l.get("fresh"))
+    any_fresh_output = any(l.get("fresh") for l in layer_outputs)
+    remote_note = ("Outputs verified over SSH (shell-level: Grains.csv row count, "
+                   "InputAll/SpotsToIndex sizes, mtime freshness). The numpy "
+                   "IndexBest.bin col-14 grain count and binary verify_ff_outputs "
+                   "checks are not yet ported to the remote path.")
+    if not run_started:
+        remote_note += (" NOTE: remote clock could not be read, so fresh/stale could "
+                        "not be distinguished this run.")
+    return layer_outputs, fresh_grains, stale_grains, any_fresh_output, remote_note
+
+
 def run_midas_executable(executable: str, param_file: str, cwd: str = None,
                          timeout: int = 3600, env: dict = None) -> dict:
     """Run a MIDAS C executable and return results."""
@@ -699,6 +974,7 @@ async def run_ff_hedm_full_workflow(
     detectors_json: str = "",
     process_grains: bool = True,
     ignore_handbook_traps: bool = False,
+    host: str = "",
 ) -> str:
     """Run complete FF-HEDM grain reconstruction using midas-pipeline.
 
@@ -755,6 +1031,13 @@ async def run_ff_hedm_full_workflow(
                         after reviewing the reported `handbook_traps` and confirming
                         the values are intentional. Softer `warning`/`info` traps
                         never block regardless of this flag.
+        host: Force execution on this analysis host over SSH. Empty → infer from
+                        the remote-host registry / data-path locality: if the data
+                        (param_file/data_file) lives on a remote analysis host
+                        (e.g. /gdata on copland), the whole pipeline runs THERE — one
+                        lint-gated typed call instead of hand-driven run_remote_command
+                        shells. The handbook lint still runs first, on the remote param
+                        file. Result_folder must resolve to the same host as the data.
 
     Returns:
         JSON with status, layer-by-layer grain counts, output file paths
@@ -806,12 +1089,51 @@ async def run_ff_hedm_full_workflow(
                         ),
                     })
 
-        result_path = Path(result_folder).expanduser().absolute()
-        result_path.mkdir(parents=True, exist_ok=True)
-        _announce_output("run_ff_hedm_full_workflow", result_path,
-                         layers=f"{start_layer}-{end_layer}", device=device)
+        # ── Decide execution locality (local vs a remote analysis host) ──────
+        # Drive the decision off the must-exist INPUTS (param_file, data_file);
+        # result_folder is an output and may not exist yet, so probing it here
+        # would force a spurious SSH round-trip on every local run into a fresh
+        # directory. `host=` forces a host; else the registry / data path decides.
+        decision = decide_exec_host(param_file, data_file, host=host)
+        if decision.get("error"):
+            return format_result({"tool": "run_ff_hedm_full_workflow",
+                                  "status": "error", "error": decision.get("reason")})
+        is_remote = decision.get("is_remote", False)
+        run_host = decision.get("host")
 
-        valid, param_path = validate_file(param_file)
+        # MIDAS writes outputs next to the inputs, so result_folder MUST resolve to
+        # the same host as the data — a split would silently write to the wrong FS.
+        rf_host = resolve_host_for_path(result_folder)
+        if is_remote and rf_host and rf_host != run_host:
+            return format_result({"tool": "run_ff_hedm_full_workflow", "status": "error",
+                "error": (f"result_folder resolves to host '{rf_host}' but the data runs "
+                          f"on '{run_host}'. A single FF run cannot span hosts — "
+                          "co-locate result_folder with the data or pass host=.")})
+        if not is_remote and rf_host:
+            return format_result({"tool": "run_ff_hedm_full_workflow", "status": "error",
+                "error": (f"result_folder resolves to remote host '{rf_host}' but the "
+                          "input data is local. Co-locate the inputs and output on one "
+                          "host, or pass host= to force a remote run.")})
+
+        if is_remote:
+            # Remote: keep paths as-given (they are remote paths) and create the
+            # output dir on the remote host — do not touch the local filesystem.
+            result_str = result_folder
+            mk = remote_run(run_host, f"mkdir -p {shlex.quote(result_folder)}", timeout=60)
+            if mk.get("ssh_failed"):
+                return format_result({"tool": "run_ff_hedm_full_workflow",
+                                      "status": "error", "error": ssh_hint(run_host)})
+            if not mk.get("success"):
+                return format_result({"tool": "run_ff_hedm_full_workflow", "status": "error",
+                    "error": f"could not create result_folder on '{run_host}': {mk.get('stderr','')}"})
+        else:
+            result_path = Path(result_folder).expanduser().absolute()
+            result_path.mkdir(parents=True, exist_ok=True)
+            result_str = str(result_path)
+            _announce_output("run_ff_hedm_full_workflow", result_path,
+                             layers=f"{start_layer}-{end_layer}", device=device)
+
+        valid, param_path = validate_file_on(param_file, decision)
         if not valid:
             return format_result({"tool": "run_ff_hedm_full_workflow",
                                   "status": "error", "error": param_path})
@@ -823,10 +1145,28 @@ async def run_ff_hedm_full_workflow(
         # caller explicitly overrides. `warning`/`info` traps are surfaced but
         # never block. Fail-open on lint exceptions — never break a run because
         # the linter itself errored.
+        # When the param file lives on the remote host, pull it to a tempfile so the
+        # linter (a local file reader) still runs — this is what closes the bypass
+        # hole where hand-driven remote runs skipped the gate entirely.
+        _lint_target = param_path
+        _tmp_param = None
+        if is_remote:
+            ok_r, txt = remote_read_text(run_host, param_path)
+            if ok_r:
+                import tempfile as _tf
+                fd, _tmp_param = _tf.mkstemp(suffix=".txt", prefix="ffparam_remote_")
+                with os.fdopen(fd, "w") as _fh:
+                    _fh.write(txt)
+                _lint_target = _tmp_param
         try:
-            ff_traps = _lint_handbook_traps(param_path, "ff")
+            ff_traps = _lint_handbook_traps(_lint_target, "ff")
         except Exception:
             ff_traps = []
+        if _tmp_param:
+            try:
+                os.unlink(_tmp_param)
+            except Exception:
+                pass
         _blockers = [t for t in ff_traps if t.get("severity") == "error"]
         if _blockers and not ignore_handbook_traps:
             for _t in ff_traps:
@@ -846,22 +1186,27 @@ async def run_ff_hedm_full_workflow(
                 "handbook_traps": ff_traps,
             })
 
-        _pipeline_bin = _shutil.which("midas-pipeline")
-        if not _pipeline_bin:
-            return format_result({
-                "tool": "run_ff_hedm_full_workflow",
-                "status": "error",
-                "error": (
-                    "midas-pipeline not found. Install with: "
-                    "pip install 'midas-suite[ff]'  (or uv add 'midas-suite[ff]')"
-                ),
-            })
+        if is_remote:
+            # Resolve on the remote host's PATH (via its activate snippet) — the
+            # local .venv's midas-pipeline is the wrong binary for a remote run.
+            _pipeline_bin = "midas-pipeline"
+        else:
+            _pipeline_bin = _shutil.which("midas-pipeline")
+            if not _pipeline_bin:
+                return format_result({
+                    "tool": "run_ff_hedm_full_workflow",
+                    "status": "error",
+                    "error": (
+                        "midas-pipeline not found. Install with: "
+                        "pip install 'midas-suite[ff]'  (or uv add 'midas-suite[ff]')"
+                    ),
+                })
 
         cmd = [
             _pipeline_bin, "run",
             "--scan-mode", "ff",
             "--params", param_path,
-            "--result", str(result_path),
+            "--result", result_str,
             "--n-cpus", str(n_cpus),
             "--device", device,
             "--indexer-backend", indexer_backend,
@@ -880,7 +1225,7 @@ async def run_ff_hedm_full_workflow(
             cmd += ["--shard-gpus", shard_gpus]
 
         if data_file:
-            valid_d, data_path = validate_file(data_file)
+            valid_d, data_path = validate_file_on(data_file, decision)
             if not valid_d:
                 return format_result({"tool": "run_ff_hedm_full_workflow",
                                       "status": "error", "error": data_path})
@@ -904,12 +1249,12 @@ async def run_ff_hedm_full_workflow(
                 cmd += ["--raw-dir", str(Path(data_path).parent)]
 
         if detectors_json:
-            valid_det, det_path = validate_file(detectors_json)
+            valid_det, det_path = validate_file_on(detectors_json, decision)
             if valid_det:
                 cmd += ["--detectors", det_path]
 
         if grains_seed_file:
-            valid_s, seed_path = validate_file(grains_seed_file)
+            valid_s, seed_path = validate_file_on(grains_seed_file, decision)
             if valid_s:
                 cmd += ["--ff-grains-file", seed_path]
 
@@ -959,114 +1304,55 @@ async def run_ff_hedm_full_workflow(
         # Stamp the run start so we can tell fresh outputs (written by THIS run)
         # from stale Grains.csv/IndexBest.bin left by a PRIOR run — otherwise a
         # skip-all/no-op run (which still exits 0) reports a prior run's grain
-        # count as if it were this reconstruction's result.
+        # count as if it were this reconstruction's result. For a remote run the
+        # freshness comparison must use the REMOTE clock (mtimes come from there),
+        # so stamp it with `date +%s` on the analysis host; 0.0 means the clock
+        # could not be read (verifier then treats output as fresh + warns).
         import time as _time
-        run_started = _time.time()
+        if is_remote:
+            _rs = remote_run(run_host, "date +%s", timeout=30)
+            try:
+                run_started = float((_rs.get("stdout") or "0").strip())
+            except Exception:
+                run_started = 0.0
+        else:
+            run_started = _time.time()
 
-        proc = subprocess.run(
-            cmd,
-            capture_output=True, text=True, timeout=14400,
-            env=get_midas_env(),
-        )
+        proc = _run_midas_maybe_remote(cmd, data_paths=[param_file, data_file],
+                                       cwd=None, timeout=14400, host=host)
+        if proc.get("error") and proc.get("return_code") is None:
+            # SSH-layer failure / unreachable host / host-resolution error — nothing
+            # ran. Surface the explicit error so the model cannot claim success.
+            return format_result({
+                "tool": "run_ff_hedm_full_workflow", "status": "error",
+                "is_remote": proc.get("is_remote", is_remote),
+                "host": proc.get("host", run_host),
+                "command": cmd_str, "error": proc["error"],
+                "stderr": proc.get("stderr", ""), "handbook_traps": ff_traps,
+            })
 
         # ── Collect outputs ──────────────────────────────────────────────────
         # Works for both c-omp backend (Grains.csv produced by process_grains)
         # and python backend (Grains.csv skipped; grain count from IndexBest.bin).
         # Each output file is tagged fresh/stale by mtime vs run_started: only
         # files THIS run wrote count toward total_grains, so a prior run's
-        # Grains.csv can never be reported as this reconstruction's result.
-        def _is_fresh(p: Path) -> bool:
-            # 2 s tolerance for coarse-granularity filesystems; run_started was
-            # captured before the subprocess, so any file written during the run
-            # has mtime >= run_started.
-            try:
-                return p.stat().st_mtime >= run_started - 2
-            except Exception:
-                return False
-
-        layer_outputs = []
-        for layer in range(start_layer, end_layer + 1):
-            layer_dir = result_path / f"LayerNr_{layer}"
-            if not layer_dir.exists():
-                continue
-            info: dict = {"layer": layer, "layer_dir": str(layer_dir)}
-
-            # 1. Grains.csv — present when process_grains ran (c-omp backend)
-            for grains_name in ("Grains.csv", "GrainsReconstructed.csv",
-                                "Grains_consolidated.csv"):
-                gf = layer_dir / grains_name
-                if gf.exists():
-                    try:
-                        lines = gf.read_text().splitlines()
-                        n = sum(1 for l in lines
-                                if l.strip() and not l.startswith("%"))
-                    except Exception:
-                        n = 0
-                    info["grains_file"] = str(gf)
-                    info["n_grains"] = n
-                    info["fresh"] = _is_fresh(gf)
-                    break
-
-            # 2. IndexBest.bin — always written by the indexer regardless of backend.
-            #    15 float64 columns per seed; column 14 = nMatches (>0 = solution).
-            #    Use this as the grain count when Grains.csv is absent.
-            ib_path = layer_dir / "IndexBest.bin"
-            if ib_path.exists() and "n_grains" not in info:
-                try:
-                    import numpy as _np
-                    ib = _np.fromfile(ib_path, dtype=_np.float64)
-                    if ib.size > 0 and ib.size % 15 == 0:
-                        ib = ib.reshape(-1, 15)
-                        solved = int((ib[:, 14] > 0).sum())
-                        info["n_grains"] = solved
-                        info["n_seeds"] = len(ib)
-                        info["best_nMatches"] = float(ib[:, 14].max())
-                        info["fresh"] = _is_fresh(ib_path)
-                        info["note"] = (
-                            "process_grains skipped (python refiner); "
-                            "n_grains = seeds with nMatches>0 from IndexBest.bin. "
-                            "Re-run with refine_backend='c-omp' to get Grains.csv."
-                        )
-                except Exception:
-                    pass
-
-            # 3. OrientPosFit.bin — tells us refinement ran
-            if (layer_dir / "OrientPosFit.bin").exists():
-                info["refinement_complete"] = True
-            if (layer_dir / "Results" / "OrientPosFit.bin").exists():
-                info["refinement_complete"] = True
-
-            # 4. processgrains_diagnostics.h5 — written by process_grains; the
-            #    residual/strain plate + most auto-findings in the reconstruction
-            #    report need it (FF §9). report_ready when a FRESH Grains.csv
-            #    exists so the agent can chain generate_ff_reconstruction_report.
-            diag = layer_dir / "processgrains_diagnostics.h5"
-            if diag.exists():
-                info["diagnostics_h5"] = str(diag)
-            info["report_ready"] = "grains_file" in info and info.get("fresh", False)
-            if "n_grains" in info and not info.get("fresh", False):
-                info["stale"] = True
-                info["note"] = (
-                    (info.get("note", "") + " ").strip()
-                    + " STALE: this file predates the current run — it is from a "
-                      "PRIOR reconstruction, not this one."
-                ).strip()
-
-            layer_outputs.append(info)
-
-        # Fresh grains = only counts from files THIS run wrote. Stale on-disk
-        # counts are reported separately and never inflate total_grains.
-        fresh_grains = sum(l.get("n_grains", 0) for l in layer_outputs
-                           if l.get("fresh"))
-        stale_grains = sum(l.get("n_grains", 0) for l in layer_outputs
-                           if l.get("n_grains") and not l.get("fresh"))
-        any_fresh_output = any(l.get("fresh") for l in layer_outputs)
+        # Grains.csv can never be reported as this reconstruction's result. Remote
+        # runs use a shell-level verifier (numpy .bin checks deferred — see note).
+        remote_note = ""
+        if is_remote:
+            (layer_outputs, fresh_grains, stale_grains, any_fresh_output,
+             remote_note) = _collect_ff_outputs_remote(
+                run_host, result_str, start_layer, end_layer, run_started)
+        else:
+            (layer_outputs, fresh_grains, stale_grains,
+             any_fresh_output) = _collect_ff_outputs_local(
+                result_path, start_layer, end_layer, run_started)
 
         # Honest status: returncode 0 alone is NOT success. midas-pipeline exits 0
         # for a skip-all/no-op run; a real reconstruction must have produced fresh
         # output this run. Downgrade to "warning" (never claim success) when the
         # command succeeded but wrote nothing new.
-        ok = proc.returncode == 0
+        ok = proc.get("return_code") == 0
         if not ok:
             status = "error"
             run_note = ""
@@ -1087,15 +1373,22 @@ async def run_ff_hedm_full_workflow(
                 "Grains.csv/IndexBest.bin present is STALE (from a prior run) and "
                 "is NOT counted in total_grains. This is not a fresh reconstruction.")
 
+        # Fold the remote-verifier caveat into run_note so the honest-status
+        # contract also carries the (shell-only, .bin-deferred) coverage gap.
+        if remote_note:
+            run_note = (run_note + " " + remote_note).strip() if run_note else remote_note
+
         return format_result({
             "tool": "run_ff_hedm_full_workflow",
             "status": status,
             "engine": "midas-pipeline",
             "command": cmd_str,
-            "return_code": proc.returncode,
-            "stdout": proc.stdout[-3000:] if proc.stdout else "",
-            "stderr": proc.stderr[-2000:] if proc.stderr else "",
-            "result_folder": str(result_path),
+            "is_remote": is_remote,
+            "host": run_host,
+            "return_code": proc.get("return_code"),
+            "stdout": (proc.get("stdout") or "")[-3000:],
+            "stderr": (proc.get("stderr") or "")[-2000:],
+            "result_folder": result_str,
             "layers": f"{start_layer}-{end_layer}",
             "refine_backend": refine_backend,
             "process_grains": process_grains,
@@ -1123,6 +1416,7 @@ async def calibrate_ring_thresholds(
     zarr_file: str,
     result_folder: str = "",
     n_frames: int = 40,
+    host: str = "",
 ) -> str:
     """Recommend per-ring peak-search thresholds from the data (FF Handbook §6b).
 
@@ -1142,6 +1436,9 @@ async def calibrate_ring_thresholds(
                    <run>/LayerNr_1/<name>.MIDAS.zip.
         result_folder: Where intermediates go (default: the zarr's parent).
         n_frames: Number of leading frames to analyze (default 40).
+        host: Force execution on this analysis host (SSH). Empty → infer from the
+              remote-host registry / data-path locality (runs locally if the data
+              is local).
 
     Returns:
         JSON with parsed `ring_thresholds` (list of {ring, value, note}), the
@@ -1150,58 +1447,74 @@ async def calibrate_ring_thresholds(
     try:
         import shutil as _shutil
 
-        valid, zpath = validate_file(zarr_file)
+        # Decide locality FIRST — the data may live only on a remote analysis host
+        # (/gdata on copland), where a local validate_file().exists() would wrongly
+        # fail. `host=` forces a host; otherwise the registry / data path decides.
+        decision = decide_exec_host(zarr_file, host=host)
+        if decision.get("error"):
+            return format_result({"tool": "calibrate_ring_thresholds",
+                                  "status": "error", "error": decision.get("reason")})
+
+        valid, zpath = validate_file_on(zarr_file, decision)
         if not valid:
             return format_result({"tool": "calibrate_ring_thresholds",
                                   "status": "error", "error": zpath})
 
-        rf = result_folder or str(Path(zpath).expanduser().absolute().parent)
-
-        # midas-ring-thresh ships in the pip midas-suite (midas_peakfit), which is
-        # a dependency of APEXA itself → it lives in the SAME interpreter APEXA
-        # runs under (sys.executable, the uv .venv), NOT the conda midas_env that
-        # find_midas_python() returns. That conda env carries only the C++ deps
-        # (zarr/diplib/numba/h5py/skimage) and has no midas_peakfit → the old
-        # find_midas_python() fallback raised "ModuleNotFoundError: midas_peakfit"
-        # on the beamline. Prefer the console script that sits next to THIS
-        # interpreter (guaranteed correct), then any PATH script, then a direct
-        # sys.executable -c invocation. Same rule as midas_auto_calibrate (v2) and
-        # _find_midas_params_cli.
-        venv_rt = Path(sys.executable).parent / "midas-ring-thresh"
-        path_rt = _shutil.which("midas-ring-thresh")
-        if venv_rt.exists():
-            cmd = [str(venv_rt), zpath, "--result-folder", rf, "--n-frames", str(n_frames)]
-        elif path_rt:
-            cmd = [path_rt, zpath, "--result-folder", rf, "--n-frames", str(n_frames)]
+        if decision.get("is_remote"):
+            # Remote: the zarr path is a remote path; the console script resolves on
+            # the remote host's PATH via its activate snippet (bash -lc). Don't touch
+            # the local interpreter's sys.executable-relative resolution.
+            rf = result_folder or str(Path(zpath).parent)
+            cmd = ["midas-ring-thresh", zpath, "--result-folder", rf,
+                   "--n-frames", str(n_frames)]
         else:
-            # Fallback: invoke the module entry point via THIS interpreter (.venv),
-            # which is guaranteed to have midas_peakfit installed.
-            cmd = [sys.executable, "-c",
-                   "import sys; from midas_peakfit.ring_thresh import main; "
-                   "sys.exit(main())",
-                   zpath, "--result-folder", rf, "--n-frames", str(n_frames)]
+            rf = result_folder or str(Path(zpath).expanduser().absolute().parent)
+
+            # midas-ring-thresh ships in the pip midas-suite (midas_peakfit), which is
+            # a dependency of APEXA itself → it lives in the SAME interpreter APEXA
+            # runs under (sys.executable, the uv .venv), NOT the conda midas_env that
+            # find_midas_python() returns. That conda env carries only the C++ deps
+            # (zarr/diplib/numba/h5py/skimage) and has no midas_peakfit → the old
+            # find_midas_python() fallback raised "ModuleNotFoundError: midas_peakfit"
+            # on the beamline. Prefer the console script that sits next to THIS
+            # interpreter (guaranteed correct), then any PATH script, then a direct
+            # sys.executable -c invocation. Same rule as midas_auto_calibrate (v2) and
+            # _find_midas_params_cli.
+            venv_rt = Path(sys.executable).parent / "midas-ring-thresh"
+            path_rt = _shutil.which("midas-ring-thresh")
+            if venv_rt.exists():
+                cmd = [str(venv_rt), zpath, "--result-folder", rf, "--n-frames", str(n_frames)]
+            elif path_rt:
+                cmd = [path_rt, zpath, "--result-folder", rf, "--n-frames", str(n_frames)]
+            else:
+                # Fallback: invoke the module entry point via THIS interpreter (.venv),
+                # which is guaranteed to have midas_peakfit installed.
+                cmd = [sys.executable, "-c",
+                       "import sys; from midas_peakfit.ring_thresh import main; "
+                       "sys.exit(main())",
+                       zpath, "--result-folder", rf, "--n-frames", str(n_frames)]
 
         print(f"[RING-THRESH] {' '.join(cmd)}", file=sys.stderr)
-        proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=1800,
-            env=get_midas_env(),
-        )
+        proc = _run_midas_maybe_remote(cmd, data_paths=[zarr_file], cwd=None,
+                                       timeout=1800, host=host)
 
-        if proc.returncode != 0:
+        if not proc.get("success"):
             return format_result({
                 "tool": "calibrate_ring_thresholds",
                 "status": "error",
-                "error": "midas-ring-thresh failed (see stderr).",
-                "return_code": proc.returncode,
+                "error": proc.get("error") or "midas-ring-thresh failed (see stderr).",
+                "return_code": proc.get("return_code"),
+                "is_remote": proc.get("is_remote", False),
+                "host": proc.get("host"),
                 "command": " ".join(cmd),
-                "stdout": proc.stdout[-2000:] if proc.stdout else "",
-                "stderr": proc.stderr[-3000:] if proc.stderr else "",
+                "stdout": (proc.get("stdout") or "")[-2000:],
+                "stderr": (proc.get("stderr") or "")[-3000:],
             })
 
         # Parse paste-ready "RingThresh <ring> <value>  [# note]" lines.
         ring_thresholds = []
         paste_lines = []
-        for line in (proc.stdout or "").splitlines():
+        for line in (proc.get("stdout") or "").splitlines():
             s = line.strip()
             if not s.startswith("RingThresh"):
                 continue
@@ -1224,10 +1537,12 @@ async def calibrate_ring_thresholds(
             "status": "success",
             "zarr_file": zpath,
             "n_frames": n_frames,
+            "is_remote": proc.get("is_remote", False),
+            "host": proc.get("host"),
             "ring_thresholds": ring_thresholds,
             "paste_block": "\n".join(paste_lines),
             "command": " ".join(cmd),
-            "stdout": proc.stdout[-6000:] if proc.stdout else "",
+            "stdout": (proc.get("stdout") or "")[-6000:],
             "note": (
                 "Set these RingThresh values in the parameter file before the FF "
                 "run. If every ring says NO SAFE VALUE, check the dark (§3d)."
@@ -4689,6 +5004,7 @@ async def midas_auto_calibrate(
     wavelength_angstrom: float = 0.0,
     calibration_engine: str = "v1",   # v2 opt-in: fails beam-center seeding on off-center detectors (pending MIDAS dev fix)
     seed_from_params: str = "",        # trusted neighbour refined_MIDAS_params*.txt → seed BC/Lsd (robust fallback for low-SNR frames)
+    host: str = "",
 ) -> str:
     """🔧 PRIMARY TOOL FOR FF-HEDM DETECTOR CALIBRATION (MIDAS Official)
 
@@ -4806,6 +5122,39 @@ async def midas_auto_calibrate(
         print(f"   Image: {image_file}", file=sys.stderr)
         print(f"   Params: {parameters_file}", file=sys.stderr)
         print(f"{'='*70}\n", file=sys.stderr)
+
+        # ── Remote-locality guard (fail-closed) ─────────────────────────────
+        # Calibration is the ONE MIDAS tool not yet routed over SSH: its driver is
+        # deeply local-FS-coupled (in-process native engine, local image-header
+        # probe for detector shape, symlink-based calibrant auto-detection,
+        # cwd-relative outputs, glob read-back). Silently running it local-blind on
+        # a /gdata image would either error confusingly or, worse, calibrate the
+        # wrong thing. So when the data resolves to a remote analysis host, REFUSE
+        # with an actionable message instead of guessing — same fail-closed
+        # principle as the deletion gate. (Full remote routing is the tracked
+        # follow-up; ring-thresh and run_ff_hedm_full_workflow ARE remote-capable.)
+        _cal_decision = decide_exec_host(image_file, parameters_file, dark_file,
+                                         host=host)
+        if _cal_decision.get("error"):
+            return format_result({"tool": "midas_auto_calibrate", "status": "error",
+                                  "error": _cal_decision.get("reason")})
+        if _cal_decision.get("is_remote"):
+            _ch = _cal_decision.get("host")
+            return format_result({
+                "tool": "midas_auto_calibrate", "status": "error",
+                "is_remote": True, "host": _ch,
+                "error": (
+                    f"The calibrant data resolves to remote host '{_ch}', but "
+                    "midas_auto_calibrate does not yet run over SSH (remote routing "
+                    "is the tracked follow-up — its driver is local-FS-coupled). "
+                    "NOTHING was run — no local-blind calibration was attempted. "
+                    "Options: (1) run the calibration on the analysis host and point "
+                    "APEXA at the resulting refined_MIDAS_params*.txt, or "
+                    "(2) stage the calibrant image locally and re-run. Note: "
+                    "calibrate_ring_thresholds and run_ff_hedm_full_workflow ARE "
+                    "remote-capable and route to the data host automatically."
+                ),
+            })
 
         # ── Trusted-seed fallback ──────────────────────────────────────────
         # Robust path for low-SNR frames (e.g. CeO2 att5): seed BC + Lsd from a
@@ -6324,6 +6673,23 @@ def get_knowledge_base():
     if _knowledge_base is None:
         try:
             offline = _apply_offline_hf_env()  # must run before SentenceTransformer import
+            # No third-party telemetry from a beamline host, at any tier, and no
+            # model-loading INFO spam in the operator's terminal. Both must be set
+            # BEFORE the imports below.
+            os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
+            os.environ.setdefault("CHROMA_TELEMETRY_ENABLED", "False")
+            # HuggingFace tokenizers spawns worker threads on first use. Every
+            # MIDAS tool then fork()s via subprocess.run, and forking a process
+            # that already has tokenizer threads risks a DEADLOCK — the library
+            # warns and silently disables parallelism when it detects this. In
+            # APEXA that ordering is guaranteed: a RAG query warms the embedder,
+            # then a calibration/integration forks. Set it explicitly BEFORE the
+            # tokenizer is ever created so behaviour is deterministic rather than
+            # rescued after the fact.
+            os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+            for _noisy in ("sentence_transformers", "chromadb", "chromadb.telemetry",
+                           "transformers", "posthog", "httpx"):
+                logging.getLogger(_noisy).setLevel(logging.WARNING)
             import chromadb
             from sentence_transformers import SentenceTransformer
             from pathlib import Path
