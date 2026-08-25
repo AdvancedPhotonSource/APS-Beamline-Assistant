@@ -44,17 +44,48 @@ except ImportError:
 
 # ─── Token counting ────────────────────────────────────────────────────────
 
+def _tiktoken_load_allowed() -> bool:
+    """Whether we may call ``tiktoken.get_encoding``.
+
+    On a cache miss that call DOWNLOADS the BPE vocab from a PUBLIC URL
+    (``openaipublic.blob.core.windows.net``). On a host without the public
+    internet that download BLOCKS — and a network hang is not an exception, so
+    the ``try/except`` around ``get_encoding`` never fires and the assistant
+    wedges before its first LLM call (``count_message_tokens`` runs ahead of the
+    POST). This is the same failure ``apexa_network`` exists to prevent, here for
+    tiktoken instead of HuggingFace.
+
+    So only attempt the load when the web is reachable, unless the operator
+    opts in with ``APEXA_TIKTOKEN_OK=1`` (correct once the tiktoken cache — or a
+    ``TIKTOKEN_CACHE_DIR`` — is genuinely staged). Fail-open when the tier can't
+    be determined, so nothing changes on a normal web host.
+    """
+    raw = (os.environ.get("APEXA_TIKTOKEN_OK") or "").strip().lower()
+    if raw in ("1", "true", "yes", "on"):
+        return True
+    if raw in ("0", "false", "no", "off"):
+        return False
+    try:
+        from apexa_network import has_web
+        return has_web()
+    except Exception:
+        return True
+
+
 def _encoding_for(_model: str):
     if tiktoken is None:
         return None
-    enc = _ENC_CACHE.get("default")
-    if enc is None:
-        try:
-            enc = tiktoken.get_encoding("cl100k_base")
-        except Exception:
-            enc = None
+    # Cache the decision (including a None result) so we neither re-attempt a
+    # blocking download nor re-import apexa_network on every call.
+    if "default" not in _ENC_CACHE:
+        enc = None
+        if _tiktoken_load_allowed():
+            try:
+                enc = tiktoken.get_encoding("cl100k_base")
+            except Exception:
+                enc = None
         _ENC_CACHE["default"] = enc
-    return enc
+    return _ENC_CACHE.get("default")
 
 
 def count_tokens(text: str, model: str = "") -> int:

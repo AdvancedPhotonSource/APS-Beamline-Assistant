@@ -36,6 +36,14 @@ for data reduction and RAG installs and runs on an air-gapped host:
   `web` tier and, if a non-standard client reaches it anyway, returns a structured
   "unavailable at this tier" error — it never hangs on the network.
 
+- **tiktoken is tier-gated too.** `tiktoken.get_encoding` downloads its BPE vocab
+  from a public URL on first use; on an air-gapped host that download BLOCKS (a
+  hang, not an exception — it wedged APEXA before its first LLM call). Below the
+  `web` tier APEXA now skips it and estimates token counts as `len//4`
+  (instrumentation-only, never load-bearing). If you have staged the tiktoken
+  cache (or set `TIKTOKEN_CACHE_DIR`), set `APEXA_TIKTOKEN_OK=1` to re-enable exact
+  counts.
+
 Set the tier so the runtime never *tries* the public internet (a network hang is
 not catchable — the tier prevents the attempt):
 
