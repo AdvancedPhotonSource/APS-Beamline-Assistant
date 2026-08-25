@@ -196,3 +196,49 @@ network per file.
 - [ ] `APEXA_NETWORK=internal` (or `APEXA_OFFLINE=1`) in `.env`
 - [ ] Mount or stage any off-machine data to a local path — or SSH-route it (§2)
 - [ ] Smoke-test: one MIDAS knowledge question + one file listing on the data path
+
+---
+
+## 3. Troubleshooting — APEXA hangs on an air-gapped host
+
+**The recurring bug class.** A Python dependency that *lazily downloads an artifact
+from the public internet on first use* will **hang** (not error) on a host with no
+route to the web. A blocking socket read is not a Python exception, so the
+`try/except` that was supposed to make it fail-open never fires — the process just
+wedges. Startup or the first query never returns, and `Ctrl-C` often can't break it
+(the interpreter is stuck in a native C call, so `KeyboardInterrupt` is undeliverable
+— you need `Ctrl-Z`). Instances found and neutralised so far, all now gated behind the
+`web` tier: the **HuggingFace** RAG embedder, **mp-api** (Materials Project), and
+**tiktoken** (`get_encoding` → BPE vocab from `openaipublic.blob…`, which ran *before*
+the first Argo call and wedged every query — see §0).
+
+**First, rule out the LLM gateway** (it's almost never the cause on an ANL-internal
+host). copland reaches ANL-internal but not the public internet, so a `curl` to Argo
+returns fast even when APEXA hangs:
+
+```bash
+# reachability (expect an HTTP 302 in tens of ms):
+curl -s -o /dev/null -w 'HTTP %{http_code} in %{time_total}s\n' \
+  https://apps.inside.anl.gov/argoapi/api/v1/resource/chat/
+# a POST returns an auth JSON in ~3s — proves the endpoint is live, not blocked.
+```
+
+If Argo is reachable but APEXA still hangs, the hang is a lazy download somewhere else.
+
+**Pin the blocking call** (pick whichever tool is present — no install needed for the
+first two):
+
+```bash
+pgrep -af argo_mcp_client            # find the wedged PID
+cat /proc/<pid>/wchan; echo          # a socket wait (e.g. inet_csk_accept / sk_wait) ⇒ blocked on network
+py-spy dump --pid <pid>              # if py-spy is available: shows the exact frame (e.g. tiktoken.get_encoding)
+# fallback with no py-spy:
+gdb -p <pid> -batch -ex 'py-bt'      # requires the python-gdb helper
+```
+
+The frame that `py-spy`/`py-bt` names is the offender. **Fix it the same way** the
+three known cases were fixed: gate the load on `apexa_network.has_web()` (fail-open,
+with an `APEXA_<THING>_OK=1` override for a staged cache), and provide a cheap offline
+fallback — never let a beamline code path *depend* on a first-use download. Also
+double-check `env | grep -i proxy` is empty: a stale `HTTP(S)_PROXY` pointing at an
+unreachable proxy produces the identical symptom.

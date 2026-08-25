@@ -2063,6 +2063,14 @@ class APEXAClient:
         except Exception as e:
             print(f"  {C.DIM}(autosave skipped: {e}){C.RESET}", file=sys.stderr)
 
+    def _print_response(self, response: str) -> None:
+        """Print an APEXA reply behind a short ``Answer:`` label.
+
+        The interactive *input* prompt is ``APEXA>``; this label marks where the
+        *reply* begins so it's easy to find in a long scroll. Greppable: ``Answer:``.
+        """
+        print(f"\n{C.BOLD}{C.BCYAN}Answer:{C.RESET} {clean_markdown(response)}\n")
+
     def show_available_models(self):
         # The list is no longer Argo-only — ALCF's open models are here too, and
         # their ids are up to 41 chars, so a hardcoded ":18" column misaligned
@@ -2732,7 +2740,7 @@ class APEXAClient:
                     if not plot_type:
                         # Unrecognized plot subcommand — let APEXA handle it naturally
                         response = await self.run_query(user_input, permission_callback=_cli_permission)
-                        print(f"\n{clean_markdown(response)}\n")
+                        self._print_response(response)
                         continue
 
                     # Parse file path(s)
@@ -2941,7 +2949,7 @@ class APEXAClient:
                         continue
                     finally:
                         self._active_task = None
-                    print(f"\n{clean_markdown(response)}\n")
+                    self._print_response(response)
                     self.context.append_message("assistant", response)
                     self._autosave_session()
 
