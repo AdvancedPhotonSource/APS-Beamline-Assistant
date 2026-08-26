@@ -2064,12 +2064,13 @@ class APEXAClient:
             print(f"  {C.DIM}(autosave skipped: {e}){C.RESET}", file=sys.stderr)
 
     def _print_response(self, response: str) -> None:
-        """Print an APEXA reply behind a short ``Answer:`` label.
+        """Print an APEXA reply behind an ``APEXA:`` label.
 
-        The interactive *input* prompt is ``APEXA>``; this label marks where the
-        *reply* begins so it's easy to find in a long scroll. Greppable: ``Answer:``.
+        The interactive *input* prompt is ``APEXA>``; this ``APEXA:`` label marks
+        where the *reply* begins so it's easy to find in a long scroll, and mirrors
+        the prompt. Greppable: ``APEXA:``.
         """
-        print(f"\n{C.BOLD}{C.BCYAN}Answer:{C.RESET} {clean_markdown(response)}\n")
+        print(f"\n{C.BOLD}{C.BCYAN}APEXA:{C.RESET} {clean_markdown(response)}\n")
 
     def show_available_models(self):
         # The list is no longer Argo-only — ALCF's open models are here too, and
