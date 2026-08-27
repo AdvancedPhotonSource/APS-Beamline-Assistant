@@ -68,7 +68,8 @@ def main() -> int:
     collection = client.get_collection(name="hedm_knowledge")
 
     # Sparse-only: BM25 over the full corpus (no filter), ranked by score.
-    from rank_bm25 import BM25Okapi
+    # BM25Okapi is vendored in hybrid_retrieval (numpy-only) — no PyPI dep.
+    from hybrid_retrieval import BM25Okapi
     corpus = collection.get(include=["documents", "metadatas"])
     corpus_docs = corpus["documents"]
     bm25 = BM25Okapi([hyb._tokenize(d) for d in corpus_docs])

@@ -48,10 +48,12 @@ dependencies = [
     # Knowledge base / RAG
     "chromadb>=0.4.0",
     "sentence-transformers>=2.2.0",
-    # Sparse BM25 for hybrid retrieval (query_hedm_knowledge retrieval_mode="hybrid").
-    # Pure-Python, only requires numpy (already a base dep) — keeps `uv sync`
-    # offline-clean (no public-internet dependency added).
-    "rank-bm25>=0.2.2",
+    # NOTE: sparse BM25 for hybrid retrieval is vendored in-tree
+    # (knowledge_base/hybrid_retrieval.py: BM25Okapi, numpy-only) — NOT a pip dep.
+    # rank-bm25 was pure-Python but its WHEEL still has to be fetched from PyPI at
+    # `uv sync` time, which fails on an air-gapped beamline host (copland) that
+    # never cached it. Inlining the ~30-line Okapi formula keeps the base install
+    # truly offline-clean while leaving hybrid retrieval fully functional offline.
     "pypdf2>=3.0.0",
     # read_document parsers (graceful zip+XML fallback if any are missing)
     "pypdf>=4.0.0",

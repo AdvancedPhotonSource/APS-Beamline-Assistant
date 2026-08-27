@@ -7,12 +7,17 @@ tokens (a specific flag name, a filename, a parameter key). Sparse BM25 is the
 mirror image. Fusing their rankings with Reciprocal Rank Fusion (RRF) recovers
 both, and — crucially for a beamline host — the sparse side needs **no model and
 no network**: it is built directly from the document texts already stored in
-Chroma (``collection.get``), tokenized with a stdlib regex. The only third-party
-dependency is ``rank-bm25`` (pure-Python, requires just numpy, which is already a
-base dep), so this module keeps ``uv sync`` offline-clean.
+Chroma (``collection.get``), tokenized with a stdlib regex. BM25 itself is
+vendored below (``BM25Okapi``, numpy-only — numpy is already a base dep), so this
+module adds **no** pip dependency and keeps ``uv sync`` offline-clean even on an
+air-gapped host that never cached a wheel. (It formerly imported ``rank-bm25``;
+that package is pure-Python at runtime, but its wheel still has to be *fetched*
+from PyPI at install time, which broke ``uv sync`` on copland. The inlined class
+reproduces rank-bm25's Okapi formula — k1=1.5, b=0.75, epsilon=0.25 negative-idf
+flooring — so retrieval scores are unchanged.)
 
 Design contract:
-  * FAIL-OPEN. Any failure (rank-bm25 absent, empty corpus, Chroma quirk) raises
+  * FAIL-OPEN. Any failure (empty corpus, Chroma quirk) raises
     ``HybridUnavailable``; the caller falls back to the plain dense path, which is
     byte-for-byte the pre-existing behaviour.
   * The ``where`` filter (type / technique scoping) is applied to BOTH candidate
@@ -23,8 +28,11 @@ Design contract:
 """
 from __future__ import annotations
 
+import math
 import re
 from typing import Dict, List, Optional
+
+import numpy as np
 
 # RRF constant. 60 is the value from the original Cormack et al. (2009) paper and
 # the community default; large enough that the tail ranks still contribute, small
@@ -44,6 +52,63 @@ def _tokenize(text: str) -> List[str]:
     return [t.lower() for t in _TOKEN_RE.findall(text or "")]
 
 
+class BM25Okapi:
+    """Okapi BM25, vendored (numpy-only) to avoid a PyPI dependency.
+
+    A faithful reimplementation of ``rank_bm25.BM25Okapi``: same defaults
+    (k1=1.5, b=0.75, epsilon=0.25) and the same negative-IDF flooring
+    (words whose IDF would go negative are floored to ``epsilon * average_idf``),
+    so ``get_scores`` returns the same ranking as the former dependency. Kept
+    in-tree because the wheel — though pure-Python — must still be fetched at
+    ``uv sync`` time, which fails on an air-gapped beamline host.
+
+    ``corpus`` is a list of already-tokenized documents (list[list[str]]).
+    """
+
+    def __init__(self, corpus: List[List[str]], k1: float = 1.5,
+                 b: float = 0.75, epsilon: float = 0.25) -> None:
+        self.k1, self.b, self.epsilon = k1, b, epsilon
+        self.corpus_size = len(corpus)
+        self.doc_len = [len(doc) for doc in corpus]
+        self.avgdl = (sum(self.doc_len) / self.corpus_size) if self.corpus_size else 0.0
+        self.doc_freqs: List[Dict[str, int]] = []
+        nd: Dict[str, int] = {}          # word -> number of docs containing it
+        for doc in corpus:
+            freqs: Dict[str, int] = {}
+            for w in doc:
+                freqs[w] = freqs.get(w, 0) + 1
+            self.doc_freqs.append(freqs)
+            for w in freqs:
+                nd[w] = nd.get(w, 0) + 1
+        self.idf: Dict[str, float] = {}
+        self._calc_idf(nd)
+
+    def _calc_idf(self, nd: Dict[str, int]) -> None:
+        idf_sum = 0.0
+        negatives: List[str] = []
+        for word, freq in nd.items():
+            idf = math.log(self.corpus_size - freq + 0.5) - math.log(freq + 0.5)
+            self.idf[word] = idf
+            idf_sum += idf
+            if idf < 0:
+                negatives.append(word)
+        average_idf = (idf_sum / len(self.idf)) if self.idf else 0.0
+        floor = self.epsilon * average_idf
+        for word in negatives:
+            self.idf[word] = floor
+
+    def get_scores(self, query: List[str]) -> "np.ndarray":
+        score = np.zeros(self.corpus_size)
+        doc_len = np.array(self.doc_len, dtype=float)
+        for q in query:
+            q_freq = np.array([freqs.get(q, 0) for freqs in self.doc_freqs], dtype=float)
+            score += self.idf.get(q, 0.0) * (
+                q_freq * (self.k1 + 1)
+                / (q_freq + self.k1 * (1 - self.b + self.b * doc_len / self.avgdl))
+            )
+        return score
+
+
 def hybrid_search(
     collection,
     query_embedding: List[float],
@@ -60,13 +125,8 @@ def hybrid_search(
     the doc was a dense hit, else ``None`` (sparse-only).
 
     Raises ``HybridUnavailable`` on any condition that should trigger the dense
-    fallback (missing rank-bm25, empty corpus, Chroma error).
+    fallback (empty corpus, Chroma error).
     """
-    try:
-        from rank_bm25 import BM25Okapi
-    except ImportError as e:  # pragma: no cover - environment-dependent
-        raise HybridUnavailable(f"rank-bm25 not installed: {e}") from e
-
     if n_results < 1:
         return []
 

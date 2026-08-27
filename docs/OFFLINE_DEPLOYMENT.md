@@ -16,12 +16,15 @@ once and caches it. This doc is only for the offline case.
 `uv sync` **with no extras has no public-internet dependency.** Everything needed
 for data reduction and RAG installs and runs on an air-gapped host:
 
-- The RAG stack (`chromadb` + `sentence-transformers` + `rank-bm25`) is a **base**
-  dependency, so retrieval works offline — it only needs the network for the *first*
-  embedder download, which you pre-stage (§1). It is not gated behind an extra.
-  `rank-bm25` (the sparse leg of `retrieval_mode="hybrid"`) is pure-Python and needs
-  only numpy, so it adds **no** public-internet dependency; hybrid BM25+RRF retrieval
-  runs fully offline against the local Chroma corpus.
+- The RAG stack (`chromadb` + `sentence-transformers`) is a **base** dependency, so
+  retrieval works offline — it only needs the network for the *first* embedder
+  download, which you pre-stage (§1). It is not gated behind an extra. The sparse leg
+  of `retrieval_mode="hybrid"` (BM25) is **vendored in-tree**
+  (`knowledge_base/hybrid_retrieval.py`, `BM25Okapi`, numpy-only), **not** a pip
+  dependency — so `uv sync` fetches nothing extra for it and hybrid BM25+RRF retrieval
+  runs fully offline against the local Chroma corpus. (A pure-Python wheel like
+  `rank-bm25` still has to be *downloaded* at `uv sync` time, which fails on a host
+  that never cached it — inlining the algorithm removes that failure mode.)
 - **Technique capsules are indexed into the same KB** (`type="capsule"`, `technique=<id>`),
   from local `.md` files under `knowledge_base/capsules/` — no network. After a
   `git pull` that changes capsules, re-index once (§ below) so they enter RAG;
