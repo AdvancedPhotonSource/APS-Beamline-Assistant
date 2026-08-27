@@ -1,0 +1,1 @@
+{"harness": "apexa", "task": "frames-and-dark", "condition": "shell", "trial": 0, "model": "claudeopus5", "outcome": "no_answer", "reported": null, "ground_truth": null, "nominal": null, "executed": false, "fresh_artifacts": 0, "elapsed_s": 73.8, "detail": "no numeric value in the final answer"}

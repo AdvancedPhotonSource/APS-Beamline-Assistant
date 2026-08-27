@@ -268,3 +268,6 @@ inference_auth_token.py
 !tests/
 !tests/**
 tests/__pycache__/
+
+# Runtime crash dumps
+error_dumps/
