@@ -24,7 +24,7 @@ from mcp.server.fastmcp import FastMCP
 from _idempotency import idempotent  # skip-if-done guard for heavy tools (Phase 0)
 from apexa_remote_exec import (
     decide_exec_host, remote_run, remote_exists, remote_read_text,
-    remote_midas_command, resolve_host_for_path, ssh_hint,
+    remote_midas_command, resolve_host_for_path, ssh_hint, is_local_host,
 )
 
 try:
@@ -1118,13 +1118,21 @@ async def run_ff_hedm_full_workflow(
 
         # MIDAS writes outputs next to the inputs, so result_folder MUST resolve to
         # the same host as the data — a split would silently write to the wrong FS.
+        # `rf_host` is a RAW registry lookup: it is truthy for the LOCAL machine too
+        # when APEXA is deployed on the host that owns the registered data root
+        # (the copland-on-copland deployment). is_local_host() collapses that case
+        # to "local", so the guard fires only on a GENUINE host split, never on a
+        # legitimate all-local run co-located with the data. (Bug: without the
+        # is_local_host check, every local run on the analysis host was hard-blocked
+        # with "result_folder resolves to remote host" and fell back to SSH-to-self.)
         rf_host = resolve_host_for_path(result_folder)
-        if is_remote and rf_host and rf_host != run_host:
+        rf_remote = bool(rf_host) and not is_local_host(rf_host)
+        if is_remote and rf_remote and rf_host != run_host:
             return format_result({"tool": "run_ff_hedm_full_workflow", "status": "error",
                 "error": (f"result_folder resolves to host '{rf_host}' but the data runs "
                           f"on '{run_host}'. A single FF run cannot span hosts — "
                           "co-locate result_folder with the data or pass host=.")})
-        if not is_remote and rf_host:
+        if not is_remote and rf_remote:
             return format_result({"tool": "run_ff_hedm_full_workflow", "status": "error",
                 "error": (f"result_folder resolves to remote host '{rf_host}' but the "
                           "input data is local. Co-locate the inputs and output on one "
