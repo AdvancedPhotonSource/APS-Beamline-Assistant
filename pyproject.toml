@@ -48,6 +48,10 @@ dependencies = [
     # Knowledge base / RAG
     "chromadb>=0.4.0",
     "sentence-transformers>=2.2.0",
+    # Sparse BM25 for hybrid retrieval (query_hedm_knowledge retrieval_mode="hybrid").
+    # Pure-Python, only requires numpy (already a base dep) — keeps `uv sync`
+    # offline-clean (no public-internet dependency added).
+    "rank-bm25>=0.2.2",
     "pypdf2>=3.0.0",
     # read_document parsers (graceful zip+XML fallback if any are missing)
     "pypdf>=4.0.0",

@@ -37,7 +37,7 @@ identifiability below assume this configuration throughout.
 | `phase-5-read-report.md` | read `voxel_grid.csv` + Results, orientation/KAM/GROD/strain maps, report | at the end |
 | `PF_PARAMETERS.md` | the PF-specific parameter reference | when tuning |
 | `DIAGNOSIS.md` | symptom → test → cause → lever | **when something looks wrong** |
-| `RUNBOOK.md` | where it runs, what healthy looks like, pick-up point | on resume |
+| `RUNBOOK.md` | where it runs, what healthy looks like, pick-up point, **and §R4 multi-layer campaigns** | on resume; **§R4 before driving more than one layer** |
 | `LAB_NOTEBOOK.md` | evidence, ledger, **retracted claims** | before re-investigating |
 
 ## STOP — read this before touching anything
@@ -60,7 +60,7 @@ seems wrong:**
 | **`positions.csv` order** (file-order vs sorted; sign) is not confirmed | The voxel grid is `translations × translations`; the wrong order/sign mirrors the map about a diagonal. Looks like a plausible microstructure. |
 | Indexing is about to run **unseeded** on a scanning dataset | Blind scanning indexing over tens of millions of merged spots is intractable (days, often no output). It needs an FF orientation seed. This is a resource cliff, not a bug. |
 | The pf-odf strain patches are **not dark-subtracted** and the frames are raw | The fit has no additive-background term; a flat pedestal biases magnitude ~30 % and reshapes the field. Silently plausible. |
-| `Hbeam` / beam height is set to the **sample dimension** rather than the true per-layer beam | Lets Z roam over the whole sample; a hard rule shared with FF/NF. |
+| The **strain reference cell** (`LatticeConstant`) has not been pinned from this sample's own rings | The refiner's strain fit measures against it inside a **±10000 µε** box, so a reference wrong by ~0.7 % rails components silently — and it also costs completeness. Un-noticeable after the fact: the map looks fine. See §"the reference-cell trap". |
 
 When you halt, say which row fired, what you measured, and what you would need to proceed.
 Finish everything not blocked by it first.
@@ -83,8 +83,38 @@ Finish everything not blocked by it first.
 4. **pf-odf expects dark-subtracted patches.** The peak-shape loss is a purely
    multiplicative per-spot scale with no background term. Feed raw frames only with
    `subtract_background=True`; feed already-dark-subtracted caches only with it **off**.
-5. **`Hbeam` / `BeamThickness` is the true per-layer beam, never the sample size.** Grains
-   outside the beam cannot diffract; an oversized value lets Z roam. (Shared with FF/NF.)
+5. **`Hbeam` / `Rsample` are generous SEARCH BOUNDS — never the physical beam or
+   sample size.** *(Corrected 2026-08-21; earlier drafts of this file said the
+   opposite and sent a session off chasing a non-bug.)* They bound where the
+   indexer/refiner may place a grain. Tighten them to the true dimensions and
+   solutions **plop onto the bounding box**, giving an artefactual pile-up of
+   positions at ±`Rsample` and ±`Hbeam`/2 that looks like real microstructure.
+   Template-ish values (800 / 1800 / 2000 µm) are correct as-is — leave them
+   alone. In PF this is doubly moot: **PF does not fit position at all**, it
+   fixes each voxel to the scan grid. The true beam height matters only when
+   *stitching* layers. (Shared with FF/NF.)
+
+6. **Pin the strain reference cell from the sample's own rings.** `LatticeConstant`
+   is not just a starting guess — it is the **zero of the strain measurement**
+   (hard rule 7 below). Fit it from observed ring positions before quoting any
+   strain.
+
+7. **Never recover the reference cell from refined per-grain cells.** That is a
+   feedback loop: the refinement starts from `LatticeConstant` and only partly
+   leaves it, so averaging the refined cells returns roughly what you fed in.
+   Measured: iterating drifted a further −3740 µε in `a` and +6361 µε in `c`
+   without converging. Use the powder route (`refine_lattice_from_d_spacings`),
+   which takes **no starting cell**.
+
+8. **Profile PER STAGE. Never generalise one stage's behaviour to "the
+   pipeline."** A PF layer is two workloads with opposite bottlenecks: **prep**
+   (`zip_convert→peakfit→transforms→binning`) is **disk**-bound and uses ~4 of 64
+   cores however many you give it, while **index**
+   (`indexing→refinement→find_grains`) is **CPU**-bound and saturates 63.5 of 64.
+   Measuring peakfit, concluding "the pipeline underuses the box", and running 3
+   layers at 20 cores each was measured **worse than serial** — it starved the
+   only stage that could use the cores. Overlap the two halves instead of
+   splitting the cores. Multi-layer campaigns: **RUNBOOK §R4**.
 
 ### Traps that silently corrupt results
 
@@ -95,6 +125,10 @@ Finish everything not blocked by it first.
 | Raw (non-dark-subtracted) patches into pf-odf | Strain converges, magnitude inflated, field pattern wrong | phase-4 |
 | `find_grains` on a high-spread / cracked map | Per-voxel clustering pass runs for hours, never completes | phase-3, DIAGNOSIS |
 | Detector h5 chunked one-frame-per-chunk | pf-odf patch extraction reads whole frames → multi-TB, multi-hour I/O | phase-4 |
+| **`--num-files-per-scan` defaults to 1** for a per-frame TIFF series. `NrFilesPerSweep` in the parameter file is stored in the zarr but does **not** drive the file list | `exchange/data` is `(1, ny, nz)`, all 23 stages run, layer finishes **0 voxels, exit 0** | phase-3 |
+| **`--scan-work-dir` given a relative path** | joined twice (`…/scans/167051/scans/167051/…`), every zip fails. Omitted entirely, per-scan intermediates are written *into the raw data tree* | phase-3 |
+| Stale layer outputs from an earlier attempt (`InputAllExtraInfoFittingAll*.csv`, `midas_state.h5`) | `transforms` reports "13 ok" in 0.04 s from cache and indexing runs on the OLD spots — 0 voxels, exit 0 | phase-3 |
+| **Reference cell (`LatticeConstant`) not pinned to the sample** | per-voxel strain rails at the hardcoded ±10000 µε and completeness is depressed | phase-2 §2.5 |
 
 ## 0. Verify the install
 
@@ -113,8 +147,10 @@ $PY -c "import midas_pf_odf; from midas_fit_grain import scan_seed, fitbest_adap
 ```
 
 The bridge (`midas_fit_grain.scan_seed` + `fitbest_adapter`) is required for a c-omp PF
-refine to feed pf-odf. If `backend_c.available()` is `False`, use `--refine-backend python`
-(far slower) or rebuild `midas-fit-grain` with an OpenMP toolchain.
+refine to feed pf-odf. If `backend_c.available()` is `False`, **rebuild `midas-fit-grain`
+with an OpenMP toolchain** — that is the only fix. There is no Python fallback any more:
+`--refine-backend` accepts `c-omp` and nothing else (`midas_pipeline/config.py:666`), and
+the Python refiner it used to name is known-broken.
 
 ## 0a. THE ORDER
 

@@ -9,6 +9,41 @@
 
 ## 8. STEP 7 — Read the result
 
+### 8-0. The spots that were never found
+
+`SpotMatrix.csv` is **28 columns** from `midas-process-grains` 0.10.0, and the
+important part is not the extra columns — it is the extra **rows**. Col 12
+`Matched` is 1 for an observed spot that matched a prediction and **0 for a
+reflection the grain was predicted to produce and which was never found**. Until
+now that population was recorded nowhere: `Grains.csv`, `SpotMatrix.csv` and
+`FitBest.bin` all described matched spots only, so completeness could be read as a
+number but never explained.
+
+Un-found rows carry `-1` in the two integer columns (`SpotID`, observed `RingNr`)
+because those are `%d` and cannot hold NaN, and **NaN** in every other observed
+column. The prediction is in cols 14-18 (`theorRingNr`, `theorEta`, `YExp`,
+`ZExp`, `OmegaExp`). Cols 0-11 on *matched* rows are byte-identical to the legacy
+12-column layout, so a parser taking the first 12 tab fields is unaffected.
+
+The first thing to do with it is ask **which rings are losing spots**:
+
+```python
+import numpy as np
+d = np.genfromtxt("SpotMatrix.csv", skip_header=1)
+u = d[:, 12] <= 0.5                       # predicted but not found
+for r in sorted(set(d[:, 14][np.isfinite(d[:, 14])])):
+    tot = (d[:, 14] == r).sum(); un = (d[u, 14] == r).sum()
+    print(f"ring {int(r)}: {un}/{tot} un-found ({100*un/tot:.1f}%)")
+```
+
+On the reference Ni layer that reads 2.7 / 6.9 / 9.1 / 9.7 / **21.6 %** for rings
+1-5 — the outer ring is where the completeness deficit actually lives, which no
+existing output would have told you. Cols 19-21 and 22-27 carry the per-spot
+residual before and after the fit (590.27 -> 300.39 µm median, 80.4 % of
+individual spots improving). Post-fit columns are NaN where the post-fit matcher
+did not keep that spot: 0.03 % on the reference layer, and notably **not** the
+worst spots, which is unexplained.
+
 ### 8a. Check the refiner version before reading the residual columns
 
 **`midas-fit-grain` < 0.5.7 writes `DiffPos`, `DiffOme`, `DiffAngle` cyclically
@@ -75,6 +110,20 @@ Before interpreting it:
    `OverAllRingToIndex` still need work.
 7. **`indexing: 0 / N seeds with non-zero data`** in the log deserves an explanation before
    any grain list is trusted.
+8. **Bin `DiffPos` against grain position** — specifically the radial offset
+   `r = sqrt(X² + Y²)` from the rotation axis. If the well-fitting grains all sit within
+   roughly the beam half-width and there are none beyond it, the reconstruction is
+   **illumination-limited**: only the near-axis core is determined and the rest of the
+   population is manufactured. This is the single cheapest check for the failure in
+   DIAGNOSIS `split.illumination_radial`, and it is free.
+
+> **`Confidence` is not a grain-quality metric — do not filter on it.** It is dominated by
+> the chance-match floor whenever the spot list is dense. Measured on a 20-ID alumina layer
+> (1652 grains): median `Confidence` was **flat at ~0.72 from r = 0 to 600 µm** while
+> `DiffPos` climbed 544 → 783 µm over the same range, and one grain carried `Confidence`
+> **1.000** with `DiffPos` **688 µm**. Rank and cut on **`DiffPos`**; treat a high
+> `Confidence` as no evidence at all. (Item 2 above still holds for the *shape* of the
+> completeness distribution — bimodality is informative — but the absolute value is not.)
 
 ---
 

@@ -250,7 +250,19 @@ def scope(technique: str) -> str:
     scope only in the halt table (e.g. dfxm)."""
     md = spine(technique)
     m = re.search(r"\*\*Scope\.\*\*(.+?)(?:\n\n|\n#{1,6}\s)", md, re.S)
-    return re.sub(r"\s+", " ", m.group(1)).strip() if m else ""
+    if m:
+        return re.sub(r"\s+", " ", m.group(1)).strip()
+    # Fallback: a '## … Scope …' heading section (e.g. calibrate-integrate
+    # '## §0. Scope gate'). Return the leading prose before any table.
+    sec = _section(md, "scope")
+    if not sec:
+        return ""
+    lead = []
+    for ln in sec.splitlines():
+        if ln.strip().startswith("|"):
+            break
+        lead.append(ln)
+    return re.sub(r"\s+", " ", "\n".join(lead)).strip()
 
 
 def load_schedule(technique: str) -> List[Dict]:
@@ -304,6 +316,65 @@ def _numbered_items(section_md: str) -> List[Dict]:
     return out
 
 
+def _fenced_phase_steps(section_md: str) -> List[Dict]:
+    """Parse a fenced 'phase N  name  description' block (dct-tt, xrd-ct THE
+    ORDER) -> [{num, step, where, note}]. Continuation lines (``---- … ----``)
+    and branch labels ('DCT branch') don't start with 'phase' and are skipped."""
+    if not section_md:
+        return []
+    out = []
+    for ln in section_md.splitlines():
+        m = re.match(r"^\s*phase\s+([\w.]+)\s+(\S+)\s+(.+)$", ln, re.I)
+        if m:
+            out.append({"num": m.group(1), "step": m.group(2),
+                        "where": "", "note": m.group(3).strip()})
+    return out
+
+
+def _arrow_steps(section_md: str) -> List[Dict]:
+    """Parse an arrow-joined prose order ('§0 scope gate → §1 install gate → …',
+    calibrate-integrate) -> [{num, step, where, note}]. Handles a leading
+    'Run the phases in this order:' preamble, inline markdown links on a step
+    (→ where), and trailing prose after the final step."""
+    if not section_md or "→" not in section_md:
+        return []
+    flat = re.sub(r"\s+", " ", section_md)
+    segs = flat.split("→")
+    out = []
+    for idx, seg in enumerate(segs):
+        s = seg.strip()
+        if idx == 0 and ":" in s:          # drop "Run the phases in this order:"
+            s = s.rsplit(":", 1)[-1].strip()
+        where = ""
+        mlink = re.match(r"\[([^\]]+)\]\(([^)]+)\)", s)   # [§4 calibrate](phase-4-calibrate.md)
+        if mlink:
+            where, s = mlink.group(2), mlink.group(1).strip()
+        m = re.match(r"§?\s*([\w.]+)\s+(.+)", s)
+        if not m:
+            continue
+        num, step = m.group(1), m.group(2)
+        step = re.split(r"\.\s", step)[0].strip()   # trim trailing sentence on the last step
+        out.append({"num": num, "step": step, "where": where, "note": ""})
+    return out
+
+
+def signatures(technique: str) -> List[Dict]:
+    """Data-signature discriminators a capsule declares for auto-recognition,
+    read from a '## Data signatures' table IF the capsule ships one -> [{signature,
+    note}]. Empty today: no capsule ships this table yet. This is the future
+    upstream schema — when a capsule adds it, it supersedes APEXA's curated
+    ``_TECHNIQUE_SIGNATURES`` by precedence (the caller prefers this accessor).
+    Fail-open []."""
+    sec = _section(spine(technique), "data signatures")
+    out = []
+    for r in _rows_as_dicts(_first_table(sec)):
+        vals = list(r.values())
+        if vals and vals[0]:
+            out.append({"signature": vals[0],
+                        "note": vals[1] if len(vals) > 1 else ""})
+    return out
+
+
 def hard_rules(technique: str) -> List[Dict]:
     """The numbered 'Hard rules' list -> [{n, text}] (full item text)."""
     return _numbered_items(_section(spine(technique), "hard rules"))
@@ -329,9 +400,13 @@ def traps(technique: str) -> List[Dict]:
 def order(technique: str) -> List[Dict]:
     """THE ORDER -> [{num, step, where, note}] (the prescribed phase sequence).
 
-    Handled as a GFM table (ff/nf/pf) OR a numbered list (dfxm) — capsules use
-    either; both mean the same thing."""
-    sec = _section(spine(technique), "the order")
+    Handled, in precedence, as a GFM table (ff/nf/pf), a fenced 'phase N …'
+    block (dct-tt, xrd-ct), an arrow-joined prose line (calibrate-integrate),
+    or a numbered list (dfxm) — capsules use any of these; all mean the same
+    thing. The heading is 'THE ORDER' on most capsules and 'Order of
+    operations' on calibrate-integrate; both are accepted."""
+    sec = (_section(spine(technique), "the order")
+           or _section(spine(technique), "order of operations"))
     if not sec:
         return []
     rows = _rows_as_dicts(_first_table(sec))
@@ -348,6 +423,12 @@ def order(technique: str) -> List[Dict]:
                     "note": vals[3] if len(vals) > 3 else "",
                 })
         return out
+    fenced = _fenced_phase_steps(sec)   # dct-tt / xrd-ct fenced 'phase N …' block
+    if fenced:
+        return fenced
+    arrows = _arrow_steps(sec)          # calibrate-integrate '§0 … → §1 …' prose
+    if arrows:
+        return arrows
     # Fallback: numbered list (dfxm formats THE ORDER as prose steps).
     return [{"num": str(it["n"]), "step": it["text"], "where": "", "note": ""}
             for it in _numbered_items(sec)]
@@ -405,23 +486,86 @@ def phase_doc(technique: str, phase: str) -> str:
 # --------------------------------------------------------------------------- #
 # Tool -> technique mapping + beamline scope gate
 # --------------------------------------------------------------------------- #
+# Shared-phase capsules describe a phase (powder calibration / azimuthal
+# integration) that also occurs *inside* a modality workflow (ff/nf/pf). When a
+# tool name carries BOTH a modality token and a shared-phase token, the modality
+# is the real owner and the shared-phase capsule is only a sub-step — drop it so
+# the name resolves to the modality instead of going ambiguous. This is the ONE
+# place a capsule id is named in this module: a deliberate, contained exception,
+# gated on has_technique so it is inert until the capsule is vendored.
+_SHARED_PHASE_TECHNIQUES = {"calibrate-integrate"}
+
+
 def technique_for_tool(tool_name: str) -> str:
     """Which capsule a tool belongs to, derived from the tool name — NO per-tool
     table. Each capsule contributes its distinctive token (the first dir segment:
     ff-hedm->'ff', dfxm->'dfxm'); a tool whose name contains exactly one such
     token maps to that technique. Ambiguous ('overlay_ff_nf_results') or
     token-free ('match_grains') -> "" (never guess). New capsule -> new token,
-    automatically."""
+    automatically.
+
+    Disambiguation: when the hits are one modality capsule plus a shared-phase
+    capsule (calibration/integration is a phase within ff/nf/pf), the modality
+    wins — the shared-phase capsule is a sub-step, not the technique."""
     if not tool_name:
         return ""
     parts = set(re.split(r"[^a-z0-9]+", tool_name.lower()))
     hits = [t for t in available_techniques() if t.split("-")[0].lower() in parts]
+    if len(hits) > 1:
+        non_shared = [t for t in hits if t not in _SHARED_PHASE_TECHNIQUES]
+        if len(non_shared) == 1:
+            return non_shared[0]
+    return hits[0] if len(hits) == 1 else ""
+
+
+# MIDAS reconstruction-driver markers. A RAW shell command (run_command /
+# run_remote_command) is treated as a MIDAS workflow only when one of these
+# appears, so arbitrary filesystem paths never trigger a spurious technique
+# inject. Driver-focused and deliberately small.
+_MIDAS_CMD_MARKERS = ("midas", "_midas.py")
+
+
+def technique_for_command(command: str) -> str:
+    """Best-effort technique id for a RAW shell command that hand-drives MIDAS.
+
+    The agent often falls back to ``run_command``/``run_remote_command`` to drive
+    a MIDAS CLI by hand (e.g. when a typed workflow tool is blocked by a locality
+    rule). On that raw path the tool NAME carries no technique, so the handbook
+    methodology would never load — exactly when the operator most needs it. This
+    recovers the technique from the command text so the capsule spine + traps
+    still inject before the reconstruction proceeds.
+
+    Generic (no per-command table): uses the same first-segment capsule tokens as
+    ``technique_for_tool`` (ff/nf/pf/dfxm/tomo/dct/xrd/calibrate), plus explicit
+    ``--scan-mode ff|nf|pf`` disambiguation. Returns "" unless the command clearly
+    invokes MIDAS AND names exactly one technique (never guess)."""
+    if not command:
+        return ""
+    low = command.lower()
+    if not any(m in low for m in _MIDAS_CMD_MARKERS):
+        return ""
+    toks = set(re.split(r"[^a-z0-9]+", low))
+
+    # Explicit scan-mode wins (midas-pipeline run --scan-mode ff|pf|nf|auto).
+    m = re.search(r"scan[-_ ]?mode[=\s]+([a-z]+)", low)
+    if m:
+        forced = [t for t in available_techniques()
+                  if t.split("-")[0].lower() == m.group(1)]
+        if len(forced) == 1:
+            return forced[0]
+
+    hits = [t for t in available_techniques() if t.split("-")[0].lower() in toks]
+    if len(hits) > 1:
+        non_shared = [t for t in hits if t not in _SHARED_PHASE_TECHNIQUES]
+        if len(non_shared) == 1:
+            return non_shared[0]
     return hits[0] if len(hits) == 1 else ""
 
 
 # APS beamline identifiers as written in the scope/halt prose: 1-ID, 1-ID-E,
-# 6-ID-C, 17-BM, 8-ID-E, 20-ID, 25-ID, 11-ID …
-_BEAMLINE_RE = re.compile(r"\b(\d{1,2}-(?:ID|BM)(?:-[A-Za-z])?)\b")
+# 6-ID-C, 17-BM, 8-ID-E, 20-ID, 20-D-E, 25-ID, 11-ID … The station segment is
+# ID, BM, or a bare D (e.g. 20-D-E), optionally followed by a station letter.
+_BEAMLINE_RE = re.compile(r"\b(\d{1,2}-(?:ID|BM|D)(?:-[A-Za-z])?)\b")
 
 
 def scope_beamlines(technique: str) -> set:

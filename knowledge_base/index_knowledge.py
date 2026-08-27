@@ -303,6 +303,10 @@ def index_paper(
                     "journal": cite.get("journal", ""),
                     "doi": cite.get("doi", ""),
                     "topics": topics,
+                    # Non-capsule chunks carry an empty technique tag so a
+                    # technique-scoped query narrows to capsule content, while a
+                    # no-technique query (the default) still sees everything.
+                    "technique": "",
                 }
                 meta = {k: ("" if v is None else v) for k, v in meta.items()}
                 embed_text = f"{embed_prefix}\n\n{chunk}" if embed_prefix else chunk
@@ -340,6 +344,7 @@ def index_logbook(txt_path: Path, collection, embedder) -> int:
                 "journal": "",
                 "doi": "",
                 "topics": "",
+                "technique": "",
             }],
             ids=[f"{txt_path.stem}_chunk_{i}"],
         )
@@ -383,10 +388,69 @@ def index_book(pdf_path: Path, collection, embedder) -> int:
                         "journal": cite.get("journal", ""),
                         "doi": cite.get("doi", ""),
                         "topics": cite.get("topics", ""),
+                        "technique": "",
                     }],
                     ids=[f"{pdf_path.stem}_p{page_idx}_c{sub_idx}"],
                 )
                 total += 1
+    return total
+
+
+# Capsule files worth indexing, in a stable order. RUNBOOK.md is deliberately
+# EXCLUDED — it is volatile host/version state the docs insist is checked live,
+# not retrievable "knowledge" (mirrors capsule_registry's stance).
+_CAPSULE_FILES = (
+    "README.md", "ENVELOPE.md", "PARAMETERS.md", "PF_PARAMETERS.md",
+    "DIAGNOSIS.md", "LAB_NOTEBOOK.md",
+)
+_CAPSULE_PHASE_GLOB = "phase-*.md"
+
+
+def index_capsule(technique: str, cap_dir: Path, collection, embedder) -> int:
+    """Index one vendored MIDAS technique capsule directory.
+
+    Walks the capsule's markdown docs (README/ENVELOPE/PARAMETERS/DIAGNOSIS/
+    LAB_NOTEBOOK + phase-*.md), flat-chunks each, and tags every chunk
+    type="capsule", technique=<id>. This is what lets query_hedm_knowledge
+    scope retrieval to a single technique's methodology. Capsules are local
+    .md files, so indexing them is offline-clean.
+    """
+    files: List[Path] = []
+    for fname in _CAPSULE_FILES:
+        p = cap_dir / fname
+        if p.is_file():
+            files.append(p)
+    files.extend(sorted(cap_dir.glob(_CAPSULE_PHASE_GLOB)))
+
+    total = 0
+    for md in files:
+        text = md.read_text(encoding="utf-8", errors="ignore")
+        h = file_hash(md)
+        source = f"{technique}/{md.name}"
+        for i, chunk in enumerate(chunk_flat_text(text, chunk_size=400)):
+            embedding = embed_doc(embedder, chunk)
+            collection.add(
+                documents=[chunk],
+                embeddings=[embedding],
+                metadatas=[{
+                    "source": source,
+                    "type": "capsule",
+                    "technique": technique,
+                    "page": 0,
+                    "chunk_index": i,
+                    "file_hash": h,
+                    "citation": f"MIDAS capsule {source}",
+                    "bibkey": "",
+                    "title": md.stem,
+                    "authors": "",
+                    "year": "",
+                    "journal": "",
+                    "doi": "",
+                    "topics": "",
+                }],
+                ids=[f"capsule_{technique}_{md.stem}_c{i}"],
+            )
+            total += 1
     return total
 
 
@@ -417,8 +481,8 @@ def index_documents(kb_path: Path, collection_name: str = "hedm_knowledge"):
                   "hnsw:space": "cosine"},
     )
 
-    stats = {"papers": 0, "logbooks": 0, "books": 0, "total_chunks": 0,
-             "papers_with_bib": 0}
+    stats = {"papers": 0, "logbooks": 0, "books": 0, "capsules": 0,
+             "total_chunks": 0, "papers_with_bib": 0}
 
     papers_dir = kb_path / "papers"
     if papers_dir.exists():
@@ -458,6 +522,33 @@ def index_documents(kb_path: Path, collection_name: str = "hedm_knowledge"):
             stats["books"] += 1
             stats["total_chunks"] += n
 
+    # Technique capsules — auto-discovered by capsule_registry (structural: any
+    # dir with README.md + ENVELOPE.md markers). Iterating the registry (not a
+    # glob here) keeps a single source of truth for "what is a capsule".
+    try:
+        import sys as _sys
+        _repo_root = str(Path(__file__).resolve().parent.parent)
+        if _repo_root not in _sys.path:
+            _sys.path.insert(0, _repo_root)
+        import capsule_registry as _capsule_registry
+        _techniques = _capsule_registry.available_techniques()
+        _capsules_dir = _capsule_registry.CAPSULES_DIR
+    except Exception as _e:
+        _techniques = ()
+        _capsules_dir = kb_path / "capsules"
+        print(f"   ⚠️  capsule_registry unavailable ({_e}); skipping capsules")
+
+    if _techniques:
+        print()
+        print("\U0001f9e9 Indexing technique capsules...")
+        for tech in _techniques:
+            cap_dir = _capsules_dir / tech
+            print(f"   Processing: {tech}")
+            n = index_capsule(tech, cap_dir, collection, embedder)
+            print(f"      ✓ Indexed {n} chunks")
+            stats["capsules"] += 1
+            stats["total_chunks"] += n
+
     stats_file = kb_path / "data" / "index_stats.json"
     stats_file.parent.mkdir(exist_ok=True)
     with open(stats_file, "w") as f:
@@ -473,6 +564,7 @@ def index_documents(kb_path: Path, collection_name: str = "hedm_knowledge"):
     print(f"   Papers: {stats['papers']} ({stats['papers_with_bib']} with .bib sidecar)")
     print(f"   Logbooks: {stats['logbooks']}")
     print(f"   Books: {stats['books']}")
+    print(f"   Capsules: {stats['capsules']}")
     print(f"   Total chunks: {stats['total_chunks']}")
     print(f"   DB: {chroma_path}")
     print("=" * 60)
@@ -516,14 +608,18 @@ def main():
     papers = len(list((kb_path / "papers").glob("*.pdf"))) if (kb_path / "papers").exists() else 0
     logbooks = len(list((kb_path / "logbooks").glob("*.txt")) + list((kb_path / "logbooks").glob("*.md"))) if (kb_path / "logbooks").exists() else 0
     books = len(list((kb_path / "books").glob("*.pdf"))) if (kb_path / "books").exists() else 0
-    total = papers + logbooks + books
+    capsules_dir = kb_path / "capsules"
+    capsules = len([p for p in capsules_dir.iterdir()
+                    if p.is_dir() and (p / "README.md").is_file() and (p / "ENVELOPE.md").is_file()]) \
+        if capsules_dir.exists() else 0
+    total = papers + logbooks + books + capsules
 
     if total == 0:
         print("⚠️  No documents to index.")
-        print(f"   Add to: {kb_path}/papers, {kb_path}/logbooks, {kb_path}/books")
+        print(f"   Add to: {kb_path}/papers, {kb_path}/logbooks, {kb_path}/books, {kb_path}/capsules")
         return
 
-    print(f"Found {papers} papers, {logbooks} logbooks, {books} books")
+    print(f"Found {papers} papers, {logbooks} logbooks, {books} books, {capsules} capsules")
     index_documents(kb_path)
     test_query(kb_path)
 

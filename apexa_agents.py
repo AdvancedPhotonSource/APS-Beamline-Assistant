@@ -2439,25 +2439,69 @@ class AgentRunner:
         }
 
     @staticmethod
-    def _maybe_capsule_msg(tool_name: str, injected_techniques: set) -> Optional[Dict]:
+    def _maybe_capsule_msg(tool_name: str, injected_techniques: set,
+                           result: Optional[str] = None,
+                           arguments: Optional[Dict] = None) -> Optional[Dict]:
         """(C3) Stage-scoped technique-capsule loading.
 
-        The moment the model fires a tool that belongs to a MIDAS technique
-        (ff/nf/pf/dfxm — derived from the tool name, not a hardcoded map), inject
-        that technique's handbook SPINE (scope, step ORDER, hard rules, halt
-        conditions, traps) if it has not been loaded this turn. This is the
+        The moment the model fires a tool that belongs to a MIDAS technique,
+        inject that technique's handbook SPINE (scope, step ORDER, hard rules,
+        halt conditions, traps) if it has not been loaded this turn. This is the
         "learn the technique itself" layer at the dispatch moment: the verified
         workflow procedure lands in context before the model runs the next step.
-        The model can also pull it explicitly via learn_technique; both share the
-        `injected_techniques` dedup set so the spine is injected at most once per
-        technique per turn. Returns None when the tool maps to no capsule or the
+
+        Technique resolution, in precedence:
+          1. THE BRIDGE — a machine-readable ``capsule_technique`` in the tool
+             RESULT payload (recommend_workflow/inspect_dataset_file emit it after
+             recognizing the raw data). This is what converts "the data looks like
+             NF" into "load the NF methodology" — and it fires after the FIRST tool
+             (recommend_workflow), i.e. BEFORE calibrate/integrate/workflow tools.
+          2. the tool NAME (technique_for_tool) — the original signal, for tools
+             whose name already carries the technique (run_ff_hedm_full_workflow …).
+          3. the RAW COMMAND (technique_for_command) — when the agent hand-drives a
+             MIDAS CLI via run_command/run_remote_command (e.g. a typed workflow
+             tool was blocked by a locality rule), the tool name is generic, so we
+             recover the technique from the command text. This keeps the handbook
+             (scope, ORDER, hard rules, traps) in context on the raw path too —
+             exactly where reconstructions have historically walked into silent
+             traps (Hbeam 0, collapsed BoxSize, stale RingThresh) unguarded.
+
+        The model can also pull a spine explicitly via learn_technique; all paths
+        share the ``injected_techniques`` dedup set so a spine is injected at most
+        once per technique per turn. Returns None when nothing resolves or the
         spine is already loaded. Fail-open."""
         if _capsule_registry is None:
             return None
-        try:
-            tech = _capsule_registry.technique_for_tool(tool_name)
-        except Exception:
-            return None
+        tech = ""
+        # 1) Bridge: read the technique the classifier recognized from the data.
+        if result:
+            try:
+                payload = json.loads(result) if isinstance(result, str) else result
+                if isinstance(payload, dict):
+                    cand = payload.get("capsule_technique")
+                    if not cand:
+                        for rec in (payload.get("recommendations") or []):
+                            if isinstance(rec, dict) and rec.get("capsule_technique"):
+                                cand = rec["capsule_technique"]
+                                break
+                    if cand and _capsule_registry.has_technique(cand):
+                        tech = _capsule_registry._canon(cand)
+            except Exception:
+                tech = ""
+        # 2) Fall back to the tool name.
+        if not tech:
+            try:
+                tech = _capsule_registry.technique_for_tool(tool_name)
+            except Exception:
+                tech = ""
+        # 3) Raw MIDAS command hand-driven via run_command/run_remote_command.
+        if not tech and arguments:
+            try:
+                cmd = arguments.get("command") or arguments.get("cmd") or ""
+                if cmd:
+                    tech = _capsule_registry.technique_for_command(cmd)
+            except Exception:
+                tech = ""
         if not tech or tech in injected_techniques:
             return None
         injected_techniques.add(tech)   # mark even if body is empty
@@ -2858,7 +2902,7 @@ class AgentRunner:
                     # Transient coaching, never persisted to the transcript buffer.
                     if _stage_guardrails_on:
                         try:
-                            _cap = self._maybe_capsule_msg(tc.name, _injected_techniques)
+                            _cap = self._maybe_capsule_msg(tc.name, _injected_techniques, result, tc.arguments)
                             if _cap:
                                 messages.append(_cap)
                             _sk = self._maybe_stage_skill_msg(tc.name, _injected_skills)
@@ -3317,7 +3361,7 @@ class AgentRunner:
                     # Transient coaching, never persisted to the transcript buffer.
                     if _stage_guardrails_on:
                         try:
-                            _cap = self._maybe_capsule_msg(tc.name, _injected_techniques)
+                            _cap = self._maybe_capsule_msg(tc.name, _injected_techniques, result, tc.arguments)
                             if _cap:
                                 messages.append(_cap)
                             _sk = self._maybe_stage_skill_msg(tc.name, _injected_skills)

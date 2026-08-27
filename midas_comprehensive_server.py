@@ -1177,6 +1177,18 @@ async def run_ff_hedm_full_workflow(
             ff_traps = _lint_handbook_traps(_lint_target, "ff")
         except Exception:
             ff_traps = []
+        # Stale-stage-output check. zip_convert reuses an existing *.MIDAS.zip and
+        # downstream stages read their parameters from the zarr, not from the
+        # parameter file — so re-running into a folder whose artifacts predate a
+        # parameter edit silently uses the OLD value and reports success. Live case
+        # (1-ID, 2026-08-26): RingThresh patched 500 -> 10, resumed from peakfit,
+        # zarr still had 500, peak search returned almost nothing.
+        try:
+            from handbook_guardrails import check_stale_stage_outputs
+            ff_traps = list(ff_traps) + check_stale_stage_outputs(
+                _lint_target, result_folder)
+        except Exception:
+            pass
         if _tmp_param:
             try:
                 os.unlink(_tmp_param)
@@ -6786,13 +6798,15 @@ def get_typical_parameters():
 async def query_hedm_knowledge(
     question: str,
     max_results: int = 3,
-    source_type: Optional[str] = None
+    source_type: Optional[str] = None,
+    technique: Optional[str] = None,
+    retrieval_mode: str = "dense"
 ) -> str:
-    """Query the HEDM knowledge base using semantic search across papers, logbooks, and books.
+    """Query the HEDM knowledge base using semantic search across papers, logbooks, books, and technique capsules.
 
-    This tool searches through indexed research papers, experimental logbooks, and
-    crystallography textbooks to answer questions about HEDM theory, best practices,
-    and past experiments.
+    This tool searches through indexed research papers, experimental logbooks,
+    crystallography textbooks, and vendored MIDAS technique capsules to answer
+    questions about HEDM theory, best practices, and past experiments.
 
     Args:
         question: Natural language question about HEDM, crystallography, calibration, etc.
@@ -6801,7 +6815,20 @@ async def query_hedm_knowledge(
                  - "How was sample XYZ processed in 2019?"
                  - "Explain Bragg's law for 61keV beam"
         max_results: Number of relevant excerpts to return (default: 3)
-        source_type: Filter by document type: "paper", "logbook", "book", or None for all
+        source_type: Filter by document type: "paper", "logbook", "book", "capsule",
+                 or None for all
+        technique: Filter to a single MIDAS technique capsule id (e.g. "ff-hedm",
+                 "nf-hedm", "pf-hedm", "dfxm", "tomo", "xrd-ct", "dct-tt",
+                 "calibrate-integrate"), or None for all techniques. Composes with
+                 source_type. Only capsule chunks carry a technique tag; non-capsule
+                 chunks are tagged "" at index time, so a technique filter narrows to
+                 that technique's capsule content.
+        retrieval_mode: "dense" (default, semantic embedding search — unchanged
+                 behaviour) or "hybrid" (fuse dense with sparse BM25 keyword search
+                 via Reciprocal Rank Fusion; better for exact tokens like flag/param
+                 names). Hybrid needs no network or model beyond what dense uses, and
+                 falls back to dense on any error. The technique/source_type filters
+                 apply to both retrievers.
 
     Returns:
         JSON string with relevant excerpts, sources, and confidence scores
@@ -6830,27 +6857,81 @@ async def query_hedm_knowledge(
         # Get collection
         collection = kb["client"].get_collection(name="hedm_knowledge")
 
-        # Build filter
-        where_filter = {"type": source_type} if source_type else None
+        # Build filter. source_type and technique compose; ChromaDB requires an
+        # explicit $and to combine two equality clauses. Neither set → None (the
+        # exact contract that shipped before technique existed — additive proof).
+        _clauses = []
+        if source_type:
+            _clauses.append({"type": source_type})
+        if technique:
+            _clauses.append({"technique": technique})
+        if len(_clauses) == 2:
+            where_filter = {"$and": _clauses}
+        elif len(_clauses) == 1:
+            where_filter = _clauses[0]
+        else:
+            where_filter = None
 
-        # Query the knowledge base
-        results = collection.query(
-            query_embeddings=[query_embedding],
-            n_results=max_results,
-            where=where_filter
-        )
+        # Retrieve. "dense" is the original path, preserved byte-for-byte so the
+        # default contract is unchanged. "hybrid" fuses dense + sparse BM25 and
+        # falls back to dense on any error (fail-open).
+        _mode = (retrieval_mode or "dense").strip().lower()
+        retrieval_meta = {"mode": "dense"}
+        hits = None  # list of (doc, meta, dist_or_None, extra_dict)
+
+        if _mode == "hybrid":
+            try:
+                import sys as _sys
+                _kbdir = str(Path(__file__).parent / "knowledge_base")
+                if _kbdir not in _sys.path:
+                    _sys.path.insert(0, _kbdir)
+                import hybrid_retrieval as _hybrid
+                fused = _hybrid.hybrid_search(
+                    collection=collection,
+                    query_embedding=query_embedding,
+                    query_text=question,
+                    n_results=max_results,
+                    where_filter=where_filter,
+                )
+                hits = [
+                    (r["document"], r["metadata"], r["distance"], {
+                        "dense_rank": r["dense_rank"],
+                        "sparse_rank": r["sparse_rank"],
+                        "rrf": round(r["rrf"], 6),
+                    })
+                    for r in fused
+                ]
+                retrieval_meta = {"mode": "hybrid", "rrf_k": _hybrid.RRF_K}
+            except Exception as _he:
+                # Fail-open to dense; record why so a beamline operator can see it.
+                hits = None
+                retrieval_meta = {"mode": "dense", "requested_mode": "hybrid",
+                                  "hybrid_fallback_reason": str(_he)}
+
+        if hits is None:
+            # Dense path (default, and hybrid fallback) — unchanged query.
+            results = collection.query(
+                query_embeddings=[query_embedding],
+                n_results=max_results,
+                where=where_filter
+            )
+            hits = [
+                (doc, meta, dist, {})
+                for doc, meta, dist in zip(
+                    results['documents'][0],
+                    results['metadatas'][0],
+                    results['distances'][0],
+                )
+            ]
 
         # Format results — include citation, page, DOI for proper referencing
         excerpts = []
-        for i, (doc, meta, dist) in enumerate(zip(
-            results['documents'][0],
-            results['metadatas'][0],
-            results['distances'][0]
-        ), 1):
-            excerpts.append({
+        for i, (doc, meta, dist, extra) in enumerate(hits, 1):
+            ex = {
                 "rank": i,
                 "source": meta['source'],
                 "type": meta['type'],
+                "technique": meta.get('technique', ''),
                 "citation": meta.get('citation', meta['source']),
                 "bibkey": meta.get('bibkey', ''),
                 "title": meta.get('title', ''),
@@ -6859,10 +6940,14 @@ async def query_hedm_knowledge(
                 "journal": meta.get('journal', ''),
                 "doi": meta.get('doi', ''),
                 "page": meta.get('page', 0),
-                "similarity": round(max(0.0, 1 - dist), 3),
+                # Sparse-only hybrid hits have no embedding distance → null, never
+                # a fabricated score.
+                "similarity": (round(max(0.0, 1 - dist), 3) if dist is not None else None),
                 "excerpt": doc,
                 "chunk_index": meta.get('chunk_index', 0)
-            })
+            }
+            ex.update(extra)
+            excerpts.append(ex)
 
         # Compact reference list (deduped by source) for the LLM to cite cleanly
         seen = set()
@@ -6882,6 +6967,7 @@ async def query_hedm_knowledge(
             "status": "success",
             "question": question,
             "results_count": len(excerpts),
+            "retrieval": retrieval_meta,
             "references": references,
             "excerpts": excerpts,
             "instruction_to_assistant": (
@@ -10200,10 +10286,21 @@ async def inspect_dataset_file(
 
         report = _run_midas_params(["inspect", dataset_path, "--json"])
 
+        # Bridge field: recognize the technique from the file/path when decisive
+        # (additive; None when nothing unambiguous). Lets the agent loop inject the
+        # right methodology after an inspect, same as after recommend_workflow.
+        try:
+            _dp = Path(dataset_path)
+            _tech = _infer_technique(_dp, _classify_input(_dp), "")
+        except Exception:
+            _tech = {"technique": None, "source": None, "why": ""}
+
         return format_result({
             "tool": "inspect_dataset_file",
             "status": "success",
             "dataset_file": dataset_path,
+            "capsule_technique": _tech.get("technique"),
+            "technique_source": _tech.get("source"),
             "extracted": report,
         })
 

@@ -956,3 +956,90 @@ def verify_ff_outputs(result_folder, layers=None) -> dict:
         status = "ok"
         summary = "all present FF artifacts passed the notebook invariants"
     return {"status": status, "layers": layer_reports, "summary": summary}
+
+
+# ── Stale stage outputs (FF phase-3 §"zip_convert reuses an existing archive") ──
+#
+# zip_convert REUSES any existing *.MIDAS.zip, and downstream stages read their
+# parameters out of the zarr rather than out of Parameters.txt. So editing a key
+# and re-running into the same result folder silently keeps the OLD value while
+# the run reports success. Observed live on 1-ID (2026-08-26): RingThresh was
+# measured and patched from 500 to 10, the run was resumed from peakfit, and the
+# zarr still carried 500 -- peak search returned almost nothing and several cycles
+# were spent before the cause was found.
+#
+# Data, not code: each row names the key, the artifact its change invalidates, and
+# the handbook section. Adding a trap means adding a row.
+_STALE_INVALIDATION = [
+    # key(s)                       artifact glob (under result_folder)   stage        cite
+    (("RingThresh",),              "**/Temp/AllPeaks_PS.bin",            "peak search", "FF phase-3 §zip_convert/param-refresh"),
+    (("RingThresh", "MinPeakSNR"), "**/*.MIDAS.zip",                     "zip_convert", "FF phase-3 §zip_convert/param-refresh"),
+    (("tx", "ty", "tz", "Lsd", "BC", "p0", "p1", "p2"),
+                                   "**/*.MIDAS.zip",                     "zip_convert (geometry is read from the zarr, not the param file)",
+                                                                                       "FF phase-3 §geometry bites hardest"),
+    # These were consumed when the frames were written: patching the number leaves
+    # data and metadata describing different things (a silently shifted omega for
+    # SkipFrame). The handbook's remedy here is to delete the zip, not refresh it.
+    (("SkipFrame", "Padding", "FileStem"),
+                                   "**/*.MIDAS.zip",                     "frame writing", "FF phase-3 §stored-frame keys"),
+]
+
+
+def check_stale_stage_outputs(param_path: str, result_folder: str) -> List[Dict[str, str]]:
+    """Detect parameters edited AFTER the stage outputs they feed were produced.
+
+    Returns trap dicts in the same shape as the parameter lint. The test is
+    deliberately cheap and conservative: a key is only flagged when the parameter
+    file is strictly NEWER than an artifact that key feeds, so a first run (no
+    artifacts) and an untouched re-run both stay silent.
+
+    This cannot be fixed by refreshing the zarr alone -- doing so moves the
+    staleness one stage downstream. The remedies the handbook gives are to delete
+    the invalidated outputs, or to pass --force-param-refresh and accept they are
+    stale.
+    """
+    traps: List[Dict[str, str]] = []
+    try:
+        if not (param_path and result_folder and os.path.isfile(param_path)):
+            return traps
+        rf = Path(result_folder)
+        if not rf.is_dir():
+            return traps
+        p_mtime = os.path.getmtime(param_path)
+        present = parse_param_file(param_path)   # {lowercased_key: [tokens]}
+
+        for keys, pattern, stage, cite in _STALE_INVALIDATION:
+            hit = [k for k in keys if k.lower() in present]
+            if not hit:
+                continue
+            for art in rf.glob(pattern):
+                try:
+                    a_mtime = os.path.getmtime(art)
+                except OSError:
+                    continue
+                if p_mtime > a_mtime:
+                    traps.append({
+                        "severity": "error",
+                        "key": ", ".join(hit),
+                        "message": (
+                            f"{', '.join(hit)} was edited after {art.name} was written "
+                            f"({stage}). Downstream stages read this value from the "
+                            f"archive, not from the parameter file, so re-running into "
+                            f"this folder would silently use the OLD value and report "
+                            f"success. Refreshing the zarr alone only moves the "
+                            f"staleness one stage downstream. Either delete the "
+                            f"invalidated outputs (or the whole result folder and start "
+                            f"clean), or pass --force-param-refresh and accept they are "
+                            f"stale."),
+                        "section": cite,
+                    })
+                    break       # one report per rule is enough
+    except Exception as e:      # fail-open like the parameter lint -- but SAY SO.
+        # A silent `return []` here disabled this check entirely when it referenced
+        # a function that did not exist, and nothing indicated the guardrail was
+        # dead. Fail open, loudly.
+        import sys as _s
+        print(f"  [handbook] stale-output check skipped: {type(e).__name__}: {e}",
+              file=_s.stderr)
+        return []
+    return traps

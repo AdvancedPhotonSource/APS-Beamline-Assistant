@@ -16,9 +16,16 @@ once and caches it. This doc is only for the offline case.
 `uv sync` **with no extras has no public-internet dependency.** Everything needed
 for data reduction and RAG installs and runs on an air-gapped host:
 
-- The RAG stack (`chromadb` + `sentence-transformers`) is a **base** dependency, so
-  retrieval works offline — it only needs the network for the *first* embedder
-  download, which you pre-stage (§1). It is not gated behind an extra.
+- The RAG stack (`chromadb` + `sentence-transformers` + `rank-bm25`) is a **base**
+  dependency, so retrieval works offline — it only needs the network for the *first*
+  embedder download, which you pre-stage (§1). It is not gated behind an extra.
+  `rank-bm25` (the sparse leg of `retrieval_mode="hybrid"`) is pure-Python and needs
+  only numpy, so it adds **no** public-internet dependency; hybrid BM25+RRF retrieval
+  runs fully offline against the local Chroma corpus.
+- **Technique capsules are indexed into the same KB** (`type="capsule"`, `technique=<id>`),
+  from local `.md` files under `knowledge_base/capsules/` — no network. After a
+  `git pull` that changes capsules, re-index once (§ below) so they enter RAG;
+  `query_hedm_knowledge(..., technique=<id>)` then scopes retrieval to one technique.
 - **ChromaDB telemetry is disabled** before `chromadb` is imported, on every code
   path (runtime `get_knowledge_base`, the `index_knowledge.py` re-index script, and
   `apexa_network.apply_offline_env`). So no anonymised PostHog call is attempted —
