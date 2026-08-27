@@ -32,6 +32,8 @@ from __future__ import annotations
 
 import json
 import os
+import platform
+import socket
 import shlex
 import subprocess
 from functools import lru_cache
@@ -45,6 +47,46 @@ _SSH_OPTS = [
 ]
 
 DEFAULT_HOST_ENV = "APEXA_ANALYSIS_HOST"   # existing knob; default "copland"
+
+
+
+def local_hostnames() -> set:
+    """Every name by which this machine may be known in the registry.
+
+    Includes the short and fully-qualified forms plus anything the operator lists
+    in ``APEXA_LOCAL_HOSTNAMES`` (comma-separated), for sites where the registry
+    key is an alias rather than the real hostname.
+    """
+    names = set()
+    for n in (socket.gethostname(), socket.getfqdn(), platform.node()):
+        if n:
+            n = n.strip().lower()
+            names.add(n)
+            names.add(n.split(".", 1)[0])
+    for n in (os.environ.get("APEXA_LOCAL_HOSTNAMES") or "").split(","):
+        n = n.strip().lower()
+        if n:
+            names.add(n)
+            names.add(n.split(".", 1)[0])
+    names.discard("")
+    return names
+
+
+def is_local_host(name: str) -> bool:
+    """True when ``name`` refers to the machine we are already running on.
+
+    Without this the registry happily routes a run to the host it is already on:
+    APEXA deployed ON the analysis host sees its data-root prefix, resolves the
+    owning host, and SSHes to itself. That is not merely wasteful -- the loopback
+    login shell is a *different environment*, typically without the conda/venv
+    activation MIDAS needs, so the run fails with `midas-pipeline: command not
+    found` even though the binary is on PATH in the process doing the dispatch.
+    Observed on copland, 2026-08-26.
+    """
+    if not name:
+        return False
+    n = name.strip().lower()
+    return n in local_hostnames() or n.split(".", 1)[0] in local_hostnames()
 
 
 def resolve_host(host: str = "") -> str:
@@ -290,6 +332,10 @@ def decide_exec_host(*data_paths: str, host: str = "") -> Dict[str, Any]:
 
     # 1. explicit override
     if host:
+        if is_local_host(host):
+            return {"is_remote": False, "host": host, "record": host_record(host),
+                    "reason": f"explicit host={host!r} is THIS machine; running local",
+                    "unreachable": False}
         return {"is_remote": True, "host": host, "record": host_record(host),
                 "reason": "explicit host= override", "unreachable": False}
 
@@ -314,6 +360,13 @@ def decide_exec_host(*data_paths: str, host: str = "") -> Dict[str, Any]:
                 "unreachable": False, "error": True}
     if len(matched) == 1:
         h = next(iter(matched))
+        if is_local_host(h):
+            # We ARE the host that owns this data root. Run local, but keep the
+            # record so the caller can still apply its `activate` snippet.
+            return {"is_remote": False, "host": h, "record": host_record(h),
+                    "reason": f"data root owned by {h!r}, which is this machine; "
+                              f"running local",
+                    "unreachable": False}
         return {"is_remote": True, "host": h, "record": host_record(h),
                 "reason": "registry data-root prefix match", "unreachable": False}
 
@@ -324,6 +377,10 @@ def decide_exec_host(*data_paths: str, host: str = "") -> Dict[str, Any]:
 
     # 5. confirmed-remote fallback (single default host)
     h = default_host()
+    if h and is_local_host(h):
+        return {"is_remote": False, "host": h, "record": host_record(h),
+                "reason": f"default host {h!r} is this machine; running local",
+                "unreachable": False}
     if h and paths:
         missing_local = [p for p in paths if not os.path.exists(os.path.expanduser(p))]
         for p in missing_local:

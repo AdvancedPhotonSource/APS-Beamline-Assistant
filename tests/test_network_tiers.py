@@ -189,3 +189,58 @@ def test_probe_returns_a_valid_tier_and_checks():
     detected, checks = N.probe(timeout=0.001)     # near-instant, likely all False
     assert detected in (N.WEB, N.INTERNAL, N.DATA)
     assert set(checks) == {"anl_internal", "alcf", "web"}
+
+
+# ── self-host detection (the copland self-SSH bug) ───────────────────────────
+
+def test_registry_match_on_own_host_runs_local(monkeypatch, tmp_path):
+    """APEXA deployed ON the analysis host must NOT SSH to itself.
+
+    Regression for a live failure: on copland, /gdata resolved via the registry to
+    host 'copland', so the FF workflow dispatched over SSH into a loopback login
+    shell that had no midas_env, and midas-pipeline was 'not found' despite being
+    installed and on PATH in the dispatching process.
+    """
+    import json, socket, importlib
+    import apexa_remote_exec as R
+
+    me = socket.gethostname()
+    reg = tmp_path / "hosts.json"
+    # Registry shape matters: records live under a top-level "hosts" key.
+    reg.write_text(json.dumps({
+        "default_host": me,
+        "hosts": {me: {"host": me, "data_roots": ["/gdata"],
+                       "activate": "conda activate midas_env"}}}))
+    monkeypatch.setenv("APEXA_REMOTE_HOSTS_FILE", str(reg))
+    for fn in (R.load_remote_registry, R.resolve_host_for_path):
+        if hasattr(fn, "cache_clear"):
+            fn.cache_clear()
+
+    d = R.decide_exec_host("/gdata/dm/1ID/2026/x/data.h5")
+    assert d["is_remote"] is False, "must not SSH to the machine we are already on"
+    assert "this machine" in d["reason"].lower()
+    # The record must survive so the caller can still apply `activate` locally --
+    # otherwise the local run fails with 'midas-pipeline: command not found'.
+    assert (d.get("record") or {}).get("activate") == "conda activate midas_env"
+
+
+def test_explicit_host_pointing_at_self_runs_local(monkeypatch):
+    import socket
+    import apexa_remote_exec as R
+    d = R.decide_exec_host("/tmp/x.h5", host=socket.gethostname())
+    assert d["is_remote"] is False and "this machine" in d["reason"].lower()
+
+
+def test_genuinely_remote_host_still_routes_remote(monkeypatch):
+    """The fix must not collapse real remote routing."""
+    import apexa_remote_exec as R
+    d = R.decide_exec_host("/tmp/x.h5", host="some-other-beamline-host")
+    assert d["is_remote"] is True
+
+
+def test_hostname_aliases_are_honoured(monkeypatch):
+    import apexa_remote_exec as R
+    monkeypatch.setenv("APEXA_LOCAL_HOSTNAMES", "copland,copland.aps.anl.gov")
+    assert R.is_local_host("copland")
+    assert R.is_local_host("COPLAND.aps.anl.gov")
+    assert not R.is_local_host("chiltepin")

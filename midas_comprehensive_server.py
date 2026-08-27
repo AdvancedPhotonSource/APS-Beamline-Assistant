@@ -507,11 +507,26 @@ def _run_midas_maybe_remote(cmd, *, data_paths, cwd=None, timeout=3600,
                 "stderr": "remote data host unreachable; NOTHING was run.",
                 "error": ssh_hint(d.get("host"))}
     if not d.get("is_remote"):
-        p = subprocess.run(cmd, capture_output=True, text=True,
-                           timeout=timeout, cwd=cwd, env=get_midas_env())
+        # When APEXA runs ON the host that owns the data, decide_exec_host returns
+        # local BUT still carries that host's registry record. Its `activate`
+        # snippet must be applied here too: the MIDAS entry points live in a conda
+        # env / venv that get_midas_env() does not source, so without it a local
+        # run on the analysis host fails with `midas-pipeline: command not found`
+        # even though the binary is installed. Observed on copland, 2026-08-26.
+        _rec = d.get("record") or {}
+        _act = (_rec.get("activate") or "").strip()
+        if _act:
+            bare = " ".join(shlex.quote(str(c)) for c in cmd)
+            p = subprocess.run(["bash", "-lc", f"{_act} && {bare}"],
+                               capture_output=True, text=True,
+                               timeout=timeout, cwd=cwd, env=get_midas_env())
+        else:
+            p = subprocess.run(cmd, capture_output=True, text=True,
+                               timeout=timeout, cwd=cwd, env=get_midas_env())
         return {"success": p.returncode == 0, "return_code": p.returncode,
                 "stdout": p.stdout, "stderr": p.stderr,
-                "is_remote": False, "host": None}
+                "is_remote": False, "host": d.get("host"),
+                "local_activate": bool(_act)}
     bare = " ".join(shlex.quote(str(c)) for c in cmd)
     r = remote_run(d["host"], remote_midas_command(bare, d.get("record")),
                    remote_dir=cwd, timeout=timeout)
@@ -9588,6 +9603,149 @@ def _infer_hedm_modality(p: Path, info: dict, goal: str = "") -> dict:
             "why": "no explicit FF/NF/PF signal in goal, path, or contents"}
 
 
+# Map _infer_hedm_modality output → capsule id (guarded by has_technique at use).
+_MODALITY_TO_CAPSULE = {"ff": "ff-hedm", "nf": "nf-hedm", "pf": "pf-hedm"}
+
+# Curated, CITED data-signature discriminators for the non-HEDM techniques. Each
+# entry is inert until its capsule is vendored (gated on has_technique) and is
+# superseded automatically if a capsule ships a machine-readable
+# '## Data signatures' table (capsule_registry.signatures() wins by precedence).
+#   goal   : distinctive goal substrings (unambiguous — NOT the shared
+#            'calibrate'/'integrate' words, which are handled in the fallback)
+#   files  : fnmatch globs of config/output filenames that mark the technique
+#   tokens : whole-word path/dir/file name tokens
+#   cite   : the capsule doc + lines the signature is drawn from
+# NOTE: calibrate-integrate is matched ONLY on its distinctive config filenames,
+# never on RhoD/RBinSize/EtaBinSize — those integration keys also appear inside FF
+# param files, so keying on them would steal FF datasets (this step runs before
+# the FF/NF/PF check). Filenames like paramstest_v2.txt / midas_calibrate.par are
+# unambiguous.
+_TECHNIQUE_SIGNATURES = {
+    "tomo": {
+        "goal": ["tomo", "tomography", "tomocupy", "sinogram"],
+        "files": ["tomocupy_args.yml", "*_TomoFastScan.dat", "BEST_SHIFT_*"],
+        "tokens": ["tomo", "tomocupy"],
+        "cite": "tomo/ENVELOPE.md:24-28,64",
+    },
+    "xrd-ct": {
+        "goal": ["xrd-ct", "xrdct", "diffraction tomography"],
+        "files": ["cake_cache*.h5", "geometry_for_dt.json", "ps_dt.txt"],
+        "tokens": ["xrdct"],
+        "cite": "xrd-ct/ENVELOPE.md:1-5; README.md:13",
+    },
+    "dct-tt": {
+        "goal": ["dct", "topotomo", "topo-tomo", "diffraction contrast tomography"],
+        "files": [],
+        "tokens": ["dct", "topotomo"],
+        "cite": "dct-tt/README.md:15-25,53-60",
+    },
+    "calibrate-integrate": {
+        "goal": [],   # shared 'calibrate'/'integrate' words → _SHARED_PHASE_GOAL fallback
+        "files": ["midas_calibrate.par", "paramstest_v2.txt", "exp_setup.yml"],
+        "tokens": [],
+        "cite": "calibrate-integrate/README.md:158-255; ENVELOPE.md:12-14",
+    },
+    "dfxm": {
+        "goal": ["dfxm", "dark-field x-ray", "dark field x-ray"],
+        "files": [],
+        "tokens": ["dfxm"],
+        "cite": "dfxm/ENVELOPE.md; phase-0-survey.md",
+    },
+}
+
+# Shared-phase goal keywords → capsule, tried ONLY after the FF/NF/PF check comes
+# up empty. Calibration/integration is a phase *within* ff/nf/pf, so a goal like
+# "calibrate the FF detector" must resolve to ff-hedm (via _infer_hedm_modality),
+# not to the standalone calibrate-integrate technique.
+_SHARED_PHASE_GOAL = {"calibrate-integrate": ["calibrat", "integrat", "caking", "azimuthal"]}
+
+
+def _infer_technique(p: Path, info: dict, goal: str = "") -> dict:
+    """Recognize the analysis TECHNIQUE (capsule id) from the goal + raw data.
+
+    Generalizes _infer_hedm_modality (FF/NF/PF only) to every vendored capsule by
+    WRAPPING it — all existing FF/NF/PF behavior is preserved. Precedence:
+      1. distinctive goal keywords for tomo / xrd-ct / dct-tt / dfxm
+      2. data-file / path-token signatures (a capsule's own signatures() table if
+         it ships one, else the curated, cited _TECHNIQUE_SIGNATURES dict)
+      3. FF/NF/PF via _infer_hedm_modality → _MODALITY_TO_CAPSULE
+      4. shared-phase goal fallback (calibrate/integrate) — only if 1-3 are empty
+      5. None (caller keeps its documented default)
+    Every capsule id is gated on capsule_registry.has_technique, so an entry is
+    inert until that capsule is vendored. Returns
+    {"technique": <id|None>, "source", "why"}. Fail-open on any error.
+    """
+    try:
+        import capsule_registry as _cr
+    except Exception:
+        return {"technique": None, "source": None, "why": "capsule_registry unavailable"}
+    try:
+        import fnmatch
+        g = (goal or "").lower()
+        _ok = _cr.has_technique
+
+        # Candidate filenames (bounded) + name tokens from the path + children.
+        names: list = []
+        try:
+            if p.is_dir():
+                names = [c.name for c in list(p.iterdir())[:4000]]
+            elif p.exists():
+                names = [p.name]
+        except Exception:
+            names = []
+        name_toks: set = set()
+        for nm in names + list(p.parts):
+            name_toks.update(t for t in re.split(r"[^a-z0-9]+", nm.lower()) if t)
+
+        # 1) Distinctive goal keywords (calibrate-integrate has none here).
+        for tech, sig in _TECHNIQUE_SIGNATURES.items():
+            if _ok(tech) and any(kw in g for kw in sig.get("goal", [])):
+                return {"technique": tech, "source": "goal", "why": f"goal names {tech}"}
+
+        # 2) Data signatures — a capsule's own table wins, else the curated dict.
+        for tech, sig in _TECHNIQUE_SIGNATURES.items():
+            if not _ok(tech):
+                continue
+            try:
+                if _cr.signatures(tech):   # future upstream schema; [] today
+                    # Upstream declares its own signatures → let it drive via the
+                    # generic accessor. (No capsule ships this yet.)
+                    ups = " ".join(s.get("signature", "") for s in _cr.signatures(tech)).lower()
+                    if any(nm.lower() in ups or nm.lower() in g for nm in names):
+                        return {"technique": tech, "source": "data",
+                                "why": f"capsule-declared signature ({tech})"}
+            except Exception:
+                pass
+            for gl in sig.get("files", []):
+                if any(fnmatch.fnmatch(nm, gl) for nm in names):
+                    return {"technique": tech, "source": "data",
+                            "why": f"file signature '{gl}' present ({sig['cite']})"}
+            toks = set(sig.get("tokens", []))
+            if toks and (name_toks & toks):
+                hit = sorted(name_toks & toks)[0]
+                return {"technique": tech, "source": "path",
+                        "why": f"'{hit}' token in the data path ({sig['cite']})"}
+
+        # 3) FF/NF/PF — the existing, unchanged classifier.
+        mod = _infer_hedm_modality(p, info, goal)
+        if mod.get("modality"):
+            cap = _MODALITY_TO_CAPSULE.get(mod["modality"])
+            if cap and _ok(cap):
+                return {"technique": cap, "source": mod.get("source") or "data",
+                        "why": mod.get("why") or f"{mod['modality']} data"}
+
+        # 4) Shared-phase goal fallback — only reached when nothing above matched.
+        for tech, kws in _SHARED_PHASE_GOAL.items():
+            if _ok(tech) and any(kw in g for kw in kws):
+                return {"technique": tech, "source": "goal",
+                        "why": f"goal names {tech} (no HEDM modality signalled)"}
+
+        return {"technique": None, "source": None,
+                "why": "no decisive technique signal in goal, path, or contents"}
+    except Exception as e:
+        return {"technique": None, "source": None, "why": f"infer error: {e}"}
+
+
 # Grouped, grounded capability summary (real tool names) — returned when
 # recommend_workflow is called with no path, or the user asks "what can you do".
 _CAPABILITY_GROUPS = {
@@ -9991,11 +10149,20 @@ async def recommend_workflow(path: str = "", goal: str = "") -> str:
 
         _attach_skills(recs)
         skills_used = sorted({r["skill"] for r in recs if isinstance(r, dict) and r.get("skill")})
+        # Recognize the analysis TECHNIQUE from goal + raw data (generic across all
+        # vendored capsules). This machine-readable field is the bridge that lets the
+        # agent loop inject the right MIDAS methodology (spine + halt checklist)
+        # immediately after this first classification — before calibrate/integrate/
+        # workflow tools fire. Additive; never renames/removes an existing field.
+        _tech = _infer_technique(p, info, goal)
         return format_result({
             "tool": "recommend_workflow", "status": "success",
             "mode": "recommendation",
             "input": info,
             "goal": goal or None,
+            "capsule_technique": _tech.get("technique"),
+            "technique_source": _tech.get("source"),
+            "technique_why": _tech.get("why"),
             "recommendations": recs,
             "skills": skills_used,
             "note": "Advisory only — nothing was run. Each recommendation names the "
