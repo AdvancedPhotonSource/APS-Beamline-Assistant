@@ -1,0 +1,146 @@
+name: midas-capsule-sync
+
+# Keep APEXA's vendored MIDAS technique capsules (knowledge_base/capsules/**) in
+# sync with the upstream MIDAS manuals -- WITHOUT ever touching a beamline host.
+#
+# Design (see CLAUDE.md "Technique capsules"):
+#   * Runs ONLY on a GitHub web runner. The beamline runtime stays offline-clean
+#     and NEVER fetches MIDAS (a git fetch on an air-gapped host blocks, not
+#     raises -- the offline-hang class). This job is the "always latest" engine
+#     that lives OFF-host.
+#   * On drift it opens a PR carrying the human-readable manual diff for review.
+#     It never pushes to main -- analysis *instructions* are reviewed by a human
+#     before any beamline pulls them.
+#   * It syncs the capsule DOCS + _pin.json only. It does NOT regenerate the
+#     ChromaDB index (a large, non-deterministic binary that would defeat PR
+#     review). Re-indexing is a documented post-merge deploy step, restated in
+#     the PR body. The methodology injector (capsule_registry.py) reads the .md
+#     directly, so it is live on merge; only query_hedm_knowledge RAG depth needs
+#     the re-index.
+
+on:
+  schedule:
+    - cron: "23 7 * * 1"   # Mondays 07:23 UTC -- off the :00 fleet-thundering-herd mark
+  workflow_dispatch: {}      # allow a manual run any time
+
+concurrency:
+  group: midas-capsule-sync
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      MIDAS_DIR: ${{ runner.temp }}/MIDAS
+      SYNC_BRANCH: auto/midas-capsule-sync
+    steps:
+      - name: Check out APEXA
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Clone upstream MIDAS manuals (public repo)
+        run: |
+          git clone --depth 1 https://github.com/marinerhemant/MIDAS.git "$MIDAS_DIR"
+          echo "MIDAS_SHA=$(git -C "$MIDAS_DIR" rev-parse --short HEAD)" >> "$GITHUB_ENV"
+
+      - name: Detect capsule drift
+        id: drift
+        run: |
+          # sync_midas_capsules.py is stdlib-only, so no `uv sync` is needed here.
+          # --check exit code: 0 = no drift, 1 = drift, 2 = error (bad MIDAS path).
+          set +e
+          python scripts/sync_midas_capsules.py --check --midas "$MIDAS_DIR"
+          rc=$?
+          set -e
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          case "$rc" in
+            0) echo "No capsule drift -- nothing to do." ;;
+            1) echo "Capsule drift detected -- will sync and open a PR." ;;
+            *) echo "::error::sync_midas_capsules.py --check failed (rc=$rc)"; exit "$rc" ;;
+          esac
+
+      - name: Vendor updated capsules
+        if: steps.drift.outputs.rc == '1'
+        run: |
+          python scripts/sync_midas_capsules.py --midas "$MIDAS_DIR"
+          # Sanity gate: a clean write must leave zero drift on a re-check.
+          python scripts/sync_midas_capsules.py --check --midas "$MIDAS_DIR"
+
+      - name: Open or update sync PR
+        if: steps.drift.outputs.rc == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$SYNC_BRANCH"
+          git add knowledge_base/capsules
+          if git diff --cached --quiet; then
+            echo "No staged changes after sync (only volatile _pin.json fields?) -- nothing to PR."
+            exit 0
+          fi
+
+          # Build the PR body. Quoted heredocs keep markdown backticks literal;
+          # @@SHA@@ is substituted afterward. The changed-file list is appended
+          # from `git diff --stat` so the reviewer sees the doc surface at a glance.
+          BODY="$RUNNER_TEMP/pr-body.md"
+          cat > "$BODY" <<'EOF'
+          Automated sync of the vendored MIDAS technique capsules
+          (`knowledge_base/capsules/**`) to upstream MIDAS `@@SHA@@`.
+
+          **Source:** https://github.com/marinerhemant/MIDAS @ `@@SHA@@`
+
+          These are the analysis **instructions** APEXA follows per technique -- step
+          order, flags, units, and the silent-corruption traps. Review the diff in the
+          *Files changed* tab before merging.
+
+          ### Changed capsule files
+          ```
+          EOF
+          git diff --cached --stat >> "$BODY"
+          cat >> "$BODY" <<'EOF'
+          ```
+
+          ### Required after merge (NOT done by CI)
+          CI syncs the capsule docs + `_pin.json` only; it does **not** regenerate the
+          ChromaDB index (a large binary that would defeat review). After merge, on
+          each APEXA host:
+          ```
+          git pull && uv sync
+          APEXA_OFFLINE=1 uv run python knowledge_base/index_knowledge.py
+          ```
+          The capsule **methodology injection** (`capsule_registry.py`) reads the `.md`
+          files directly, so it is live the moment this merges; only the
+          `query_hedm_knowledge` RAG depth needs the re-index above.
+
+          — opened by `.github/workflows/midas-capsule-sync.yml`
+          EOF
+          python - "$BODY" <<'PY'
+          import os, sys
+          p = sys.argv[1]
+          s = open(p, encoding="utf-8").read().replace("@@SHA@@", os.environ["MIDAS_SHA"])
+          open(p, "w", encoding="utf-8").write(s)
+          PY
+
+          git commit -m "capsules: sync MIDAS manuals to ${MIDAS_SHA}"
+          git push --force-with-lease origin "$SYNC_BRANCH"
+
+          EXISTING=$(gh pr list --head "$SYNC_BRANCH" --state open --json number --jq '.[0].number // empty')
+          if [ -z "$EXISTING" ]; then
+            gh pr create --base main --head "$SYNC_BRANCH" \
+              --title "capsules: sync MIDAS manuals to ${MIDAS_SHA}" \
+              --body-file "$BODY"
+          else
+            gh pr edit "$EXISTING" \
+              --title "capsules: sync MIDAS manuals to ${MIDAS_SHA}" \
+              --body-file "$BODY"
+            echo "Updated existing PR #$EXISTING."
+          fi
