@@ -98,3 +98,25 @@ User (natural language)
 **Servers:** `core` (beamline_core_server.py) + `midas` (midas_comprehensive_server.py)
 
 See **USER_MANUAL.md** for complete documentation.
+
+## Autonomous refinement (gsas2 server)
+
+For any powder pattern that is **not** MIDAS caked output. For `.zarr.zip`, use
+`run_gsas_refinement` instead.
+
+| Ask for | Tool |
+|---|---|
+| refine one pattern | `refine_pattern` |
+| find a structure from a pattern + a name | `propose_structures` |
+| refine an in-situ stack | `refine_series_submit` → `refinement_status` |
+| is an old refinement still usable | `assess_refinement` |
+
+```
+APEXA> refine scan_042.xye with LiCoO2.cif
+APEXA> find candidate structures for this pattern, it should be goethite
+APEXA> refine the whole temperature series and report phase fractions
+```
+
+Every result carries a trust verdict naming any reason to inspect it before
+acting. Low M20 from `propose_structures` means widen the search rather than
+refine harder. See `.agents/skills/gsas2-agentic/SKILL.md`.

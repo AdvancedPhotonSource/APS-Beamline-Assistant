@@ -100,6 +100,7 @@ User (natural language)
 | core | `beamline_core_server.py` | 10 tools: file ops, shell commands, X-ray calculations |
 | midas | `midas_comprehensive_server.py` | 50 tools: FF/NF/PF-HEDM, calibration, single + **series/batch** integration, GSAS-II refinement, CIF fetcher, visualization, validation, stress, **data-driven workflow recommendation**, and the **8 new v0.1.0 capability packages** (PDF/G(r), defect analysis, grain-ODF, DFXM/XAF/2D forward models, pf-ODF, pink-beam) |
 | motor | `epics_motor_server.py` | 13 tools: EPICS motor control (read/move/jog/limits) |
+| gsas2 | `gsas2_server.py` | 5 tools: autonomous Rietveld refinement of any powder pattern, COD structure retrieval with M₂₀ ranking, in-situ series (submit/poll), per-result trust verdict |
 
 ### Agent Skills (`.agents/skills/`)
 Canonical MIDAS workflow reference — correct v11 flags, scripts, output files:
@@ -108,7 +109,26 @@ Canonical MIDAS workflow reference — correct v11 flags, scripts, output files:
 - `midas-integrate` — single (`midas_integrate_2d_to_1d`), **series** (`midas_integrate_series`, many files, one call, per-frame darks), and GPU-streaming integration
 - `midas-hedm` / `midas-ff-hedm` — FF/NF/PF-HEDM full pipeline
 - `midas-gsasii` — GSAS-II refinement, live analysis pipeline, CIF fetcher
+- `gsas2-agentic` — autonomous Rietveld on **any** powder pattern (not MIDAS caked output): the agent picks its own parameter order, can retrieve its own starting structure, and returns a trust verdict
 - `midas-visualize` — MIDAS viewer scripts for lineouts, caked, grains, 3D spots/PF
+
+### Which GSAS-II path to use
+Two tools wrap GSAS-II and neither supersedes the other — pick by where the
+data came from:
+
+| | `midas:run_gsas_refinement` | `gsas2:refine_pattern` |
+|---|---|---|
+| Input | MIDAS caked `.zarr.zip` | any powder pattern (`.xye`, `.fxye`, GSAS native) |
+| Starting model | you supply CIFs | supply CIFs, **or** retrieve them from COD |
+| Strategy | fixed recipe | derivative-driven; chooses its own parameter order |
+| Returns | R<sub>wp</sub>, cell | + phase fractions, trust verdict, decision trace |
+| Scope | one pattern | one pattern, or a sequential in-situ series |
+
+The `gsas2` server needs the GSAS-II conda env and the Agentic-GSAS-II
+repository; set `APEXA_GSASII_PYTHON` and `APEXA_AGENTIC_GSAS2` if they are not
+at their defaults. It runs refinements in a subprocess, so a GSAS-II abort does
+not take the agent down, and pins BLAS threads to 1 per job — an unpinned
+refinement opens a thread pool per worker and will swamp a beamline host.
 
 ### Compute dispatch (`docs/COMPUTE_DISPATCH.md`)
 APEXA tiers work to **local CPU / local GPU / remote GPU endpoint** by task size and

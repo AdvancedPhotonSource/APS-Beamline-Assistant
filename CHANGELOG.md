@@ -7,6 +7,24 @@ versioning. Until v1.0.0, breaking changes may land in minor versions.
 
 ## [Unreleased]
 
+### Added — `gsas2` server: autonomous Rietveld refinement
+- New MCP server `gsas2_server.py` filling the slot `servers.config` had
+  reserved. Five tools: `refine_pattern`, `propose_structures`,
+  `refine_series_submit`, `refinement_status`, `assess_refinement`.
+- Complements rather than replaces `midas:run_gsas_refinement`, which refines
+  MIDAS caked `.zarr.zip` with a fixed recipe. The new server takes any powder
+  pattern, chooses its own parameter order from chi-squared derivatives, can
+  retrieve a starting structure from the Crystallography Open Database when
+  none is supplied, and returns a trust verdict per result.
+- Long refinements submit and poll rather than block: a joint multi-instrument
+  fit can run for hours and must not stall an agent driving an instrument.
+- Runs in a subprocess on the GSAS-II interpreter, so a GSAS-II abort cannot
+  take the agent down, and pins BLAS threads to 1 per job — an unpinned
+  refinement opens a thread pool per worker and will swamp a beamline host.
+- New skill `.agents/skills/gsas2-agentic/SKILL.md`, and the tool description
+  for `refine_series_submit` states its own limitation: it does not yet produce
+  a lattice-parameter trend through a series.
+
 ### Changed — track the current MIDAS package stack (suite 0.7.3)
 - Bumped the MIDAS pin `midas-suite[...]>=0.4.0` → `>=0.7.3` and added the `nf`
   extra (APEXA has NF tools). The stale `>=0.4.0` floor let a locked/offline

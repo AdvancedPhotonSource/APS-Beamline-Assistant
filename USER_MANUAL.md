@@ -145,6 +145,63 @@ APEXA> show the caked peaks                             (VisualizationAgent)
 
 ---
 
+## Autonomous Refinement (Agentic GSAS-II)
+
+The section above refines MIDAS caked output with a fixed recipe. This one is
+for any other powder pattern, and for the case where you do not have a starting
+structure at all. The agent chooses its own parameter order from the engine's
+chi-squared derivatives, gated by physical guardrails, and reports whether the
+result should be believed.
+
+**Example Prompts:**
+```
+APEXA> refine scan_042.xye with LiCoO2.cif and tell me if I can trust it
+APEXA> I have a pattern but no structure -- find candidates for goethite
+APEXA> refine this temperature series and track the phase fractions
+APEXA> can I still act on the refinement in ref/042 ?
+```
+
+**What happens:**
+1. `refine_pattern` picks parameters by derivative leverage, rolls back any step
+   that makes the fit worse, and stops on convergence rather than on a recipe
+   running out
+2. `propose_structures` queries the Crystallography Open Database and ranks hits
+   by de Wolff M20 against the observed peaks -- no reference structure involved
+3. `refine_series_submit` walks an in-situ stack and returns a job id; poll it
+   with `refinement_status` rather than blocking
+4. Every result carries a **trust verdict**
+
+**The trust verdict.** An automated fit always returns numbers. The verdict says
+whether to act on them, and names its reason rather than scoring:
+
+| Flag | Meaning |
+|---|---|
+| stopped on a time budget | a throughput bound, not convergence |
+| hit the step cap | the fit was still improving when cut off |
+| Rietveld exceeds the Le Bail floor | the structural model is the limiting factor |
+| direct cell refinement was rolled back | the cell step made the fit worse |
+| no parameter was accepted | the model never moved |
+
+In a closed loop, treat a flagged result as a reason to **skip the point**, not
+to search around it: a wrong cell that stops predicting any observed peak costs
+almost nothing in Rwp, so the residual will not catch it.
+
+**M20 as a confidence signal.** `propose_structures` returns de Wolff M20 per
+candidate, computed from the pattern alone. On a 240-pattern mineral benchmark
+the rate of a wrong phase fell monotonically with it: 3.2% at M20 >= 20 against
+17.6% below 5. A low M20 means widen the search, not refine harder.
+
+**Known limitations.** Lattice parameter through a series does not yet produce a
+thermal-expansion trend -- that entry point predates the framework's direct
+cell-refinement path. Absolute weight fractions carry roughly 17 wt% mean error
+from uncorrected microabsorption; relative change between conditions is far
+better behaved.
+
+**Requirements.** GSAS-II conda env plus the Agentic-GSAS-II repository; set
+`APEXA_GSASII_PYTHON` and `APEXA_AGENTIC_GSAS2` if not at their defaults.
+Refinements run in a subprocess, so a GSAS-II abort does not take the agent
+down.
+
 ## FF-HEDM Workflow
 
 Complete Far-Field HEDM grain reconstruction pipeline.
