@@ -172,7 +172,8 @@ def _trust(summary: Dict[str, Any]) -> Dict[str, Any]:
     anchor=lambda kw: kw.get("output_dir") or "",
     salient=lambda kw: {k: kw.get(k) for k in (
         "data_file", "cif_files", "instprm_file", "bkg_terms",
-        "two_theta_limits", "wavelength_A", "refine_atoms", "max_steps")},
+        "two_theta_limits", "wavelength_A", "fmthint", "refine_atoms",
+        "max_steps")},
 )
 async def refine_pattern(
     data_file: str,
@@ -182,6 +183,7 @@ async def refine_pattern(
     bkg_terms: int = 6,
     two_theta_limits: Optional[List[float]] = None,
     wavelength_A: Optional[float] = None,
+    fmthint: Optional[str] = None,
     refine_atoms: bool = True,
     max_steps: int = 100,
     max_wall_seconds: float = 0.0,
@@ -204,6 +206,10 @@ async def refine_pattern(
         bkg_terms: Chebyshev background terms.
         two_theta_limits: [min, max] refinement window.
         wavelength_A: override the wavelength in the instrument file.
+        fmthint: GSAS-II reader hint. Required for the GSAS legacy formats
+            (.XRA, .CWN, .fxye) -- pass "GSAS". Leave unset for two-column
+            text and .xye, which are auto-detected. Without it a legacy
+            file is handed to the text reader and fails on its header.
         refine_atoms: allow atomic coordinates and displacement parameters.
         max_steps: cap on accepted refinement steps.
         max_wall_seconds: throughput bound; 0 disables. A run stopped this
@@ -227,6 +233,7 @@ cfg = replace(cfg, bkg_terms={bkg_terms!r})
 kw = {{}}
 if {two_theta_limits!r}: kw["limits"] = tuple({two_theta_limits!r})
 if {wavelength_A!r} is not None: kw["wavelength_A"] = {wavelength_A!r}
+if {fmthint!r}: kw["fmthint"] = {fmthint!r}
 s = refine_one(data_path={data_file!r}, cif_paths={cif_files!r},
                output_dir={output_dir!r}, instprm_path={instprm_file!r},
                config=cfg, **kw)
@@ -333,6 +340,7 @@ async def refine_series_submit(
     instprm_file: Optional[str] = None,
     warm_start: bool = True,
     max_steps: int = 100,
+    fmthint: Optional[str] = None,
 ) -> str:
     """Start a sequential refinement over a stack of patterns; returns a job id.
 
@@ -358,6 +366,7 @@ async def refine_series_submit(
         instprm_file: instrument parameter file.
         warm_start: seed each pattern from the previous converged model.
         max_steps: cap per pattern.
+        fmthint: GSAS-II reader hint; pass "GSAS" for legacy .XRA/.CWN/.fxye.
     """
     err = _env_ok()
     if err:
@@ -382,9 +391,11 @@ for i, f in enumerate({data_files!r}):
     d = Path({output_dir!r}) / ("pattern_%03d" % i)
     d.mkdir(parents=True, exist_ok=True)
     try:
+        kw = {{}}
+        if {fmthint!r}: kw["fmthint"] = {fmthint!r}
         s = refine_one(data_path=f, cif_paths={cif_files!r},
                        output_dir=str(d), instprm_path={instprm_file!r},
-                       config=cfg)
+                       config=cfg, **kw)
         out.append({{"i": i, "file": f, "Rwp": s.get("Rwp"),
                      "stop_reason": s.get("stop_reason"),
                      "phases": s.get("phases")}})
