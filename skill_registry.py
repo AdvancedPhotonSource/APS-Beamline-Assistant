@@ -60,6 +60,14 @@ SKILL_FOR_TOOL = {
     "build_detector_mask": "midas-mask",
     # phase / refinement
     "run_gsas_refinement": "midas-gsasii",
+    # autonomous refinement (gsas2_server.py) -- a separate skill from
+    # midas-gsasii because the input formats do not overlap: that tool
+    # takes MIDAS caked .zarr.zip, these take any powder pattern.
+    "refine_pattern": "gsas2-agentic",
+    "propose_structures": "gsas2-agentic",
+    "refine_series_submit": "gsas2-agentic",
+    "refinement_status": "gsas2-agentic",
+    "assess_refinement": "gsas2-agentic",
     # inspect / validate
     "recommend_workflow": "midas-validate",
     "inspect_dataset_file": "midas-validate",
